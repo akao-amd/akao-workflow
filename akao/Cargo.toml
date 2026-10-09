@@ -1,0 +1,12 @@
+[package]
+name = "akao"
+description = "Local driver: initialize and control worker containers on remote boxes"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+clap = { version = "4", features = ["derive"] }
+shlex = "1"
+toml = "0.8"

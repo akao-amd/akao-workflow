@@ -1,0 +1,7 @@
+[package]
+name = "oaka"
+description = "Remote driver, script generator, deployment helper (not designed yet)"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
