@@ -77,6 +77,7 @@ impl Sandbox {
         write("infx/infx/__init__.py", "");
         write("infx/infx/bench/__init__.py", "");
         write("infx/infx/bench/__main__.py", FAKE_INFX);
+        write("infx/infx/bench/fixed_seq.py", "");
         write("bin/sgl-eval", FAKE_SGL_EVAL);
         Command::new("chmod")
             .arg("+x")
@@ -302,4 +303,33 @@ fn check_names_the_field_to_fix() {
         err.contains("GPU 5 does not exist; this machine has 2 GPUs (0-1)"),
         "{err}"
     );
+}
+
+#[test]
+fn doctor_reports_missing_prerequisites() {
+    let sb = Sandbox::new("doctor");
+    let out = sb.oaka(&["doctor"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    for want in [
+        "ok    library",
+        "ok    gpus        2 x gfx950",
+        "ok    inferencex",
+        "ok    sgl-eval",
+    ] {
+        assert!(text.contains(want), "{want:?} not in {text}");
+    }
+    // The stand-in sglang is the one found, so the check really looks at PYTHONPATH.
+    assert!(
+        text.contains(&format!("ok    sglang      {}", sb.root.join("py/sglang").display())),
+        "{text}"
+    );
+
+    fs::remove_dir_all(sb.root.join("infx")).unwrap();
+    let out = sb.oaka(&["doctor"]).env("OAKA_GPUS", "").output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("FAIL  inferencex"), "{text}");
+    assert!(text.contains("FAIL  gpus"), "{text}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("2 check(s) failed"));
 }

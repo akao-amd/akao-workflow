@@ -29,7 +29,7 @@ Needs `rustup target add x86_64-unknown-linux-musl`.
 ```
 Cargo.toml            workspace root
 rustfmt.toml          max_width = 120
-TEST.md               test layers: cargo test, real GPU smoke, akao init docker harness
+TEST.md               test layers: cargo test, real GPU smoke, environment doctors
 .githooks/post-commit installs a static oaka into /<year>/oaka/bin
 akao/
   Cargo.toml
@@ -39,6 +39,8 @@ akao/
     state.rs          State: config.toml + hosts.tsv + home template
     init.rs           `akao init` — 9-step container bring-up
     cp.rs             `akao cp`  — cross-host path copy via tar | ssh
+    doctor.rs         `akao doctor` — console prerequisites (ssh wrapper, state, deploy)
+  tests/doctor.rs     akao doctor against a scratch AKAO_CONFIG_ROOT
 oaka/
   Cargo.toml
   build.rs            stamps the git sha into the version
@@ -50,6 +52,7 @@ oaka/
     plan.rs           plan.toml schema + validation (check), plan.lock.toml
     compile.rs        plan + library + templates -> scripts/
     draft.rs          plan.toml starter from hints + machine
+    doctor.rs         `oaka doctor` — worker prerequisites (library, GPUs, InferenceX, sglang)
   tests/run_all.rs    real binary + compiled bash vs. stand-ins for sglang/InferenceX/sgl-eval
 ```
 
@@ -167,7 +170,8 @@ in the container).
   $AKAO_CONFIG_ROOT/.ssh/config "$@"`, falling back to plain ssh when that file is absent.
   It ships in `container_home/.local/bin/ssh` and must also exist wherever akao itself
   runs, with `AKAO_CONFIG_ROOT` exported.  Shell aliases do not work: docker never sees them.
-  Init step 5 checks `docker -H ssh://<nick> version` so a missing wrapper fails loudly.
+  Init step 5 checks `docker -H ssh://<nick> version` so a missing wrapper fails loudly;
+  `akao doctor` checks the wrapper without touching the network.
 - **Idempotent init**: every step checks what exists and reuses it, so re-running init
   on a half-done worker resumes instead of failing.
 
@@ -215,7 +219,10 @@ akao:
 1. Add a `mod <name>;` in `main.rs` and a `Cmd::<Name> { ... }` variant.
 2. Create `akao/src/<name>.rs`.  Use `Runner` from `exec.rs` for all subprocess calls.
 3. Add a match arm in `run()` in `main.rs` that constructs a `Runner` and calls `<name>::run()`.
-4. Unit-test in the module; integration tests go in `/2026/ww*/akao_workflow_test/`.
+4. Unit-test in the module; tests that run the binary go in `akao/tests/`.
+
+Either tool: a new prerequisite (env var, path, external tool) gets a `doctor` check and a
+case in the doctor tests, so a misconfigured machine fails with its fix named.
 
 oaka:
 1. A new client kind = a `ClientSpec` variant (plan.rs, with validation in `check_plan`),

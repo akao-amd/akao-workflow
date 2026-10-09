@@ -1,4 +1,5 @@
 mod cp;
+mod doctor;
 mod exec;
 mod init;
 mod state;
@@ -55,6 +56,8 @@ enum Cmd {
     /// Show or change settings (config.toml)
     #[command(subcommand)]
     Config(ConfigCmd),
+    /// Check this machine's prerequisites for akao (read-only)
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -108,6 +111,9 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    if let Cmd::Doctor = cli.cmd {
+        return doctor::run(); // reports a missing AKAO_CONFIG_ROOT itself
+    }
     let mut state = State::load()?;
     match cli.cmd {
         Cmd::Cp { src, dst, dry_run } => {
@@ -135,6 +141,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Host(cmd) => host_cmd(&state, cmd),
         Cmd::Config(cmd) => config_cmd(&mut state, cmd),
+        Cmd::Doctor => unreachable!(),
     }
 }
 

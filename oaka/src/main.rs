@@ -1,4 +1,5 @@
 mod compile;
+mod doctor;
 mod draft;
 mod plan;
 mod profile;
@@ -49,6 +50,8 @@ enum Cmd {
     Compile,
     /// Compile, then run scripts/run_all.sh
     Run,
+    /// Check what compiled scripts need in this worker (read-only)
+    Doctor,
     /// Browse and extend the profile library
     #[command(subcommand)]
     Profile(ProfileCmd),
@@ -132,6 +135,7 @@ fn run(cli: Cli) -> Result<()> {
             let err = std::process::Command::new("bash").arg(&script).current_dir(&dir).exec();
             Err(err).context("cannot exec bash")
         }
+        Cmd::Doctor => doctor::run(&lib),
         Cmd::Profile(cmd) => profile_cmd(&dir, &lib, cmd),
     }
 }

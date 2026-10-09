@@ -1,0 +1,205 @@
+//! `akao doctor`: read-only checks of what akao needs on this machine.  Each line is
+//! `ok`, `warn` or `FAIL` with the fix; any FAIL makes the command fail.
+
+use crate::state::State;
+use anyhow::{bail, Result};
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+/// The real ssh the PATH wrapper must hand over to.
+const REAL_SSH: &str = "/usr/bin/ssh";
+
+#[derive(Default)]
+struct Report {
+    failed: usize,
+}
+
+impl Report {
+    fn ok(&mut self, what: &str, detail: impl AsRef<str>) {
+        println!("ok    {what:<14} {}", detail.as_ref());
+    }
+    fn warn(&mut self, what: &str, detail: impl AsRef<str>) {
+        println!("warn  {what:<14} {}", detail.as_ref());
+    }
+    fn fail(&mut self, what: &str, detail: impl AsRef<str>) {
+        println!("FAIL  {what:<14} {}", detail.as_ref());
+        self.failed += 1;
+    }
+}
+
+fn executable(p: &Path) -> bool {
+    p.metadata()
+        .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+/// The first executable `name` on PATH.
+fn which(name: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH")?
+        .to_str()?
+        .split(':')
+        .map(|d| Path::new(d).join(name))
+        .find(|p| executable(p))
+}
+
+/// stdout of a successful command.
+fn output(argv: &[&str]) -> Option<String> {
+    let out = Command::new(argv[0])
+        .args(&argv[1..])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+pub fn run() -> Result<()> {
+    let mut r = Report::default();
+    let state = match State::load() {
+        Ok(s) => {
+            r.ok("config root", s.root.display().to_string());
+            s
+        }
+        Err(e) => {
+            r.fail("config root", format!("{e:#}"));
+            bail!("1 check failed; the others need AKAO_CONFIG_ROOT");
+        }
+    };
+    check_config(&mut r, &state);
+    let nicks = check_hosts(&mut r, &state);
+    check_ssh(&mut r, &state, &nicks);
+    check_template(&mut r, &state);
+    check_deploy(&mut r, &state);
+    match output(&["docker", "--version"]) {
+        Some(v) => r.ok("docker", v.trim()),
+        None => r.fail("docker", "docker CLI not found; init drives workers through it"),
+    }
+    if r.failed > 0 {
+        bail!("{} check(s) failed", r.failed);
+    }
+    Ok(())
+}
+
+fn check_config(r: &mut Report, state: &State) {
+    match state.get("default_image") {
+        Ok(Some(i)) => r.ok("default_image", i),
+        _ => r.fail("default_image", "unset; akao config set default_image <tag>"),
+    }
+}
+
+fn check_hosts(r: &mut Report, state: &State) -> Vec<String> {
+    match state.load_hosts() {
+        Ok(h) if h.is_empty() => {
+            r.warn("hosts", "hosts.tsv has no hosts; akao host add <nick> ...");
+            Vec::new()
+        }
+        Ok(h) => {
+            let nicks: Vec<String> = h.into_iter().map(|h| h.nick).collect();
+            r.ok("hosts", nicks.join(" "));
+            nicks
+        }
+        Err(e) => {
+            r.fail("hosts", format!("{e:#}"));
+            Vec::new()
+        }
+    }
+}
+
+/// docker's ssh:// contexts run the `ssh` found on PATH and cannot take -F, so that `ssh`
+/// must be the wrapper that reads $AKAO_CONFIG_ROOT/.ssh/config.  Proof: for every host,
+/// `ssh -G` through PATH resolves exactly like `ssh -F <config> -G`.
+fn check_ssh(r: &mut Report, state: &State, nicks: &[String]) {
+    let cfg = state.root.join(".ssh/config");
+    let Some(path_ssh) = which("ssh") else {
+        r.fail("ssh", "no ssh on PATH");
+        return;
+    };
+    if !cfg.exists() {
+        r.ok(
+            "ssh",
+            format!(
+                "{} (no {}; plain ssh config applies)",
+                path_ssh.display(),
+                cfg.display()
+            ),
+        );
+        return;
+    }
+    if nicks.is_empty() {
+        r.warn("ssh", "no hosts to compare `ssh -G` on");
+        return;
+    }
+    let cfg_s = cfg.to_string_lossy();
+    let path_s = path_ssh.to_string_lossy();
+    let ignored: Vec<&str> = nicks
+        .iter()
+        .filter(|n| {
+            let via_path = output(&[&path_s, "-G", n]);
+            via_path.is_none() || via_path != output(&[REAL_SSH, "-F", &cfg_s, "-G", n])
+        })
+        .map(String::as_str)
+        .collect();
+    if ignored.is_empty() {
+        r.ok("ssh", format!("{} resolves every host through {}", path_s, cfg_s));
+    } else {
+        r.fail(
+            "ssh",
+            format!(
+                "{path_s} ignores {cfg_s} for {}: docker contexts would use ~/.ssh/config.  Put the wrapper \
+                 (container_home/.local/bin/ssh) ahead of /usr/bin on PATH and export AKAO_CONFIG_ROOT",
+                ignored.join(" ")
+            ),
+        );
+    }
+}
+
+fn check_template(r: &mut Report, state: &State) {
+    let t = state.home_template();
+    if !t.is_dir() {
+        r.fail(
+            "home template",
+            format!("{} missing; init step 4 copies it", t.display()),
+        );
+    } else if !executable(&t.join(".local/bin/ssh")) {
+        r.warn(
+            "home template",
+            format!("{} has no executable .local/bin/ssh wrapper", t.display()),
+        );
+    } else {
+        r.ok("home template", t.display().to_string());
+    }
+}
+
+fn check_deploy(r: &mut Report, state: &State) {
+    let (Ok(src), Ok(paths)) = (state.require("deploy_src"), state.require("deploy_paths")) else {
+        r.fail("deploy", "deploy_src / deploy_paths unset");
+        return;
+    };
+    let missing: Vec<&str> = paths
+        .split_whitespace()
+        .filter(|p| !Path::new(&src).join(p).exists())
+        .collect();
+    if missing.is_empty() {
+        r.ok("deploy", format!("{src}: {paths}"));
+    } else {
+        r.fail(
+            "deploy",
+            format!("missing under {src}: {} (init step 3 ships them)", missing.join(" ")),
+        );
+    }
+    if paths.split_whitespace().any(|p| p == "oaka") {
+        let bin = Path::new(&src).join("oaka/bin/oaka");
+        match output(&[&bin.to_string_lossy(), "--version"]) {
+            Some(v) => r.ok("oaka", format!("{} ({})", bin.display(), v.trim())),
+            None => r.fail(
+                "oaka",
+                format!(
+                    "{} missing or broken; commit in akao-workflow (post-commit hook installs it)",
+                    bin.display()
+                ),
+            ),
+        }
+    }
+}

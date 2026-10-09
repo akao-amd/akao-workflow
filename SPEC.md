@@ -98,6 +98,8 @@ All take `-C <dir>` for the Work Directory (default: current directory).
   ready line (a crash marker, exit, or 30 min timeout fails the run), run clients in plan
   order, stop the servers — also on failure and Ctrl-C.  Output is kept in `logs/`.
 - `oaka profile ls|show|save|diff` — browse the library; `save` consolidates an experiment.
+- `oaka doctor` — read-only check of what compiled scripts need in this worker
+  (library, GPUs, InferenceX, sglang, sgl-eval); `akao doctor` is the console's counterpart.
 - (milestone 2) `oaka stack ...`, `oaka clean`.
 
 Environment: `OAKA_LIB` (library root), `OAKA_INFX` (InferenceX tree, default
@@ -193,4 +195,4 @@ stack varies over commits.
 ### Testing
 
 See `TEST.md`: hermetic `cargo test` (stand-ins for sglang, InferenceX and sgl-eval), a
-real GPU smoke run with gpt-oss-20b, and the `akao init` docker harness.
+real GPU smoke run with gpt-oss-20b, and the environment doctors.

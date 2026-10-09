@@ -1,7 +1,8 @@
 # Testing
 
 Three layers, cheapest first.  Layer 1 is required for every change; add layer 2 when a
-change touches `oaka/templates/` or how scripts run, layer 3 when it touches `akao init`.
+change touches `oaka/templates/` or how scripts run, layer 3 when it touches what a machine
+must provide (paths, env vars, tools) or after setting one up.
 
 ## 1. Hermetic: `cargo test` (~10 s, no GPU, no network)
 
@@ -36,9 +37,19 @@ cd / && rm -rf $S
 Pass: exit 0, one result row (~680 out tok/s on one MI355X), "no leftovers".  Pick an idle
 GPU (`amd-smi metric --usage`) instead of 0 if needed.
 
-## 3. `akao init` against local docker
+## 3. Environment: `akao doctor`, `oaka doctor` (seconds, read-only)
 
-`/2026/ww42/akao_workflow_test/` (`README.md` there): fake ssh into scratch containers,
-then a full `init`.  Untested since init step 5 started checking `docker -H ssh://<nick>`:
-docker's own ssh does not go through `AKAO_SSH`, so the harness likely needs a fake `ssh` on
-PATH as well.
+Prerequisites of a real machine, checked where the tools run (workers have the `oaka`
+binary but no repo, so these are subcommands, not cargo tests).  Each prints
+`ok`/`warn`/`FAIL` with the fix and exits 1 on any FAIL.
+
+- `akao doctor` (console): `AKAO_CONFIG_ROOT` exported, `default_image`, `hosts.tsv`, the
+  `ssh` first on PATH honours `$AKAO_CONFIG_ROOT/.ssh/config` (compared with
+  `ssh -F <config> -G` for every host, so docker contexts get the same config), home
+  template, deploy sources incl. a runnable `oaka/bin/oaka`, docker CLI.
+- `oaka doctor` (worker): library profiles resolve, GPUs visible, InferenceX checked out and
+  importable, sglang findable, `sgl-eval` and `oaka` on PATH (warn only).
+
+Run them after `akao init`, and first when a run fails for environmental reasons.
+`cargo test` proves each doctor catches what it claims (`akao/tests/doctor.rs`,
+`oaka/tests/run_all.rs`).  A new prerequisite (env var, path, tool) gets a doctor check.
