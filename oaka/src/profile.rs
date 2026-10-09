@@ -3,6 +3,10 @@
 //! A profile is a launch recipe for `python3 -m sglang.launch_server`: the model, env vars
 //! and flags.  `extends` makes a profile an overlay of another, which is how experiments
 //! are consolidated (`oaka profile save` writes only the delta).
+//!
+//! A profile is self-contained: it travels to every box with the library, where nothing
+//! else from the console exists, so `extends` (inside the library) is its only reference.
+//! Provenance and evidence are written into the file as comments, never as paths.
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -29,8 +33,6 @@ pub struct ProfileFile {
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tp: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub origin: Option<String>,
     #[serde(default)]
     pub env: Table,
     #[serde(default)]
@@ -150,6 +152,19 @@ pub fn overlay_args(args: &mut Vec<(String, Arg)>, t: &Table) -> Result<()> {
     Ok(())
 }
 
+/// `<model>/<recipe>`, or `<model>` meaning `<model>/base`.
+pub fn canonical(name: &str) -> Result<String> {
+    let full = if name.contains('/') {
+        name.to_string()
+    } else {
+        format!("{name}/base")
+    };
+    if !valid_name(&full) {
+        bail!("invalid profile name {name:?}; expected <model>/<recipe> or <model>");
+    }
+    Ok(full)
+}
+
 /// `<model>/<recipe>`, each part [A-Za-z0-9][A-Za-z0-9_.-]*
 pub fn valid_name(name: &str) -> bool {
     let part = |s: &str| {
@@ -209,9 +224,7 @@ impl Library {
     }
 
     pub fn load_file(&self, name: &str) -> Result<ProfileFile> {
-        if !valid_name(name) {
-            bail!("invalid profile name {name:?}; expected <model>/<recipe>");
-        }
+        let name = &canonical(name)?;
         let path = self.profile_path(name);
         if !path.exists() {
             bail!("profile {name} not found ({}); see `oaka profile ls`", path.display());
@@ -221,9 +234,11 @@ impl Library {
 
     /// Load `name` and apply its `extends` chain.
     pub fn resolve(&self, name: &str) -> Result<Profile> {
+        let name = &canonical(name)?;
         let mut chain: Vec<(String, ProfileFile)> = Vec::new();
         let mut next = Some(name.to_string());
         while let Some(n) = next {
+            let n = canonical(&n)?;
             if chain.iter().any(|(c, _)| *c == n) {
                 bail!("profile {name}: extends cycle through {n}");
             }
@@ -251,10 +266,9 @@ impl Library {
         Ok(p)
     }
 
-    pub fn save(&self, name: &str, file: &ProfileFile, force: bool) -> Result<PathBuf> {
-        if !valid_name(name) {
-            bail!("invalid profile name {name:?}; expected <model>/<recipe>");
-        }
+    /// Write `file` as profile `name`, with `header` (comment lines) on top.
+    pub fn save(&self, name: &str, header: &str, file: &ProfileFile, force: bool) -> Result<PathBuf> {
+        let name = &canonical(name)?;
         let path = self.profile_path(name);
         if path.exists() && !force {
             bail!(
@@ -263,7 +277,7 @@ impl Library {
             );
         }
         fs::create_dir_all(path.parent().unwrap())?;
-        let text = toml::to_string(file)?;
+        let text = format!("{header}{}", toml::to_string(file)?);
         fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
         Ok(path)
     }
@@ -271,6 +285,14 @@ impl Library {
 
 pub fn read_profile(path: &Path) -> Result<ProfileFile> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let raw: Table = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    if raw.contains_key("origin") {
+        bail!(
+            "{}: `origin` is no longer a field; a profile must not point outside the library, \
+             so write its provenance as # comments instead",
+            path.display()
+        );
+    }
     let f: ProfileFile = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     for a in &f.arch {
         if !crate::sys::ARCHES.contains(&a.as_str()) {
@@ -339,6 +361,9 @@ mod tests {
     fn names() {
         assert!(valid_name("gpt-oss-120b/triton"));
         assert!(!valid_name("gpt-oss-120b"));
+        assert_eq!(canonical("gpt-oss-120b").unwrap(), "gpt-oss-120b/base");
+        assert_eq!(canonical("gpt-oss-120b/legacy").unwrap(), "gpt-oss-120b/legacy");
+        assert!(canonical("../x").is_err());
         assert!(!valid_name("a/b/c"));
         assert!(!valid_name("../x"));
     }
@@ -355,7 +380,7 @@ mod tests {
         .unwrap();
         fs::write(
             lib.profile_path("m/var"),
-            "extends = 'm/base'\narch = ['gfx950']\n[env]\nY = '2'\n[args]\npage-size = 64\nfoo = false\n",
+            "extends = 'm'\narch = ['gfx950']\n[env]\nY = '2'\n[args]\npage-size = 64\nfoo = false\n",
         )
         .unwrap();
         let p = lib.resolve("m/var").unwrap();
@@ -365,6 +390,10 @@ mod tests {
         assert_eq!(p.env.len(), 2);
         assert_eq!(p.args, vec![("page-size".to_string(), Arg::Value("64".into()))]);
         assert_eq!(lib.list().unwrap(), ["m/base", "m/var"]);
+        assert_eq!(lib.resolve("m").unwrap().tp, Some(2));
+        fs::write(lib.profile_path("m/old"), "# a comment\norigin = '/2026/ww41/x.sh'\n").unwrap();
+        let e = format!("{:#}", lib.resolve("m/old").unwrap_err());
+        assert!(e.contains("`origin` is no longer a field"), "{e}");
         fs::write(lib.profile_path("m/base"), "extends = 'm/var'\n").unwrap();
         assert!(lib.resolve("m/var").is_err());
         fs::remove_dir_all(dir).unwrap();

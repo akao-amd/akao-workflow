@@ -101,7 +101,7 @@ own ssh transport for the context still uses plain `ssh`.
 Write a plan, compile it to stand-alone scripts, run them:
 
 ```bash
-oaka draft --profile gpt-oss-120b-w-mxfp4-a-fp8/triton --gpus 7 --client gsm8k --client fixed-seq
+oaka draft --profile gpt-oss-120b --gpus 7 --client gsm8k --client fixed-seq
 vim plan.toml && oaka check && oaka run
 ```
 

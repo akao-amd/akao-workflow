@@ -6,7 +6,7 @@ Installed by the akao-workflow post-commit hook as `/<year>/oaka/README.md`, nex
 ```
 /<year>/oaka/
   bin/oaka                          static binary
-  profiles/<model>/<recipe>.toml    server launch recipes; <model> = directory under /model
+  profiles/<model>/<recipe>.toml    server launch recipes, self-contained (see Profiles)
 ```
 
 ## Workflow
@@ -39,7 +39,7 @@ oaka profile ls | show <p> | diff <a> <b> | save <server> --as <model>/<recipe>
 ```toml
 [[server]]
 name = "quant"
-profile = "gpt-oss-120b-w-mxfp4-a-fp8/triton"
+profile = "gpt-oss-120b"     # = gpt-oss-120b/base
 gpus = [7]                 # required; --tp = their count unless the profile pins tp
 # port = 29911             # default: random free port in 29900-30050 (not 30000), kept in plan.lock.toml
 # model = "/model/..."     # default: the profile's model
@@ -73,13 +73,22 @@ The client policy is fixed; the plan only picks what is meant to vary:
 
 ## Profiles (`profiles/<model>/<recipe>.toml`)
 
+Named `<model>/<recipe>`; `<model>` alone means `<model>/base`.  `<model>` is the model
+family as you call it (`gpt-oss-120b`), and the `model` field holds the actual path.
+
+**A profile is self-contained.**  The library travels to every box without the console's
+`ww*` directories or anything else, so a profile must not point outside the library:
+`extends` (another profile) is its only reference.  Write provenance and evidence into
+the file as `#` comments — where the flags came from, what they measured, why each is
+there.  An `origin` field is rejected for this reason.
+
 ```toml
+# <what this recipe is, where it came from, what it measured, why each flag is here>
 description = "one line: what this recipe is"
 arch = ["gfx950"]          # any of gfx942 gfx950 gfx1250; absent = any
 extends = "<model>/<recipe>"   # optional; [env]/[args] below overlay the parent
-model = "/model/<model>"
+model = "/model/<dir>"
 tp = 1                     # optional pin
-origin = "where it came from"
 
 [env]
 NAME = "value"             # NAME = false unsets an inherited one
@@ -90,9 +99,10 @@ key = 1                    # --key 1; a list gives --key v1 v2
 ```
 
 `--model-path`, `--tp`, `--port` and `HIP_VISIBLE_DEVICES` come from the plan and are
-rejected in profiles and plans.  `arch`, `description` and `origin` are not inherited.
+rejected in profiles and plans.  `arch` and `description` are not inherited.
 `profile save` writes a server's plan overrides as a new profile that `extends` the one
-it started from, with `origin` = the Work Directory and `arch` copied unless `--arch`.
+it started from, with `arch` copied unless `--arch`, and a dated history comment naming
+the task; add the evidence to it by hand.
 
 ## Environment
 

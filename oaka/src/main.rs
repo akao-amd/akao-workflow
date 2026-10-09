@@ -179,12 +179,18 @@ fn profile_cmd(dir: &Path, lib: &Library, cmd: ProfileCmd) -> Result<()> {
         ProfileCmd::Ls => {
             let arch = sys::arch();
             println!(
-                "# {}  (this machine: {})",
+                "# {}  (this machine: {}; ! = other arch, x = broken)",
                 lib.profiles_dir().display(),
                 arch.as_deref().unwrap_or("no single GPU arch")
             );
             for name in lib.list()? {
-                let p = lib.resolve(&name)?;
+                let p = match lib.resolve(&name) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        println!("x{name:<48} BROKEN: {e:#}");
+                        continue;
+                    }
+                };
                 let archs = if p.arch.is_empty() {
                     "any".to_string()
                 } else {
@@ -228,10 +234,21 @@ fn profile_cmd(dir: &Path, lib: &Library, cmd: ProfileCmd) -> Result<()> {
             file.description =
                 Some(description.unwrap_or_else(|| format!("{} with the overrides of server {server}", s.base.name)));
             file.extends = Some(s.base.name.clone());
-            file.origin = Some(dir.display().to_string());
-            let path = lib.save(&name, &file, force)?;
+            // History as prose, not a path field: the file must stand on its own on boxes
+            // where the task directory does not exist.
+            let host = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default();
+            let header = format!(
+                "# {}\n#\n# History: saved {} by `oaka profile save` from server '{server}' of the task\n\
+                 # {} on {}.  Record below why each override is here and what it measured,\n\
+                 # so this file stands on its own.\n\n",
+                file.description.as_deref().unwrap_or_default(),
+                chrono::Local::now().format("%Y-%m-%d"),
+                dir.display(),
+                host.trim(),
+            );
+            let path = lib.save(&name, &header, &file, force)?;
             println!("wrote {}", path.display());
-            print!("{}", toml::to_string(&file)?);
+            print!("{}", std::fs::read_to_string(&path)?);
         }
         ProfileCmd::Diff { a, b } => {
             let (pa, pb) = (lib.resolve(&a)?, lib.resolve(&b)?);

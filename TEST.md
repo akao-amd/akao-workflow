@@ -26,7 +26,7 @@ gpt-oss-20b weights.  **Never download weights without asking the user**; on box
 
 ```bash
 cargo build -p oaka && O=$PWD/target/debug/oaka && S=$(mktemp -d /tmp/oaka-smoke-XXXX) && cd $S
-$O draft --profile gpt-oss-20b-bf16/base --gpus 0 --client fixed-seq
+$O draft --profile gpt-oss-20b --gpus 0 --client fixed-seq
 sed -i 's/^isl_osl = .*/isl_osl = [[1024, 128]]/; s/^conc = .*/conc = [4]/' plan.toml
 # console only:  sed -i 's|^# model = .*|model = "/2026/nocopy/gpt-oss-20b-bf16"|' plan.toml
 $O run; echo "exit $?"

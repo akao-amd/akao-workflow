@@ -200,6 +200,9 @@ reference is `oaka/README.md`.  The invariants that code changes must keep:
   plans may not set them.  `--tp` = profile `tp` if pinned, else the number of plan GPUs.
 - **Overlays**: `[env]`/`[args]` in a child profile or a plan overlay the parent, in order;
   `false` removes an inherited entry.  `profile save` writes exactly that delta.
+- **Library files are self-contained**: a profile may reference only another profile
+  (`extends`), never a path outside the library; provenance is `#` comments.  The library
+  reaches boxes without the console's `ww*`, so any other reference dangles there.
 - **Ports** are chosen once (random free port in 29900-30050, never 30000) and kept in
   `plan.lock.toml`, even when busy at recompile: that is usually the plan's own server.
 - **Stopping servers** (`run_all.sh`): TERM the server process only (a group TERM reaches

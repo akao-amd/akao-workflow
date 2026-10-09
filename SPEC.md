@@ -85,10 +85,16 @@ Where the how lives: worker reference (commands, plan and profile fields)
   `off_spec`, which marks results `OFFSPEC`.  Why: in ww41 three scripts calling themselves
   "InferenceX methodology" used 4x vs 10x prompts per concurrency and range ratios 0.8 vs
   1.0; templates an agent cannot edit end that drift.
-- **Profiles are named `<model>/<recipe>`; the GPU arch is a multiple-choice field in the
+- **Profiles are named `<model>/<recipe>` (`<model>` alone = `<model>/base`), `<model>` being
+  the model family as the user names it; the GPU arch is a multiple-choice field in the
   file, not part of the name.**  Recipes overlay one another (`extends`; `false` removes),
   and `profile save` writes a plan's tweaks as such an overlay.  Why: consolidating an
-  experiment into a profile should be one command and keep its provenance.
+  experiment into a profile should be one command.
+- **Profiles are self-contained; provenance is prose, not a reference.**  `extends` is the
+  only reference a profile may make, and it resolves inside the library.  Evidence and
+  history are `#` comments in the file.  Why: the library is delivered to boxes without
+  the console's `ww*` directories; in ww41 an `origin = "/2026/ww41/..."` field pointed at
+  nothing on h21-17.  The field is now rejected.
 - **The plan owns the per-task restriction**: GPUs (hence `--tp` and `HIP_VISIBLE_DEVICES`),
   port and model path; profiles may not set them.  Ports are random in 29900-30050 (never
   30000) and locked once chosen.
