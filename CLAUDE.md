@@ -25,9 +25,11 @@ to change the code; TEST.md = how to test.  When something ships, move its how-t
 SPEC.md and leave the decision behind.
 
 **Post-commit hook** (`.githooks/post-commit`, enable with `git config core.hooksPath
-.githooks`): after every commit it builds `oaka` for musl and installs it as
-`/<year>/oaka/bin/oaka` (`$OAKA_LIB/bin/oaka` if set) with `oaka/README.md` beside it,
-which `akao init` then deploys.
+.githooks`): after every commit it rebuilds `target/release/akao` (the user runs it through
+a `~/.local/bin/akao` symlink) and installs a musl `oaka` as `/<year>/oaka/bin/oaka`
+(`$OAKA_LIB/bin/oaka` if set) with `oaka/README.md` beside it, which `akao init` then
+deploys.  Both binaries stamp their commit into `--version` (`build.rs`).  Setup and the
+delivery path are in README.md, "Dev environment".
 Needs `rustup target add x86_64-unknown-linux-musl`.
 
 ## Workspace layout
@@ -39,6 +41,7 @@ TEST.md               test layers: cargo test, real GPU smoke, environment docto
 .githooks/post-commit installs a static oaka into /<year>/oaka/bin
 akao/
   Cargo.toml
+  build.rs            stamps the git sha into the version
   src/
     main.rs           CLI entry point, subcommand dispatch
     exec.rs           Runner: subprocess execution, ssh helpers

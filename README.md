@@ -6,12 +6,39 @@ Two CLI tools for driving worker containers on remote boxes from the local conso
 - `akao` — local driver (this README).
 - `oaka` — inside a worker: plan generator and script compiler (see below).
 
-```bash
-cargo build --release      # target/release/akao, target/release/oaka
-```
-
 Testing: `cargo test` (hermetic, ~10 s); real-GPU smoke in [TEST.md](TEST.md).
 `akao doctor` (console) and `oaka doctor` (worker) check a machine's prerequisites.
+
+## Dev environment (the console)
+
+`akao` runs here from the repo; `oaka` reaches workers through the library that
+`akao init` deploys.  Set up once per clone:
+
+```bash
+rustup target add x86_64-unknown-linux-musl      # oaka is built static for any worker image
+git config core.hooksPath .githooks              # enable the post-commit hook
+cargo build --release -p akao
+ln -sf "$PWD/target/release/akao" ~/.local/bin/akao
+export AKAO_CONFIG_ROOT=/2026/nocopy/akao-workflow-state    # in your shell profile
+akao doctor
+```
+
+`~/.local/bin` must come before `/usr/bin` on PATH: it also holds the `ssh` wrapper that
+makes docker's `ssh://` contexts read `$AKAO_CONFIG_ROOT/.ssh/config` (`akao doctor`
+checks it).
+
+**After every commit** the hook (`.githooks/post-commit`) refreshes both tools:
+
+| Built | Lands in | Reaches |
+|---|---|---|
+| `akao`, release | `target/release/akao` | you, through the symlink above |
+| `oaka`, static musl | `/<year>/oaka/bin/oaka`, plus `oaka/README.md` as `/<year>/oaka/README.md` | workers, at their next `akao init` (step 3 deploys `/<year>/oaka`, step 7 links `oaka` onto PATH) |
+
+So a worker gets a new `oaka` only when `akao init` runs again for it; re-running init on an
+existing container is safe (every step reuses what exists) as long as `--skip-setup` is
+not given, since that skips the deploy and the link.  Both tools print the commit they were
+built from: `akao --version`, `oaka --version`.  Code that was not committed is in neither:
+`cargo build` alone only refreshes `target/`.
 
 ## State
 

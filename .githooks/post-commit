@@ -1,22 +1,30 @@
 #!/bin/sh
-# Install a static oaka into the library after every commit, so `akao init` ships the
-# committed version to workers: ${OAKA_LIB:-/<ISO year>/oaka}/bin/oaka, plus
-# oaka/README.md as the library's README.md.
+# After every commit, refresh the binaries the dev environment runs, so neither can lag
+# behind the committed code:
+#   - akao: release build in target/release/akao (link it onto PATH once; see README.md)
+#   - oaka: static (musl) build installed into the library that `akao init` ships to
+#     workers, ${OAKA_LIB:-/<ISO year>/oaka}/bin/oaka, with oaka/README.md as its README.md
 #
 # Enable once per clone:  git config core.hooksPath .githooks
 # A failed build never blocks the commit (it already happened); it is reported instead.
 set -u
 top="$(git rev-parse --show-toplevel)"
-dest="${OAKA_LIB:-/$(date +%G)/oaka}/bin"
-target=x86_64-unknown-linux-musl
-bin="$top/target/$target/release/oaka"
+manifest="$top/Cargo.toml"
 
-if ! cargo build --release -q -p oaka --target "$target" --manifest-path "$top/Cargo.toml"; then
-    echo "post-commit: oaka build failed; $dest/oaka not updated" >&2
+if cargo build --release -q -p akao --manifest-path "$manifest"; then
+    echo "post-commit: built $top/target/release/akao ($("$top/target/release/akao" --version))"
+else
+    echo "post-commit: akao build failed; target/release/akao is stale" >&2
+fi
+
+lib="${OAKA_LIB:-/$(date +%G)/oaka}"
+target=x86_64-unknown-linux-musl
+if ! cargo build --release -q -p oaka --target "$target" --manifest-path "$manifest"; then
+    echo "post-commit: oaka build failed; $lib/bin/oaka not updated" >&2
     exit 0
 fi
-mkdir -p "$dest" && cp "$bin" "$dest/oaka.tmp" && mv "$dest/oaka.tmp" "$dest/oaka" \
-    && echo "post-commit: installed $dest/oaka ($("$dest/oaka" --version))"
-# The worker reference travels with the binary.
-cp "$top/oaka/README.md" "$dest/../README.md" && echo "post-commit: installed $(dirname "$dest")/README.md"
+mkdir -p "$lib/bin" && cp "$top/target/$target/release/oaka" "$lib/bin/oaka.tmp" \
+    && mv "$lib/bin/oaka.tmp" "$lib/bin/oaka" \
+    && echo "post-commit: installed $lib/bin/oaka ($("$lib/bin/oaka" --version))"
+cp "$top/oaka/README.md" "$lib/README.md" && echo "post-commit: installed $lib/README.md"
 exit 0

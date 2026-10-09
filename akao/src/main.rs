@@ -12,7 +12,7 @@ use state::{Host, State};
 ///
 /// State lives in $AKAO_CONFIG_ROOT (config.toml, hosts.tsv, container_home/).
 #[derive(Parser)]
-#[command(version)]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("AKAO_GIT_SHA"), ")"))]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
