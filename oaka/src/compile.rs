@@ -109,7 +109,7 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
             }
             (None, Some(p)) if !taken.contains(p) => *p,
             _ => {
-                let p = sys::pick_port(&taken).context("no free port in 29900-30050")?;
+                let p = sys::pick_port(&taken).context("no free port in 29900-30100")?;
                 lock.port.insert(s.name.clone(), p);
                 notes.push(format!("server {}: picked port {p}", s.name));
                 p

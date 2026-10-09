@@ -203,7 +203,7 @@ reference is `oaka/README.md`.  The invariants that code changes must keep:
 - **Library files are self-contained**: a profile may reference only another profile
   (`extends`), never a path outside the library; provenance is `#` comments.  The library
   reaches boxes without the console's `ww*`, so any other reference dangles there.
-- **Ports** are chosen once (random free port in 29900-30050, never 30000) and kept in
+- **Ports** are chosen once (random free port in 29900-30100, never 30000) and kept in
   `plan.lock.toml`, even when busy at recompile: that is usually the plan's own server.
 - **Stopping servers** (`run_all.sh`): TERM the server process only (a group TERM reaches
   sglang's scheduler first and reads as a crash), KILL the process group after 60 s.  The
@@ -218,7 +218,7 @@ reference is `oaka/README.md`.  The invariants that code changes must keep:
 - Test the bash, not only the Rust: most real bugs were in `run_all.sh` behaviour (group
   TERM read as a crash, Ctrl-C killing `tee`, stale points in summaries).  New runtime
   behaviour gets a case in `oaka/tests/run_all.rs`, with the stand-in extended there.
-- Parallel tests must not share ports: they use OS ephemeral ports (outside 29900-30050).
+- Parallel tests must not share ports: they use OS ephemeral ports (outside 29900-30100).
 - Background jobs of a non-interactive shell start with SIGINT ignored, so `cmd &` cannot
   test Ctrl-C; spawn in a new process group with default SIGINT (as `run_all.rs` does).
 - sglang flags drift between versions (e.g. `--cuda-graph-max-bs` became ambiguous); a

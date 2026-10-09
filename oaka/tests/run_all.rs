@@ -172,7 +172,7 @@ fn alive(pid: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// A port from the OS's ephemeral range, outside oaka's 29900-30050, so tests running in
+/// A port from the OS's ephemeral range, outside oaka's 29900-30100, so tests running in
 /// parallel (and servers already on this box) cannot collide with each other.
 fn ephemeral_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")

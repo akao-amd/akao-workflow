@@ -41,7 +41,7 @@ oaka profile ls | show <p> | diff <a> <b> | save <server> --as <model>/<recipe>
 name = "quant"
 profile = "gpt-oss-120b"     # = gpt-oss-120b/base
 gpus = [7]                 # required; --tp = their count unless the profile pins tp
-# port = 29911             # default: random free port in 29900-30050 (not 30000), kept in plan.lock.toml
+# port = 29911             # default: random free port in 29900-30100 (not 30000), kept in plan.lock.toml
 # model = "/model/..."     # default: the profile's model
 [server.env]               # overlays the profile; NAME = false unsets
 SGLANG_USE_AITER_MOE_GU_ITLV = "0"
@@ -72,6 +72,9 @@ The client policy is fixed; the plan only picks what is meant to vary:
   tokens, 64 threads.
 
 ## Profiles (`profiles/<model>/<recipe>.toml`)
+
+This library is the only home of server recipes (the sglang-dev skill's profiles were
+converted into it); change recipes here, through `oaka profile save` or by hand.
 
 Named `<model>/<recipe>`; `<model>` alone means `<model>/base`.  `<model>` is the model
 family as you call it (`gpt-oss-120b`), and the `model` field holds the actual path.

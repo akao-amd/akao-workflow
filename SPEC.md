@@ -95,8 +95,11 @@ Where the how lives: worker reference (commands, plan and profile fields)
   history are `#` comments in the file.  Why: the library is delivered to boxes without
   the console's `ww*` directories; in ww41 an `origin = "/2026/ww41/..."` field pointed at
   nothing on h21-17.  The field is now rejected.
+- **The oaka library is the single home of server recipes.**  The sglang-dev skill's
+  `profiles/*.sh` were converted into it (ww41) and are retired from the skill; recipe
+  changes go into the library only.  Why: two stores of the same recipes drift.
 - **The plan owns the per-task restriction**: GPUs (hence `--tp` and `HIP_VISIBLE_DEVICES`),
-  port and model path; profiles may not set them.  Ports are random in 29900-30050 (never
+  port and model path; profiles may not set them.  Ports are random in 29900-30100 (never
   30000) and locked once chosen.
 - **The stack is verified with `pip show`**; `PYTHONPATH` forces a tree when that is not
   enough.  Every server script already prints it.

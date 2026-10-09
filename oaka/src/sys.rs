@@ -8,7 +8,7 @@ use std::net::TcpListener;
 pub const ARCHES: &[&str] = &["gfx942", "gfx950", "gfx1250"];
 
 /// Ports oaka picks from; 30000 is sglang's default and always taken by someone.
-pub const PORT_RANGE: std::ops::RangeInclusive<u16> = 29900..=30050;
+pub const PORT_RANGE: std::ops::RangeInclusive<u16> = 29900..=30100;
 pub const PORT_AVOID: u16 = 30000;
 
 /// ISO year of today, e.g. "2026" (same rule as akao).
@@ -101,6 +101,14 @@ pub fn models() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn picked_ports_stay_in_range() {
+        for _ in 0..50 {
+            let p = pick_port(&[29900]).unwrap();
+            assert!((29901..=30100).contains(&p) && p != PORT_AVOID, "{p}");
+        }
+    }
 
     #[test]
     fn gfx_names() {
