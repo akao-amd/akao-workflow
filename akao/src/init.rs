@@ -272,6 +272,9 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
             &[],
             &format!("test -x /root/.local/bin/claude || bash {utils}/agent.sh --yes"),
         ))?;
+        // oaka's gsm8k client.  From PyPI on its own: never sglang[test], which pulls
+        // PyPI sglang over the image's.  Its deps are pure Python (no torch/triton/sglang).
+        r.run(&p.exec(&[], "command -v sgl-eval >/dev/null || python3 -m pip install sgl-eval"))?;
         // oaka ships in the control plane (step 3); put it on PATH for the worker agent.
         let oaka = format!("/{}/oaka/bin/oaka", p.year);
         r.run(&p.exec(

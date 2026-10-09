@@ -50,7 +50,8 @@ Brings up `akao_<name>` on `<nick>`:
 5. create docker context `<nick>` (`host=ssh://<nick>`) if missing, then `docker context use` it
 6. `docker run` the container, unless it already runs
 7. in the container: `apt install vim less tmux docker.io git`, `utils/install_gh.sh`,
-   `utils/agent.sh --yes` — each skipped when already present; link `oaka` into `/usr/local/bin`
+   `utils/agent.sh --yes`, `pip install sgl-eval` — each skipped when already present; link `oaka`
+   into `/usr/local/bin`
 8. clone InferenceX into `/<year>/nocopy/InferenceX`, unless a checkout is there (never pulled)
 9. start tmux with window `controller` running `claude`, unless tmux already runs
 

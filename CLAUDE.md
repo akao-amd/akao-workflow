@@ -122,7 +122,7 @@ Nine ordered steps, each idempotent (checks before acting):
 5. Check `docker -H ssh://<nick> version`, then create docker context `ssh://<nick>`
    (updates it if it points elsewhere).  Relies on the `ssh` wrapper (see Design notes).
 6. `docker run` the container (reuses if running; starts if stopped; fails on other states)
-7. Install apt packages + gh + claude agent (each skipped if already present); link
+7. Install apt packages + gh + claude agent + sgl-eval (each skipped if already present); link
    `/<year>/oaka/bin/oaka` to `/usr/local/bin/oaka`
 8. Clone `infx_repo` into `/<year>/nocopy/InferenceX` unless a checkout exists (never pulled;
    not skipped by `--skip-setup`: oaka's benchmark client needs it)

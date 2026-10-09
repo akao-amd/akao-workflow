@@ -48,6 +48,7 @@ The following subsections define subcommands that akao supports.  Ideally it fol
     - Get tmux running.  Name the first window as `controller`, and launch Claude.
     - Check out InferenceX into `/<work year>/nocopy/InferenceX` (once, never pulled) and put
       `oaka` on PATH; both are what `oaka` needs inside the worker.
+    - Install `sgl-eval` (`pip install sgl-eval`, never `sglang[test]`) for `oaka`'s GSM8K client.
 
 ## Worker-side plan generator and script compiler: `oaka`
 

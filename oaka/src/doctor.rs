@@ -112,7 +112,7 @@ pub fn run(lib: &Library) -> Result<()> {
         Some(p) => r.ok("sgl-eval", p.display().to_string()),
         None => r.warn(
             "sgl-eval",
-            "not on PATH; gsm8k clients will fail (pip install sgl-eval, never sglang[test])",
+            "not on PATH; gsm8k clients will fail (akao init installs it; else pip install sgl-eval, never sglang[test])",
         ),
     }
     match which("oaka") {
