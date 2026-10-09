@@ -127,19 +127,26 @@ it.  It always installs; there is no "already installed" shortcut.
 **Running the plan per revision** (`commits`): each step installs one revision and runs
 `step.sh <n>_<sha>`; a failed step is recorded and the next one still runs.  At the end
 `results/compare.csv` (also printed) lists every gsm8k score and fixed-seq median per step.
-**A-B-A** is `commits = [A, B, A]` with `clean = "never"`: the table adds B/A1 (the effect)
-and A2/A1, which must come back to ~1, or something survived the swap (a JIT cache, an
-install).
+**A-B-A** answers "did commit B change the numbers?": `commits = [A, B, A]` with
+`clean = "never"`.  The table adds B/A1 (the effect) and A2/A1, which must come back to ~1,
+or something survived the swap (a JIT cache, an install).  Trust B/A1 only when it is
+larger than the noise: with one run per step, 1-2% is run-to-run spread (ww42: B/A1 = 1.014
+between two commits that differ only in diffusion code), so use `repeats` >= 3.  Do not
+compare against the first server after a fresh install either: its kernels compile while
+it is measured (ww42: 666 vs 730 tok/s on identical code).
 
-**Bisect** (`bisect = { good, bad }`): needs a gate among the clients — a gsm8k client
-(`min_score`) or a fixed-seq client with `min_output_tok_s` (set it at the midpoint of the
-two ends, measured first; use one cheap, high-contrast point).  `run_all.sh` installs the
+**Bisect** answers "which commit regressed?" (`bisect = { good, bad }`).  The journey:
+(1) the good and bad commits come from the two runs' server logs (`[server ...] pip` lines);
+(2) measure both ends with a `commits` plan on one cheap, high-contrast point;
+(3) bisect with a gate set at the midpoint of the two ends — a fixed-seq
+`min_output_tok_s`, or a gsm8k client (`min_score`) for an accuracy regression;
+(4) confirm the culprit X with `commits = ["X^", "X", "X^"]`.  `run_all.sh` installs the
 bad end (creating the tree), runs `git bisect run scripts/bisect_step.sh`, and per commit
 `bisect_step.sh` answers good (gates passed), bad (a gate failed) or skip (install, server
 or client failed: never a false verdict).  Every commit's numbers go to
 `results/bisect/bisect.csv` (if they cannot be written, the bisect stops), git's log to `results/bisect/bisect.log`.  At the end the tree
 is reset and reinstalled as it is, so the venv matches it again (after Ctrl-C it prints the
-command instead).  Confirm a culprit with `commits = ["<culprit>^", "<culprit>", "<culprit>^"]`.
+command instead).
 
 `stacks.toml` in the library names each package:
 
@@ -189,7 +196,7 @@ image's `GPU_ARCH_LIST` (what it was built for) names another arch.
 
 ## Profiles (`profiles/<model>/<recipe>.toml`)
 
-This library is the only home of server recipes (the sglang-dev skill's profiles were
+This library is the only home of server recipes (the former sglang-dev skill's profiles were
 converted into it); change recipes here, through `oaka profile save` or by hand.
 
 Named `<model>/<recipe>`; `<model>` alone means `<model>/base`.  `<model>` is the model

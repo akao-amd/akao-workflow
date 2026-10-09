@@ -53,7 +53,8 @@ The following subsections define subcommands that akao supports.  Ideally it fol
 ## Worker-side plan generator and script compiler: `oaka`
 
 `oaka` runs inside a worker container and is driven by the worker agent or by hand.  It
-distills the deterministic part of `/2026/skills/sglang-dev` into a **hybrid tool**: the
+distills the deterministic part of the former `sglang-dev` skill (now `/2026/skills/worker`,
+which keeps only what oaka does not do) into a **hybrid tool**: the
 agent (or a human) writes a *plan*; `oaka` compiles the plan into stand-alone scripts that
 anyone can read and rerun without `oaka`.  The point is to stop re-deriving the same
 launch/benchmark scripts per task, and to stop an agent from silently bending criteria
