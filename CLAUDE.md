@@ -139,8 +139,8 @@ Ten ordered steps, each idempotent (checks before acting):
 8. Clone `infx_repo` into `/<year>/nocopy/InferenceX` unless a checkout exists (never pulled;
    not skipped by `--skip-setup`: oaka's benchmark client needs it)
 9. Start tmux session with window `controller` running `claude` (skipped if tmux already runs)
-10. Probe: `/<year>/oaka/bin/oaka probe` in the container prints its GPU arch and ROCm
-    version (read-only; "skipped" when that oaka predates `probe`)
+10. Worker doctor: `/<year>/oaka/bin/oaka doctor` in the container, report shown (GPU arch,
+    ROCm version, prerequisites); read-only and never fatal
 
 Steps 3 and 7 are skipped together by `--skip-setup`.
 

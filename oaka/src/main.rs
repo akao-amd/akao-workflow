@@ -54,10 +54,8 @@ enum Cmd {
     Compile,
     /// Compile, then run scripts/run_all.sh
     Run,
-    /// Check what compiled scripts need in this worker (read-only)
+    /// This worker: GPU arch, ROCm version and what compiled scripts need (read-only)
     Doctor,
-    /// Print this container's GPU arch and ROCm version, what profiles' `arch` targets match
-    Probe,
     /// Browse and extend the profile library
     #[command(subcommand)]
     Profile(ProfileCmd),
@@ -145,19 +143,6 @@ fn run(cli: Cli) -> Result<()> {
             Err(err).context("cannot exec bash")
         }
         Cmd::Doctor => doctor::run(&lib),
-        Cmd::Probe => {
-            let m = plan::Machine::probe();
-            println!("arch {}", sys::arch().unwrap_or_else(|| "unknown".into()));
-            println!(
-                "gpus {}",
-                m.gpus.map(|g| g.join(",")).unwrap_or_else(|| "unknown".into())
-            );
-            match sys::rocm() {
-                Some((v, from)) => println!("rocm {v}  # from {from}"),
-                None => println!("rocm unknown  # no .info/version under $ROCM_PATH, $ROCM_HOME or /opt/rocm"),
-            }
-            Ok(())
-        }
         Cmd::Profile(cmd) => profile_cmd(&dir, &lib, cmd),
     }
 }

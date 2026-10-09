@@ -81,8 +81,8 @@ Brings up `akao_<name>` on `<nick>`:
    into `/usr/local/bin`
 8. clone InferenceX into `/<year>/nocopy/InferenceX`, unless a checkout is there (never pulled)
 9. start tmux with window `controller` running `claude`, unless tmux already runs
-10. print the worker's GPU arch and ROCm version (`oaka probe`; what plans are checked
-    against), so a container from the wrong image is noticed at once
+10. run `oaka doctor` in the worker and show its report: GPU arch and ROCm version (what
+    plans are checked against) and every prerequisite; reported, never fatal
 
 Mounts: model dir → `/model`, docker socket → `/var/run/docker.sock`,
 `<host_home>/<year>` → `/<year>`, the container home → `/root`; workdir `/<year>/<week>/<name>`.

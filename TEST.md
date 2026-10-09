@@ -70,7 +70,8 @@ binary but no repo, so these are subcommands, not cargo tests).  Each prints
   `ssh` first on PATH honours `$AKAO_CONFIG_ROOT/.ssh/config` (compared with
   `ssh -F <config> -G` for every host, so docker contexts get the same config), home
   template, deploy sources incl. a runnable `oaka/bin/oaka`, docker CLI.
-- `oaka doctor` (worker): library profiles resolve, GPUs visible, InferenceX checked out and
+- `oaka doctor` (worker; `akao init` runs it as its last step): ROCm version, library
+  profiles resolve, GPUs visible, InferenceX checked out and
   importable, sglang findable, `sgl-eval` and `oaka` on PATH (warn only).
 
 Run them after `akao init`, and first when a run fails for environmental reasons.

@@ -20,8 +20,7 @@ oaka draft --profile <model>/<recipe> --gpus 6,7 --client gsm8k --client fixed-s
 oaka check      # every error names the field to fix
 oaka compile    # -> scripts/ (+ plan.lock.toml)
 oaka run        # compile, then scripts/run_all.sh
-oaka doctor     # this worker's prerequisites, when something environmental fails
-oaka probe      # this container's GPU arch and ROCm version
+oaka doctor     # this worker: GPU arch, ROCm version, prerequisites (when something fails)
 oaka profile ls | show <p> | diff <a> <b> | save <server> --as <model>/<recipe>
 ```
 
@@ -231,7 +230,7 @@ arch = [["gfx950", "10.1"], ["*", "11"]]   # <model>/base: without it
 ```
 
 `oaka check` (so `compile` and `run`) aborts when no target fits the arch of a server's
-GPUs and this container's ROCm version (`oaka probe` shows both; the version comes from
+GPUs and this container's ROCm version (`oaka doctor` shows both; the version comes from
 `.info/version` under `$ROCM_PATH`, `$ROCM_HOME` or `/opt/rocm`).  A target naming a ROCm
 version fails when the version cannot be found.  The compiled `server_<name>.sh` checks
 again before launching, because scripts can be rerun by hand in another container.

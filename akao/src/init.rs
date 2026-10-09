@@ -130,17 +130,6 @@ impl Plan {
     }
 }
 
-/// "arch gfx950\ngpus ...\nrocm 10.0.0  # from ..." -> "gfx950, ROCm 10.0.0".
-fn probe_summary(out: &str) -> String {
-    let field = |key: &str| {
-        out.lines()
-            .find_map(|l| l.strip_prefix(key))
-            .map(|v| v.split('#').next().unwrap_or("").trim().to_string())
-            .unwrap_or_else(|| "unknown".into())
-    };
-    format!("{}, ROCm {}", field("arch "), field("rocm "))
-}
-
 fn tar_create(dir: &Path, paths: &[String], excludes: &[&str]) -> Vec<String> {
     let mut argv: Vec<String> = vec!["tar".into(), "-C".into(), dir.display().to_string()];
     argv.extend(["--owner=0".into(), "--group=0".into()]);
@@ -321,13 +310,19 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
         r.run(&p.exec(&[], "tmux send-keys -t :controller claude Enter"))?;
     }
 
-    s.next("GPU arch and ROCm version");
-    // What oaka checks a plan's profiles against in this worker; shown so a container
-    // with the wrong image is noticed now, not when a plan aborts.
+    s.next("worker doctor");
+    // The worker's GPU arch and ROCm version (what plans' profiles are checked against)
+    // and every prerequisite oaka's scripts need, now that setup is done: a container
+    // from the wrong image, or a step that silently failed, shows here.  Reported, not
+    // fatal: the container is up, and the report names each fix.
     let oaka = format!("/{}/oaka/bin/oaka", p.year);
-    match r.probe(&p.exec(&[], &format!("{oaka} probe")))? {
-        Some(out) => println!("  {}: {}", p.container, probe_summary(&out)),
-        None => println!("  {oaka} probe did not run in {}; skipped", p.container),
+    match r.probe(&p.exec(&[], &format!("{oaka} doctor 2>&1; true")))? {
+        Some(out) => {
+            for line in out.lines() {
+                println!("  {line}");
+            }
+        }
+        None => println!("  cannot run {oaka} in {}; skipped", p.container),
     }
 
     let attach = p.docker(&["exec", "-it", &p.container, "tmux", "attach"]);
@@ -356,13 +351,6 @@ mod tests {
             workdir: "/2026/ww41/exp".into(),
             host_container_home: "/root/akao/container_home/akao_exp".into(),
         }
-    }
-
-    #[test]
-    fn probe_lines() {
-        let out = "arch gfx950\ngpus gfx950,gfx950\nrocm 10.0.0  # from /opt/rocm/.info/version\n";
-        assert_eq!(probe_summary(out), "gfx950, ROCm 10.0.0");
-        assert_eq!(probe_summary("arch unknown\n"), "unknown, ROCm unknown");
     }
 
     #[test]
