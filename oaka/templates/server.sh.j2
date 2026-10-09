@@ -22,6 +22,10 @@ if (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; then
 fi
 
 export HIP_VISIBLE_DEVICES={{ gpus }}
+{% if pythonpath %}
+# The plan's stack trees go first: the image puts its own checkouts on PYTHONPATH too.
+export PYTHONPATH={{ pythonpath | q }}${PYTHONPATH:+:$PYTHONPATH}
+{% endif %}
 {% for kv in env %}
 export {{ kv[0] }}={{ kv[1] | q }}
 {% endfor %}

@@ -51,6 +51,10 @@ of the library `docker cp`'d in (`OAKA_LIB`).  In it, the smoke plan above plus
 then `commits = ["<HEAD>", "<HEAD~1>", "<HEAD>"]`.  Pass (ww42, MI355X): the first install
 ~70 s (AOT + cold cargo), later ones ~8 s, `sglang ok: ... imports from the tree`, 666-740 out
 tok/s; A-B-A A2/A1 ~1.0; `git -C <tree> status --untracked-files=no` clean; `docker rm -f` afterwards.
+Run oaka from `bash -i` there, so `/etc/bash.bashrc` puts the image's AITER on PYTHONPATH as
+in a real worker.  `--stack aiter` (tree at the image's AITER commit): install ~30 s, first
+server start ~4.5 min (kernels JIT-build into the tree), ~657 tok/s.  `--stack triton`
+(clone triton-lang/triton into /sgl-workspace/triton-custom first): ~4 min build, ~626 tok/s.
 
 ## 3. Environment: `akao doctor`, `oaka doctor` (seconds, read-only)
 

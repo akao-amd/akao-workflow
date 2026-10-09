@@ -98,9 +98,10 @@ clean_tree() {
     say "  removed $n ignored path(s) matching $* in the tree"
 }
 
-# install_pkg <name> <tree> <repo> <module> <clean> <rev>; uses RESTORE, CLEAN_PATHS, CLEAN_TREE.
+# install_pkg <name> <tree> <repo> <module> <clean> <pythonpath> <rev>; uses RESTORE,
+# CLEAN_PATHS, CLEAN_TREE.  <pythonpath>: what the servers put first on PYTHONPATH, or "".
 install_pkg() {
-    local name=$1 tree=$2 repo=$3 module=$4 clean=$5 rev=$6 dirty commit file rc
+    local name=$1 tree=$2 repo=$3 module=$4 clean=$5 pythonpath=$6 rev=$7 dirty commit file rc
     say "== $name: ${rev:-the tree as it is} in $tree"
     if [ ! -e "$tree" ]; then
         [ -n "$rev" ] || die "$name: $tree does not exist; give a revision to create it from $repo"
@@ -138,11 +139,15 @@ install_pkg() {
     [ $rc -eq 0 ] || die "$name: scripts/install_$name.sh exited $rc"
 
     [ "$(git -C "$tree" rev-parse HEAD)" = "$commit" ] || die "$name: the recipe moved $tree off $commit"
-    file="$(cd / && python3 -c 'import importlib, sys; print(importlib.import_module(sys.argv[1]).__file__)' "$module" 2>&1)" \
-        || die "$name: python3 cannot import $module after the install:"$'\n'"$file"
+    # Import as the servers will: with their PYTHONPATH, from outside the Work Directory.
+    # The import may print (aiter JIT-builds its core), so the path comes on a marked line.
+    file="$(cd / && PYTHONPATH="${pythonpath}${pythonpath:+${PYTHONPATH:+:}}${PYTHONPATH:-}" python3 -c \
+        'import importlib, sys; print("\noaka-module-file:" + importlib.import_module(sys.argv[1]).__file__)' \
+        "$module" 2>&1)" || die "$name: python3 cannot import $module after the install:"$'\n'"$(tail -20 <<<"$file")"
+    file="$(sed -n 's/^oaka-module-file://p' <<<"$file" | tail -1)"
     case "$(realpath "$file")" in
         "$(realpath "$tree")"/*) ;;
-        *) die "$name: $module imports from $file, not from $tree" ;;
+        *) die "$name: $module imports from $file, not from $tree (a PYTHONPATH entry first? see pythonpath in stacks.toml)" ;;
     esac
     echo "$commit $tree $(date -Is)" >"$state/installed"
     say "$name ok: $tree at ${commit:0:12}, $module from $file"
@@ -152,7 +157,7 @@ install_pkg() {
 RESTORE=({% for f in p.restore %} {{ f | q }}{% endfor %} )
 CLEAN_PATHS=({% for c in p.clean_paths %} {{ c }}{% endfor %} )
 CLEAN_TREE=({% for c in p.clean_tree %} {{ c | q }}{% endfor %} )
-install_pkg {{ p.name }} {{ p.tree | q }} {{ p.repo | q }} {{ p.module }} {{ p.clean }} "${REV[{{ p.name }}]}"
+install_pkg {{ p.name }} {{ p.tree | q }} {{ p.repo | q }} {{ p.module }} {{ p.clean }} {{ p.pythonpath | q }} "${REV[{{ p.name }}]}"
 
 {% endfor %}
 say "stack ready"

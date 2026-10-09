@@ -139,6 +139,12 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
     );
     let mut files: Vec<(String, String)> = Vec::new();
 
+    // Trees the stack must put ahead of the image's own PYTHONPATH entries.
+    let pythonpath: Vec<String> = c
+        .stack
+        .iter()
+        .filter_map(|p| c.stacks.get(&p.name).and_then(|lib| lib.pythonpath_in(&p.tree)))
+        .collect();
     for s in &c.servers {
         let file = format!("server_{}.sh", s.name);
         let args: Vec<String> = s
@@ -153,6 +159,7 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
             overrides => overrides(s), self_path => format!("{SCRIPTS}/{file}"),
             port => port_of(&s.name), gpus => gpus.join(","), env => s.effective.env,
             model => s.model, tp => s.tp, args, packages => PROVENANCE_PACKAGES,
+            pythonpath => pythonpath.join(":"),
         })?;
         files.push((file, text));
     }
@@ -295,6 +302,7 @@ fn stack_scripts(env: &Environment, c: &Checked, marker: &str) -> Result<Vec<(St
             .collect::<Result<Vec<_>>>()?;
         pkgs.push(context! {
             name => p.name, tree => p.tree, repo => lib.repo, module => lib.module, clean => p.clean.as_str(),
+            pythonpath => lib.pythonpath_in(&p.tree).unwrap_or_default(),
             rev => p.commit.clone().unwrap_or_default(), restore => lib.restore, clean_paths,
             clean_tree => lib.clean.tree,
         });
@@ -444,7 +452,7 @@ off_spec = { prompts_per_conc = 4 }
         fs::write(lib.profile_path("m/base"), "model = '/model/m'\n").unwrap();
         fs::write(
             lib.root.join("stacks.toml"),
-            "[pkg]\nrepo = '/r'\nmodule = 'pkg'\nrestore = ['a.toml']\n\
+            "[pkg]\nrepo = '/r'\nmodule = 'pkg'\nrestore = ['a.toml']\npythonpath = 'python'\n\
              install = '''\nif true; then echo \"{# not jinja #}\"; fi\n'''\n\
              [pkg.clean]\npaths = ['~/.cache/pkg/jit', '/opt/x/*.egg']\ntree = ['**/__pycache__']\n",
         )
@@ -481,9 +489,14 @@ off_spec = { prompts_per_conc = 4 }
         );
         assert!(stack.contains("RESTORE=( a.toml )"), "{stack}");
         assert!(
-            stack.contains(&format!("install_pkg pkg {tree} /r pkg never \"${{REV[pkg]}}\"")),
+            stack.contains(&format!(
+                "install_pkg pkg {tree} /r pkg never {tree}/python \"${{REV[pkg]}}\""
+            )),
             "{stack}"
         );
+        assert!(read("server_a.sh").contains(&format!(
+            "export PYTHONPATH={tree}/python${{PYTHONPATH:+:$PYTHONPATH}}\n"
+        )));
         assert!(read("install_pkg.sh").contains("echo \"{# not jinja #}\""));
         let run_all = read("run_all.sh");
         assert!(run_all.contains("REVS=( v1 v2 v1 )"), "{run_all}");
@@ -499,14 +512,27 @@ off_spec = { prompts_per_conc = 4 }
 
         let out = compile_plan("bisect = { good = 'v1', bad = 'v2' }");
         assert!(
-            read("stack.sh").contains(" before-install \"${REV[pkg]}\""),
+            read("stack.sh").contains(" before-install "),
             "bisect cleans by default"
         );
         assert!(read("run_all.sh").contains("bisect start v2 v1"));
         assert!(read("bisect_step.sh").contains("bash \"$HERE/stack.sh\" \"pkg=.\""));
         assert!(out.removed.is_empty(), "{:?}", out.removed);
 
-        // Back to a plain plan: every stack script goes.
+        // Back to a plain plan: every stack script goes, and so does the PYTHONPATH.
+        fs::write(work.join(plan::PLAN), base).unwrap();
+        let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, None).unwrap();
+        let gone: Vec<_> = compile(&checked)
+            .unwrap()
+            .removed
+            .iter()
+            .map(|p| p.file_name().unwrap().to_owned())
+            .collect();
+        for f in ["bisect_step.sh", "metrics.py", "stack.sh", "install_pkg.sh"] {
+            assert!(gone.iter().any(|g| g == f), "{f} not removed: {gone:?}");
+        }
+        assert!(!read("server_a.sh").contains("PYTHONPATH"));
+        compile_plan("");
         fs::write(work.join(plan::PLAN), base).unwrap();
         let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, None).unwrap();
         let mut removed: Vec<String> = compile(&checked)
@@ -516,7 +542,7 @@ off_spec = { prompts_per_conc = 4 }
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
         removed.sort();
-        assert_eq!(removed, ["bisect_step.sh", "install_pkg.sh", "metrics.py", "stack.sh"]);
+        assert_eq!(removed, ["install_pkg.sh", "stack.sh"]);
         fs::remove_dir_all(root).unwrap();
     }
 }

@@ -128,6 +128,15 @@ Where the how lives: worker reference (commands, plan and profile fields)
   purging an egg without rebuilding breaks the import, so the recipe purges them as part
   of every rebuild.  Tree globs remove only what git ignores and holds no tracked file:
   `git clean -X` with a glob pathspec also deleted an unrelated ignored `build/`.
+- **Recipes come from rocm.Dockerfile, keyed on the GPU arch as it is**, with the differences
+  written into `stacks.toml`: AITER JIT-builds its kernels instead of prebuilding them (an
+  hour-scale build per swap would make bisect impractical; the kernels are the same), and
+  the image's patches to its pinned AITER are not applied (they target that commit).
+  Packages install in dependency order (Triton, AITER, SGLang).
+- **A package the image puts on PYTHONPATH gets the tree first on the servers'
+  PYTHONPATH** (`pythonpath` in stacks.toml).  Why: `/etc/bash.bashrc` exports
+  `/sgl-workspace/aiter`, which beats any install for everything started from a shell;
+  the verify imports with the servers' PYTHONPATH, so a shadowed install fails loudly.
 - **A tree's files are never reset before an install.**  install_tree.sh's blanket
   `git checkout -- .` destroys a user's patch silently; now a modified tracked file blocks a
   checkout, and only the files the recipe itself edits (`restore`) are put back after it.

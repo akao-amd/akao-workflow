@@ -24,10 +24,14 @@ pub struct Package {
     pub repo: String,
     /// Python module that must import from inside the tree after an install.
     pub module: String,
-    /// Tracked files the install edits in place: restored before a checkout and after
-    /// every install.  Any other modified tracked file blocks a checkout.
+    /// Tracked files the install edits in place: restored after every install.  Any
+    /// other modified tracked file blocks a checkout.
     #[serde(default)]
     pub restore: Vec<String>,
+    /// A directory of the tree (`.` = its root) that servers get first on PYTHONPATH, for
+    /// packages the image also puts on PYTHONPATH (aiter, via /etc/bash.bashrc): such an
+    /// entry beats any install, so the tree must come before it.
+    pub pythonpath: Option<String>,
     /// bash, run with `set -euo pipefail` in the tree.
     pub install: String,
     #[serde(default)]
@@ -99,6 +103,16 @@ pub fn parse(text: &str) -> Result<Stacks> {
     })
 }
 
+impl Package {
+    /// The PYTHONPATH entry for `tree`, if the package has one.
+    pub fn pythonpath_in(&self, tree: &str) -> Option<String> {
+        self.pythonpath.as_ref().map(|pp| match pp.trim_end_matches('/') {
+            "." | "" => tree.to_string(),
+            rel => format!("{tree}/{}", rel.trim_start_matches("./")),
+        })
+    }
+}
+
 pub fn valid_package_name(s: &str) -> bool {
     let mut c = s.chars();
     matches!(c.next(), Some(f) if f.is_ascii_alphanumeric())
@@ -129,6 +143,11 @@ fn validate(p: &Package) -> Result<()> {
     for r in &p.restore {
         if r.starts_with('/') || !plain_path(r) || r.contains(['*', '?', '[']) {
             bail!("restore {r:?} must be a plain path relative to the tree");
+        }
+    }
+    if let Some(pp) = &p.pythonpath {
+        if pp != "." && (pp.starts_with('/') || !plain_path(pp) || pp.contains(['*', '?', '['])) {
+            bail!("pythonpath {pp:?} must be `.` or a plain path relative to the tree");
         }
     }
     for c in &p.clean.paths {
@@ -182,6 +201,7 @@ description = "a"
 repo = "/r/a"
 module = "a.b"
 restore = ["python/pyproject.toml"]
+pythonpath = "."
 install = "pip install -e ."
 [alpha.clean]
 paths = ["~/.cache/a/jit", "/opt/venv/lib/x-*.egg"]
@@ -193,6 +213,8 @@ tree = ["**/__pycache__"]
         let s = parse(OK).unwrap();
         assert_eq!(s.names(), ["zeta", "alpha"]);
         assert_eq!(s.get("alpha").unwrap().clean.tree, ["**/__pycache__"]);
+        assert_eq!(s.get("alpha").unwrap().pythonpath_in("/t").as_deref(), Some("/t"));
+        assert_eq!(s.get("zeta").unwrap().pythonpath_in("/t"), None);
     }
 
     #[test]
@@ -227,6 +249,7 @@ tree = ["**/__pycache__"]
         bad(&OK.replace("**/__pycache__", "../x"), "clean.tree");
         bad(&OK.replace("**/__pycache__", ".git/hooks"), "clean.tree");
         bad(&OK.replace("python/pyproject.toml", "/etc/x"), "restore");
+        bad(&OK.replace("pythonpath = \".\"", "pythonpath = \"/opt\""), "pythonpath");
         bad(
             &OK.replace("install = \"true\"", "install = \"true\"\nextra = 1"),
             "unknown field",

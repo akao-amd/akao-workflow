@@ -42,7 +42,13 @@ signal.signal(signal.SIGTERM, stop)
 state = os.environ["FAKE_STATE"]
 with open(os.path.join(state, "pids"), "a") as f:
     f.write(f"{os.getpid()}\n{child.pid}\n")
-json.dump({"argv": args, "gpus": os.environ.get("HIP_VISIBLE_DEVICES")}, open(os.path.join(state, f"server_{port}.json"), "w"))
+try:
+    import fakepkg
+    pkg = os.path.realpath(fakepkg.__file__)
+except ImportError:
+    pkg = None
+json.dump({"argv": args, "gpus": os.environ.get("HIP_VISIBLE_DEVICES"), "fakepkg": pkg},
+          open(os.path.join(state, f"server_{port}.json"), "w"))
 s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(("127.0.0.1", port)); s.listen(); s.settimeout(0.2)
 time.sleep(float(os.environ.get("FAKE_READY_DELAY", "0")))
@@ -223,7 +229,9 @@ impl Sandbox {
         fs::write(repo.join("setup.cfg"), "[fakepkg]\n").unwrap();
         let mut shas = Vec::new();
         for (i, speed) in speeds.iter().enumerate() {
-            fs::write(repo.join("fakepkg/__init__.py"), format!("SPEED = {speed}\n")).unwrap();
+            // Prints on import, as aiter does when it JIT-builds its core.
+            let init = format!("print('[fakepkg] building core under /x/y')\nSPEED = {speed}\n");
+            fs::write(repo.join("fakepkg/__init__.py"), init).unwrap();
             if broken.contains(&i) {
                 fs::write(repo.join("BROKEN"), "").unwrap();
             } else {
@@ -658,4 +666,43 @@ fn check_rejects_bad_stacks() {
         &sb.root.join("repo").display().to_string(),
     );
     assert!(check(&repo).contains("use a worktree of it"), "{}", check(&repo));
+}
+
+#[test]
+fn pythonpath_puts_the_tree_ahead_of_the_images_entries() {
+    let _servers = servers_exclusive();
+    let sb = Sandbox::new("pypath");
+    let shas = sb.fake_repo(&[100], &[]);
+    // As /etc/bash.bashrc does for aiter: a stale copy first on everyone's PYTHONPATH.
+    let shadow = sb.root.join("shadow");
+    fs::create_dir_all(shadow.join("fakepkg")).unwrap();
+    fs::write(shadow.join("fakepkg/__init__.py"), "SPEED = 1\n").unwrap();
+    let pythonpath = format!("{}:{}", shadow.display(), sb.root.join("py").display());
+    let plan = sb.stack_plan("", &format!("commit = '{}'", shas[0]));
+
+    // The install alone cannot win, and the verify says so.
+    let (code, out) = sb.run(&plan, &[("PYTHONPATH", &pythonpath)]);
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains("not from") && out.contains("see pythonpath in stacks.toml"),
+        "{out}"
+    );
+
+    // With `pythonpath`, the servers and the verify import from the tree.
+    let stacks = sb.root.join("lib/stacks.toml");
+    let text = fs::read_to_string(&stacks).unwrap();
+    fs::write(
+        &stacks,
+        text.replace("module = 'fakepkg'\n", "module = 'fakepkg'\npythonpath = '.'\n"),
+    )
+    .unwrap();
+    let (code, out) = sb.run(&plan, &[("PYTHONPATH", &pythonpath)]);
+    assert_eq!(code, 0, "{out}");
+    let tree = sb.tree().canonicalize().unwrap();
+    let record = sb.server_record().join("\n");
+    assert!(
+        record.contains(&format!("\"fakepkg\": \"{}/fakepkg/__init__.py\"", tree.display())),
+        "{record}"
+    );
+    sb.assert_no_leftovers();
 }
