@@ -91,7 +91,9 @@ Eight ordered steps, each idempotent (checks before acting):
 2. `mkdir -p` host year dir + `container_home` root
 3. Deploy control plane: `tar | ssh tar` with `sudo -n`, `root:root`, no delete
 4. Copy home template (skipped if container home already exists)
-5. Create docker context `ssh://<nick>` (warns if it already points elsewhere)
+5. Check `docker -H ssh://<user>@<nick> version`, then create docker context `ssh://<user>@<nick>`
+   (updates it if it points elsewhere).  `<user>` comes from `ssh -G` because docker's ssh
+   helper ignores our `-F` config.
 6. `docker run` the container (reuses if running; starts if stopped; fails on other states)
 7. Install apt packages + gh + claude agent (each skipped if already present)
 8. Start tmux session with window `controller` running `claude` (skipped if tmux already runs)

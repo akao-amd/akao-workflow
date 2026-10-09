@@ -111,6 +111,16 @@ impl Plan {
     }
 }
 
+/// Docker endpoint for `nick`, carrying the login user from `ssh -G` output.
+/// docker runs plain `ssh` without our -F, so it would otherwise use the user from
+/// ~/.ssh/config (or the local user) instead of the one in $AKAO_CONFIG_ROOT/.ssh/config.
+fn docker_endpoint(ssh_g: &str, nick: &str) -> String {
+    match ssh_g.lines().find_map(|l| l.strip_prefix("user ")) {
+        Some(user) => format!("ssh://{}@{nick}", user.trim()),
+        None => format!("ssh://{nick}"),
+    }
+}
+
 fn tar_create(dir: &Path, paths: &[String], excludes: &[&str]) -> Vec<String> {
     let mut argv: Vec<String> = vec!["tar".into(), "-C".into(), dir.display().to_string()];
     argv.extend(["--owner=0".into(), "--group=0".into()]);
@@ -149,7 +159,8 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
     s.next("resolve host");
     let cfg = r.query(&r.ssh_config_argv(nick))?;
     let hostname = cfg.lines().find_map(|l| l.strip_prefix("hostname ")).unwrap_or(nick);
-    println!("  {nick} -> {hostname}");
+    let endpoint = docker_endpoint(&cfg, nick);
+    println!("  {nick} -> {hostname}, docker {endpoint}");
 
     s.next("prepare host directories");
     let script = format!("{ESCALATE}$S mkdir -p {} {}/container_home", q(&format!("{}{}", p.host.host_home, p.workdir)), q(&p.host.host_home));
@@ -184,14 +195,21 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
     }
 
     s.next("docker context");
-    let endpoint = format!("ssh://{nick}");
+    // docker's ssh helper cannot take -F, so a failure here would otherwise surface
+    // later as a silently failed probe (e.g. "container does not exist").
+    let version = r.query(&["docker", "-H", &endpoint, "version", "--format", "{{.Server.Version}}"].map(String::from))?;
+    println!("  docker {} reachable", version.trim());
     let inspect: Vec<String> = ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}", &p.context]
         .map(String::from)
         .into();
+    let host_arg = format!("host={endpoint}");
     match r.probe(&inspect)? {
         Some(ep) if ep.trim() == endpoint => println!("  reusing context {}", p.context),
-        Some(ep) => println!("  warning: reusing context {} which points at {}, not {endpoint}", p.context, ep.trim()),
-        None => r.run(&["docker", "context", "create", &p.context, "--docker", &format!("host={endpoint}")].map(String::from))?,
+        Some(ep) => {
+            println!("  context {} points at {}; updating", p.context, ep.trim());
+            r.run(&["docker", "context", "update", &p.context, "--docker", &host_arg].map(String::from))?
+        }
+        None => r.run(&["docker", "context", "create", &p.context, "--docker", &host_arg].map(String::from))?,
     }
     r.run(&["docker", "context", "use", &p.context].map(String::from))?;
 
@@ -273,6 +291,13 @@ mod tests {
         // rest args come after the skeleton but before the image.
         assert!(argv.ends_with(&["--shm-size=64g", "-e", "FOO=a b", "img:tag", "sleep", "infinity"].map(String::from)));
         assert!(argv.contains(&"PYTHONPATH=".to_string()));
+    }
+
+    #[test]
+    fn docker_endpoint_carries_user() {
+        let g = "host h21-5\nuser akao\nhostname ctheliosp-rck-g02-h21-5.rck.dcgpu\nport 22\n";
+        assert_eq!(docker_endpoint(g, "h21-5"), "ssh://akao@h21-5");
+        assert_eq!(docker_endpoint("hostname x\n", "h21-5"), "ssh://h21-5");
     }
 
     #[test]
