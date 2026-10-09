@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# {{ marker }}
+# The whole plan: start every server, wait until each is ready, run the clients in plan
+# order, then stop the servers (also on failure or Ctrl-C).  Each step is its own script
+# and can be run by hand instead.
+#   bash {{ self_path }}
+set -uo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+WORKDIR="$(dirname "$HERE")"
+LOGS="$WORKDIR/logs"
+mkdir -p "$LOGS"
+# tee ignores Ctrl-C: it must outlive this script's cleanup, or the cleanup dies of SIGPIPE.
+exec > >(trap '' INT TERM; exec tee -a "$LOGS/run_all.log") 2>&1
+say() { echo "[run_all $(date +%H:%M:%S)] $*"; }
+
+READY_MARK="The server is fired up and ready"
+CRASH_MARKS="Received sigquit from a child process|Scheduler hit an exception|Capture cuda graph failed"
+READY_TIMEOUT_S={{ ready_timeout_s }}
+
+PIDS=()
+stop_servers() {
+    [ -z "${PIDS[*]:-}" ] && return
+    trap '' INT TERM PIPE   # a second Ctrl-C must not cut the cleanup short
+    say "stopping servers"
+    # TERM the server process only: sglang tears down its own workers, while a TERM to
+    # the whole group reaches the scheduler first and reads as a crash.  KILL the group
+    # only if something is still alive after the grace period.
+    for pid in "${PIDS[@]}"; do kill -TERM "$pid" 2>/dev/null; done
+    for _ in $(seq 1 60); do
+        alive=0
+        for pid in "${PIDS[@]}"; do kill -0 -- "-$pid" 2>/dev/null && alive=1; done
+        [ $alive -eq 0 ] && break
+        sleep 1
+    done
+    for pid in "${PIDS[@]}"; do kill -KILL -- "-$pid" 2>/dev/null; done
+    PIDS=()
+}
+trap stop_servers EXIT
+trap 'exit 130' INT TERM
+
+# start_server <name>: own process group, so stopping it also stops its workers.
+start_server() {
+    : >"$LOGS/server_$1.log"
+    setsid bash "$HERE/server_$1.sh" >"$LOGS/server_$1.log" 2>&1 &
+    PIDS+=($!)
+    disown
+    say "server $1 started (pid $!), log logs/server_$1.log"
+}
+
+# wait_ready <name> <pid>
+wait_ready() {
+    local log="$LOGS/server_$1.log" deadline=$(( $(date +%s) + READY_TIMEOUT_S ))
+    while true; do
+        grep -q "$READY_MARK" "$log" && { say "server $1 ready"; return 0; }
+        if grep -qE "$CRASH_MARKS" "$log" || ! kill -0 "$2" 2>/dev/null; then
+            say "server $1 died during startup; last lines of logs/server_$1.log:"
+            tail -30 "$log"
+            return 1
+        fi
+        if [ "$(date +%s)" -ge $deadline ]; then
+            say "server $1 not ready after ${READY_TIMEOUT_S}s"
+            return 1
+        fi
+        sleep 10
+    done
+}
+
+say "plan {{ plan }}  (compiled by oaka {{ version }})"
+{% for s in servers %}
+start_server {{ s }}
+{% endfor %}
+{% for s in servers %}
+wait_ready {{ s }} "${PIDS[{{ loop.index0 }}]}" || exit 1
+{% endfor %}
+
+{% for c in clients %}
+say "client {{ c }}"
+bash "$HERE/{{ c }}" || { say "client {{ c }} failed (exit $?); stopping"; exit 1; }
+{% endfor %}
+say "done"

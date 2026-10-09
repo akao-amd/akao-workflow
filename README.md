@@ -4,7 +4,7 @@ Two CLI tools for driving worker containers on remote boxes from the local conso
 (see [SPEC.md](SPEC.md)). Target: `x86_64-unknown-linux-gnu`.
 
 - `akao` — local driver (this README).
-- `oaka` — remote driver; not designed yet.
+- `oaka` — inside a worker: plan generator and script compiler (see below).
 
 ```bash
 cargo build --release      # target/release/akao, target/release/oaka
@@ -16,7 +16,7 @@ Everything lives in `$AKAO_CONFIG_ROOT` (e.g. `/2026/nocopy/akao-workflow-state`
 
 | File | Content |
 |---|---|
-| `config.toml` | `default_image`, `deploy_src` (default `/<year>`), `deploy_paths` (default `CLAUDE.md AGENTS.md AGCP.md skills utils`) |
+| `config.toml` | `default_image`, `deploy_src` (default `/<year>`), `deploy_paths` (default `CLAUDE.md AGENTS.md AGCP.md skills utils oaka`), `infx_repo` |
 | `hosts.tsv` | one row per box: `nick image model_path docker_sock host_home rest`; `-` = default |
 | `container_home/` | home template, copied once per container to `<host_home>/container_home/akao_<name>` |
 
@@ -46,9 +46,10 @@ Brings up `akao_<name>` on `<nick>`:
 4. copy the home template, unless that container's home already exists
 5. create docker context `<nick>` (`host=ssh://<nick>`) if missing, then `docker context use` it
 6. `docker run` the container, unless it already runs
-7. in the container: `apt install vim less tmux docker.io`, `utils/install_gh.sh`,
-   `utils/agent.sh --yes` — each skipped when already present
-8. start tmux with window `controller` running `claude`, unless tmux already runs
+7. in the container: `apt install vim less tmux docker.io git`, `utils/install_gh.sh`,
+   `utils/agent.sh --yes` — each skipped when already present; link `oaka` into `/usr/local/bin`
+8. clone InferenceX into `/<year>/nocopy/InferenceX`, unless a checkout is there (never pulled)
+9. start tmux with window `controller` running `claude`, unless tmux already runs
 
 Mounts: model dir → `/model`, docker socket → `/var/run/docker.sock`,
 `<host_home>/<year>` → `/<year>`, the container home → `/root`; workdir `/<year>/<week>/<name>`.
@@ -63,3 +64,32 @@ Attach afterwards with `docker --context <nick> exec -it akao_<name> tmux attach
 
 `$AKAO_SSH` overrides the ssh command akao uses (e.g. `ssh -F ~/.ssh/other_config`); docker's
 own ssh transport for the context still uses plain `ssh`.
+
+## `oaka` (inside a worker)
+
+Write a plan, compile it to scripts, run them.  The scripts in `scripts/` stand alone:
+read them, rerun them, copy one to experiment by hand.
+
+```bash
+cd /2026/ww42/gpt_oss/0003_quant_vs_vanilla
+oaka draft --profile gpt-oss-120b-w-mxfp4-a-fp8/triton --gpus 7 --client gsm8k --client fixed-seq
+vim plan.toml          # GPUs, overrides, ISL/OSL and concurrencies
+oaka check             # validate against the library and this machine
+oaka compile           # -> scripts/server_*.sh, client_NN_*.sh, run_all.sh (+ plan.lock.toml)
+oaka run               # compile, then scripts/run_all.sh: servers, clients, teardown
+```
+
+Results go to `results/<NN>_<kind>_<server>/`, logs to `logs/`.
+
+Profiles live in the library `/<year>/oaka/profiles/<model>/<recipe>.toml` (`$OAKA_LIB`
+overrides the library root):
+
+```bash
+oaka profile ls                       # '!' marks profiles for another GPU arch
+oaka profile show gpt-oss-120b-w-mxfp4-a-fp8/aiter-ck
+oaka profile diff gpt-oss-120b/base gpt-oss-120b-w-mxfp4-a-fp8/triton
+oaka profile save quant --as gpt-oss-120b-w-mxfp4-a-fp8/page64   # keep a plan's tweaks
+```
+
+Every commit installs a static `oaka` to `/<year>/oaka/bin/oaka` through
+`.githooks/post-commit` (`git config core.hooksPath .githooks` once per clone).

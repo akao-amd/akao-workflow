@@ -17,7 +17,7 @@ const DOCKER_RUN_SKELETON: &[&str] = &[
     "--ipc=host", "--shm-size=32g",
 ];
 
-const APT_PACKAGES: &[&str] = &["vim", "less", "tmux", "docker.io"];
+const APT_PACKAGES: &[&str] = &["vim", "less", "tmux", "docker.io", "git"];
 
 /// Excluded from the control-plane deploy.
 const DEPLOY_EXCLUDES: &[&str] = &[".git", "__pycache__", "*.pyc", ".claude"];
@@ -144,7 +144,7 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
         p.host.host_home,
         p.workdir
     );
-    let mut s = Steps { n: 0, total: 8 };
+    let mut s = Steps { n: 0, total: 9 };
 
     s.next("resolve host");
     let cfg = r.query(&r.ssh_config_argv(nick))?;
@@ -231,6 +231,29 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
         r.run(&p.exec(&[], &script))?;
         r.run(&p.exec(&[], &format!("command -v gh >/dev/null || bash {utils}/install_gh.sh")))?;
         r.run(&p.exec(&[], &format!("test -x /root/.local/bin/claude || bash {utils}/agent.sh --yes")))?;
+        // oaka ships in the control plane (step 3); put it on PATH for the worker agent.
+        let oaka = format!("/{}/oaka/bin/oaka", p.year);
+        r.run(&p.exec(
+            &[],
+            &format!("if [ -x {oaka} ]; then ln -sf {oaka} /usr/local/bin/oaka; else echo 'no {oaka}; oaka not linked'; fi"),
+        ))?;
+    }
+
+    s.next("InferenceX checkout");
+    // oaka's benchmark client runs InferenceX's own code, so every worker needs it.
+    // Cloned once and never pulled: an existing checkout may carry local work.
+    let infx = format!("/{}/nocopy/InferenceX", p.year);
+    match r.probe(&p.exec(&[], &format!("git -C {infx} log -1 --format='%h %cs %s'")))? {
+        Some(head) => println!("  reusing {infx} at {}", head.trim()),
+        None => {
+            let repo = state.require("infx_repo")?;
+            let script = format!(
+                "if [ -e {infx} ]; then echo '{infx} exists but is not a git checkout; resolve it by hand' >&2; exit 1; fi; \
+                 git clone --filter=blob:none {} {infx}",
+                q(&repo)
+            );
+            r.run(&p.exec(&[], &script))?
+        }
     }
 
     s.next("tmux controller window");

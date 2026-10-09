@@ -23,8 +23,13 @@ pub const KEYS: &[(&str, Option<&str>, &str)] = &[
     ("deploy_src", Some("/{year}"), "local directory holding the control plane"),
     (
         "deploy_paths",
-        Some("CLAUDE.md AGENTS.md AGCP.md skills utils"),
+        Some("CLAUDE.md AGENTS.md AGCP.md skills utils oaka"),
         "space-separated paths under deploy_src shipped to <host_home>/<year>",
+    ),
+    (
+        "infx_repo",
+        Some("https://github.com/SemiAnalysisAI/InferenceX.git"),
+        "InferenceX repository init clones into /<year>/nocopy/InferenceX (oaka's benchmark client)",
     ),
 ];
 

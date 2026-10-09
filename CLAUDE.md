@@ -1,7 +1,8 @@
 # akao-workflow
 
-Rust workspace with two CLI tools: `akao` (local driver) and `oaka` (remote driver, stub).
-Target: `x86_64-unknown-linux-gnu`.
+Rust workspace with two CLI tools: `akao` (local driver) and `oaka` (worker-side plan
+generator and script compiler).  Target: `x86_64-unknown-linux-gnu`; `oaka` is also built
+static for `x86_64-unknown-linux-musl` so it runs in any worker image.
 
 ## Build & test
 
@@ -11,6 +12,11 @@ cargo build --release # release   → target/release/akao
 cargo test            # all unit tests
 cargo clippy          # lints
 ```
+
+**Post-commit hook** (`.githooks/post-commit`, enable with `git config core.hooksPath
+.githooks`): after every commit it builds `oaka` for musl and installs it as
+`/<year>/oaka/bin/oaka` (`$OAKA_LIB/bin/oaka` if set), which `akao init` then deploys.
+Needs `rustup target add x86_64-unknown-linux-musl`.
 
 ## Workspace layout
 
@@ -22,11 +28,19 @@ akao/
     main.rs           CLI entry point, subcommand dispatch
     exec.rs           Runner: subprocess execution, ssh helpers
     state.rs          State: config.toml + hosts.tsv + home template
-    init.rs           `akao init` — 8-step container bring-up
+    init.rs           `akao init` — 9-step container bring-up
     cp.rs             `akao cp`  — cross-host path copy via tar | ssh
 oaka/
   Cargo.toml
-  src/main.rs         stub (not yet designed)
+  build.rs            stamps the git sha into the version
+  templates/*.sh.j2   script templates (minijinja), embedded with include_str!
+  src/
+    main.rs           CLI: draft, check, compile, run, profile ls|show|save|diff
+    sys.rs            work year, GPU archs from KFD topology, free ports, q()
+    profile.rs        Library ($OAKA_LIB or /<year>/oaka), profiles, extends, overlays
+    plan.rs           plan.toml schema + validation (check), plan.lock.toml
+    compile.rs        plan + library + templates -> scripts/
+    draft.rs          plan.toml starter from hints + machine
 ```
 
 ## Runtime state
@@ -36,7 +50,7 @@ The variable is **required**; every subcommand fails clearly if unset.
 
 ```
 $AKAO_CONFIG_ROOT/
-  config.toml         settings: default_image, deploy_src, deploy_paths
+  config.toml         settings: default_image, deploy_src, deploy_paths, infx_repo
   hosts.tsv           one row per remote box (TSV, 5–6 cols)
   container_home/     home template, copied once per akao_<name>
     .local/bin/ssh    ssh wrapper adding -F $AKAO_CONFIG_ROOT/.ssh/config (see Design notes)
@@ -86,7 +100,7 @@ they are appended after the fixed skeleton but before the image in `init`.
 
 ### init.rs — `akao init <nick> <name>`
 
-Eight ordered steps, each idempotent (checks before acting):
+Nine ordered steps, each idempotent (checks before acting):
 
 1. Resolve nick via `ssh -G` (verifies ssh connectivity)
 2. `mkdir -p` host year dir + `container_home` root
@@ -95,8 +109,11 @@ Eight ordered steps, each idempotent (checks before acting):
 5. Check `docker -H ssh://<nick> version`, then create docker context `ssh://<nick>`
    (updates it if it points elsewhere).  Relies on the `ssh` wrapper (see Design notes).
 6. `docker run` the container (reuses if running; starts if stopped; fails on other states)
-7. Install apt packages + gh + claude agent (each skipped if already present)
-8. Start tmux session with window `controller` running `claude` (skipped if tmux already runs)
+7. Install apt packages + gh + claude agent (each skipped if already present); link
+   `/<year>/oaka/bin/oaka` to `/usr/local/bin/oaka`
+8. Clone `infx_repo` into `/<year>/nocopy/InferenceX` unless a checkout exists (never pulled;
+   not skipped by `--skip-setup`: oaka's benchmark client needs it)
+9. Start tmux session with window `controller` running `claude` (skipped if tmux already runs)
 
 Steps 3 and 7 are skipped together by `--skip-setup`.
 
@@ -143,8 +160,29 @@ in the container).
   Init step 5 checks `docker -H ssh://<nick> version` so a missing wrapper fails loudly.
 - **Idempotent init**: every step checks what exists and reuses it, so re-running init
   on a half-done worker resumes instead of failing.
-- **oaka**: not yet designed.  The binary exists so the workspace builds, and it exits 2
-  with a "not designed yet" message.
+
+## oaka
+
+Runs inside a worker.  Design and user-facing rules are in SPEC.md ("Worker-side plan
+generator"); the invariants that code changes must keep:
+
+- **The scripts are the product.**  `compile` writes stand-alone bash into
+  `<workdir>/scripts/` that never calls oaka; `run` execs `scripts/run_all.sh` (exec, so
+  Ctrl-C and exit codes are bash's).  Never make `run` interpret the plan itself.
+- **Client policy is not a plan knob.**  `fixed-seq` delegates to InferenceX's own
+  `python3 -m infx.bench fixed-seq point`; the plan exposes only isl/osl, conc, range ratio
+  and repeats.  Anything else goes through `off_spec` and marks results `OFFSPEC`.
+- **oaka owns** `--model-path`, `--tp`, `--port` and `HIP_VISIBLE_DEVICES`; profiles and
+  plans may not set them.  `--tp` = profile `tp` if pinned, else the number of plan GPUs.
+- **Overlays**: `[env]`/`[args]` in a child profile or a plan overlay the parent, in order;
+  `false` removes an inherited entry.  `profile save` writes exactly that delta.
+- **Ports** are chosen once (random free port in 29900-30050, never 30000) and kept in
+  `plan.lock.toml`, even when busy at recompile: that is usually the plan's own server.
+- **Stopping servers** (`run_all.sh`): TERM the server process only (a group TERM reaches
+  sglang's scheduler first and reads as a crash), KILL the process group after 60 s.  The
+  log `tee` ignores INT, or Ctrl-C kills it and the cleanup dies of SIGPIPE.
+- `compile` removes only scripts whose second line carries the "Generated by oaka" marker.
+- Templates: `{#` opens a Jinja comment, so write `${PIDS[*]}`-style bash, not `${#...}`.
 
 ## Adding a subcommand
 

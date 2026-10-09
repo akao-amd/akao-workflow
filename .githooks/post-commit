@@ -1,0 +1,19 @@
+#!/bin/sh
+# Install a static oaka into the library after every commit, so `akao init` ships the
+# committed version to workers: ${OAKA_LIB:-/<ISO year>/oaka}/bin/oaka.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+# A failed build never blocks the commit (it already happened); it is reported instead.
+set -u
+top="$(git rev-parse --show-toplevel)"
+dest="${OAKA_LIB:-/$(date +%G)/oaka}/bin"
+target=x86_64-unknown-linux-musl
+bin="$top/target/$target/release/oaka"
+
+if ! cargo build --release -q -p oaka --target "$target" --manifest-path "$top/Cargo.toml"; then
+    echo "post-commit: oaka build failed; $dest/oaka not updated" >&2
+    exit 0
+fi
+mkdir -p "$dest" && cp "$bin" "$dest/oaka.tmp" && mv "$dest/oaka.tmp" "$dest/oaka" \
+    && echo "post-commit: installed $dest/oaka ($("$dest/oaka" --version))"
+exit 0

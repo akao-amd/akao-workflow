@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# {{ marker }}
+# Server {{ name }}: profile {{ profile }}
+{% if description %}
+#   {{ description }}
+{% endif %}
+{% for line in overrides %}
+#   plan override: {{ line }}
+{% endfor %}
+#
+# Runs in the foreground; scripts/run_all.sh starts it in the background with its log in logs/.
+#   bash {{ self_path }}
+set -euo pipefail
+
+PORT={{ port }}
+say() { echo "[server {{ name }}] $*"; }
+
+# Fail now rather than after loading weights: something already listens on the port.
+if (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; then
+    say "FATAL: port $PORT is already in use"
+    exit 1
+fi
+
+export HIP_VISIBLE_DEVICES={{ gpus }}
+{% for kv in env %}
+export {{ kv[0] }}={{ kv[1] | q }}
+{% endfor %}
+
+ARGS=(
+    --model-path {{ model | q }}
+    --tp {{ tp }}
+    --port "$PORT"
+{% for line in args %}
+    {{ line }}
+{% endfor %}
+)
+
+# Provenance: what is about to run, and on which stack.
+say "$(date -Is) $(realpath "$0")"
+say "profile {{ profile }}  model {{ model }}  tp {{ tp }}  gpus $HIP_VISIBLE_DEVICES  port $PORT"
+python3 -m pip show {{ packages }} 2>/dev/null \
+    | grep -E '^(Name|Version|Location|Editable project location):' | sed 's/^/[server {{ name }}] pip /' || true
+env | grep -E '^(HIP|HSA|ROCM|AITER|SGLANG|TRITON|ENABLE_CK|NCCL|RCCL|TORCH|PYTORCH)' | sort | sed 's/^/[server {{ name }}] env /'
+say "cmd python3 -m sglang.launch_server ${ARGS[*]}"
+
+exec python3 -m sglang.launch_server "${ARGS[@]}"

@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# {{ marker }}
+# Client {{ index }}: InferenceX fixed-seq-len throughput on server {{ server }} (port {{ port }}).
+#
+# The client policy belongs to InferenceX (`python3 -m infx.bench fixed-seq point`):
+# warmups, --ignore-eos, request rate and percentiles are not set here and must not be.
+# This script only chooses the points: ISL/OSL, concurrency, range ratio {{ range_ratio }},
+# {{ prompts_per_conc }} prompts per unit of concurrency{% if offspec %} (OFF-SPEC: InferenceX uses {{ spec_prompts_per_conc }}){% endif %}.
+#
+# Needs the server running (scripts/server_{{ server }}.sh).
+#   bash {{ self_path }}
+set -uo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+WORKDIR="$(dirname "$HERE")"
+PORT={{ port }}
+INFX={{ infx | q }}
+OUT="$WORKDIR/{{ out }}"
+say() { echo "[client {{ index }} fixed-seq {{ server }}] $*"; }
+
+if ! (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; then
+    say "FATAL: nothing listens on port $PORT; start scripts/server_{{ server }}.sh first"
+    exit 1
+fi
+if [ ! -d "$INFX/infx" ]; then
+    say "FATAL: InferenceX not found at $INFX (akao init checks it out into /<year>/nocopy/InferenceX)"
+    exit 1
+fi
+say "InferenceX $(git -C "$INFX" rev-parse --short HEAD 2>/dev/null || echo '?') at $INFX"
+mkdir -p "$OUT"
+
+# isl osl conc
+POINTS=(
+{% for p in points %}
+    "{{ p }}"
+{% endfor %}
+)
+
+DONE=()
+for point in "${POINTS[@]}"; do
+    read -r ISL OSL CONC <<<"$point"
+    for RUN in $(seq 1 {{ repeats }}); do
+        NAME="{{ server }}_isl${ISL}_osl${OSL}_c${CONC}_r${RUN}{{ suffix }}"
+        say "$(date +%H:%M:%S) isl=$ISL osl=$OSL conc=$CONC run $RUN/{{ repeats }} -> $NAME"
+        PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$INFX${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 -m infx.bench fixed-seq point \
+            --base-url "http://127.0.0.1:$PORT" \
+            --model {{ served | q }} \
+            --tokenizer {{ tokenizer | q }} \
+            --backend vllm \
+            --isl "$ISL" --osl "$OSL" \
+            --random-range-ratio {{ range_ratio }} \
+            --conc "$CONC" \
+            --num-prompts $(( {{ prompts_per_conc }} * CONC )) \
+            --result "$OUT/$NAME.json" \
+            >"$OUT/$NAME.log" 2>&1
+        RC=$?
+        if [ $RC -ne 0 ]; then
+            say "FAILED ($RC); last lines of $OUT/$NAME.log:"
+            tail -20 "$OUT/$NAME.log"
+            exit 1
+        fi
+        DONE+=("$NAME")
+    done
+done
+
+# One row per point of this run, also kept as summary.csv.
+python3 - "$OUT" "${DONE[@]}" <<'PY'
+import csv, json, os, re, sys
+out, names = sys.argv[1], sys.argv[2:]
+cols = ["file", "isl", "osl", "conc", "output_tok_s", "total_tok_s", "mean_ttft_ms", "mean_tpot_ms", "completed"]
+rows = []
+for name in names:
+    path = os.path.join(out, name + ".json")
+    m = re.search(r"_isl(\d+)_osl(\d+)_c(\d+)_r(\d+)", name)
+    r = json.load(open(path))
+    rows.append([
+        name, int(m[1]), int(m[2]), int(m[3]),
+        r.get("output_throughput"), r.get("total_token_throughput"),
+        r.get("mean_ttft_ms"), r.get("mean_tpot_ms"), r.get("completed"),
+    ])
+rows.sort(key=lambda row: (row[1], row[2], row[3], row[0]))
+with open(os.path.join(out, "summary.csv"), "w", newline="") as f:
+    csv.writer(f).writerows([cols] + rows)
+print(f"{'result':<44} {'conc':>5} {'out tok/s':>10} {'ttft ms':>9} {'tpot ms':>8}")
+fmt = lambda v, p: f"{v:.{p}f}" if isinstance(v, (int, float)) else "NA"
+for row in rows:
+    print(f"{row[0]:<44} {row[3]!s:>5} {fmt(row[4], 1):>10} {fmt(row[6], 1):>9} {fmt(row[7], 2):>8}")
+print(f"summary: {os.path.join(out, 'summary.csv')}")
+PY

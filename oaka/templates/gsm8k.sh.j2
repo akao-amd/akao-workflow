@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# {{ marker }}
+# Client {{ index }}: GSM8K accuracy gate on server {{ server }} (port {{ port }}).
+# Exits 3 when the score is below {{ min_score }}: do not trust perf numbers from this server.
+#
+# Needs the server running (scripts/server_{{ server }}.sh) and sgl-eval installed.
+#   bash {{ self_path }}
+set -uo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+WORKDIR="$(dirname "$HERE")"
+PORT={{ port }}
+OUT="$WORKDIR/{{ out }}"
+say() { echo "[client {{ index }} gsm8k {{ server }}] $*"; }
+
+if ! (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; then
+    say "FATAL: nothing listens on port $PORT; start scripts/server_{{ server }}.sh first"
+    exit 1
+fi
+if ! command -v sgl-eval >/dev/null; then
+    say "FATAL: sgl-eval not found; pip install sgl-eval (never sglang[test]: it pulls PyPI sglang)"
+    exit 1
+fi
+mkdir -p "$OUT"
+
+say "$(date -Is) -> $OUT"
+sgl-eval run gsm8k \
+    --base-url "http://127.0.0.1:$PORT/v1" \
+    --model {{ served | q }} \
+    --num-threads 64 \
+    --temperature 1.0 \
+    --top-p 1.0 \
+    --seed 42 \
+    --max-tokens 8192 \
+{% if thinking %}
+    --thinking \
+{% endif %}
+    --out-dir "$OUT"
+RC=$?
+if [ $RC -ne 0 ]; then
+    say "FAILED: sgl-eval exited $RC"
+    exit 1
+fi
+
+METRICS="$(ls -t "$OUT"/*/metrics.json 2>/dev/null | head -1)"
+[ -n "$METRICS" ] || { say "FAILED: no metrics.json under $OUT"; exit 1; }
+python3 - "$METRICS" {{ min_score }} <<'PY'
+import json, sys
+path, floor = sys.argv[1], float(sys.argv[2])
+agg = json.load(open(path))["aggregate"]
+score = agg.get("score", agg.get("pass@1"))
+verdict = "PASS" if score is not None and score >= floor else "FAIL"
+print(f"[gsm8k] score {score} (min {floor}) {verdict}  {path}")
+sys.exit(0 if verdict == "PASS" else 3)
+PY

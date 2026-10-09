@@ -1,7 +1,15 @@
 [package]
 name = "oaka"
-description = "Remote driver, script generator, deployment helper (not designed yet)"
+description = "Worker-side plan generator and script compiler for LLM-framework development"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+clap = { version = "4", features = ["derive"] }
+fastrand = "2"
+minijinja = "2"
+serde = { version = "1", features = ["derive"] }
+shlex = "1"
+toml = { version = "0.8", features = ["preserve_order"] }
