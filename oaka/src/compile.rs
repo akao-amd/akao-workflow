@@ -97,7 +97,11 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
     lock.port.retain(|name, _| c.servers.iter().any(|s| s.name == *name));
     let mut ports: Vec<(String, u16)> = Vec::new();
     for s in &c.servers {
-        let taken: Vec<u16> = ports.iter().map(|(_, p)| *p).chain(c.servers.iter().filter_map(|o| o.port)).collect();
+        let taken: Vec<u16> = ports
+            .iter()
+            .map(|(_, p)| *p)
+            .chain(c.servers.iter().filter_map(|o| o.port))
+            .collect();
         let port = match (s.port, lock.port.get(&s.name)) {
             (Some(p), _) => {
                 lock.port.remove(&s.name);
@@ -112,7 +116,10 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
             }
         };
         if !sys::port_free(port) {
-            notes.push(format!("server {}: port {port} is in use right now (already running?)", s.name));
+            notes.push(format!(
+                "server {}: port {port} is in use right now (already running?)",
+                s.name
+            ));
         }
         ports.push((s.name.clone(), port));
     }
@@ -128,8 +135,12 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
 
     for s in &c.servers {
         let file = format!("server_{}.sh", s.name);
-        let args: Vec<String> =
-            s.effective.launch_args().iter().map(|w| w.iter().map(|x| q(x)).collect::<Vec<_>>().join(" ")).collect();
+        let args: Vec<String> = s
+            .effective
+            .launch_args()
+            .iter()
+            .map(|w| w.iter().map(|x| q(x)).collect::<Vec<_>>().join(" "))
+            .collect();
         let gpus: Vec<String> = s.gpus.iter().map(u32::to_string).collect();
         let text = env.get_template("server.sh")?.render(context! {
             marker, name => s.name, profile => s.base.name, description => s.base.description,
@@ -151,12 +162,23 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
             out, self_path => format!("{SCRIPTS}/{file}"),
         };
         let text = match cl {
-            ClientSpec::Gsm8k { thinking, min_score, .. } => env
+            ClientSpec::Gsm8k {
+                thinking, min_score, ..
+            } => env
                 .get_template("gsm8k.sh")?
                 .render(context! { thinking, min_score => format!("{min_score:.2}"), ..common })?,
-            ClientSpec::FixedSeq { isl_osl, conc, range_ratio, repeats, off_spec, .. } => {
+            ClientSpec::FixedSeq {
+                isl_osl,
+                conc,
+                range_ratio,
+                repeats,
+                off_spec,
+                ..
+            } => {
                 let ppc = match off_spec {
-                    Some(OffSpec { prompts_per_conc: Some(n) }) => *n,
+                    Some(OffSpec {
+                        prompts_per_conc: Some(n),
+                    }) => *n,
                     _ => PROMPTS_PER_CONC,
                 };
                 let offspec = ppc != PROMPTS_PER_CONC;
@@ -201,11 +223,17 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
         written.push(path);
     }
     plan::save_lock(dir, &lock)?;
-    Ok(Compiled { written, removed, notes })
+    Ok(Compiled {
+        written,
+        removed,
+        notes,
+    })
 }
 
 fn generated(path: &Path) -> bool {
-    fs::read_to_string(path).map(|t| t.lines().nth(1).is_some_and(|l| l.contains(MARKER))).unwrap_or(false)
+    fs::read_to_string(path)
+        .map(|t| t.lines().nth(1).is_some_and(|l| l.contains(MARKER)))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -255,7 +283,11 @@ off_spec = { prompts_per_conc = 4 }
         fs::write(work.join(plan::PLAN), plan).unwrap();
         // A stale generated script and a hand-written one.
         fs::create_dir_all(work.join(SCRIPTS)).unwrap();
-        fs::write(work.join("scripts/server_old.sh"), format!("#!/bin/bash\n# {MARKER} x\n")).unwrap();
+        fs::write(
+            work.join("scripts/server_old.sh"),
+            format!("#!/bin/bash\n# {MARKER} x\n"),
+        )
+        .unwrap();
         fs::write(work.join("scripts/mine.sh"), "#!/bin/bash\n# by hand\n").unwrap();
 
         let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, None).unwrap();

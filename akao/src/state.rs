@@ -20,7 +20,11 @@ pub const DEFAULT_DOCKER_SOCK: &str = "/var/run/docker.sock";
 /// Known config keys: (name, default, description). `{year}` expands to the work year.
 pub const KEYS: &[(&str, Option<&str>, &str)] = &[
     ("default_image", None, "docker image tag for hosts without their own"),
-    ("deploy_src", Some("/{year}"), "local directory holding the control plane"),
+    (
+        "deploy_src",
+        Some("/{year}"),
+        "local directory holding the control plane",
+    ),
     (
         "deploy_paths",
         Some("CLAUDE.md AGENTS.md AGCP.md skills utils oaka"),
@@ -108,12 +112,15 @@ impl State {
     }
 
     pub fn host(&self, nick: &str) -> Result<Host> {
-        self.load_hosts()?.into_iter().find(|h| h.nick == nick).with_context(|| {
-            format!(
-                "host '{nick}' is not in {}; add it with `akao host add {nick} --home <dir> --model <dir>`",
-                self.hosts_path().display()
-            )
-        })
+        self.load_hosts()?
+            .into_iter()
+            .find(|h| h.nick == nick)
+            .with_context(|| {
+                format!(
+                    "host '{nick}' is not in {}; add it with `akao host add {nick} --home <dir> --model <dir>`",
+                    self.hosts_path().display()
+                )
+            })
     }
 }
 
@@ -178,10 +185,20 @@ impl Host {
                 bail!("host '{}': docker_sock must be an absolute path: {s}", self.nick);
             }
         }
-        let fields = [Some(&self.nick), self.image.as_ref(), Some(&self.model_path), self.docker_sock.as_ref(), Some(&self.host_home), self.rest.as_ref()];
+        let fields = [
+            Some(&self.nick),
+            self.image.as_ref(),
+            Some(&self.model_path),
+            self.docker_sock.as_ref(),
+            Some(&self.host_home),
+            self.rest.as_ref(),
+        ];
         for f in fields.into_iter().flatten() {
             if f.is_empty() || f == "-" || f.contains(['\t', '\n', '\r']) {
-                bail!("host '{}': field {f:?} is empty, '-', or contains a tab/newline", self.nick);
+                bail!(
+                    "host '{}': field {f:?} is empty, '-', or contains a tab/newline",
+                    self.nick
+                );
             }
         }
         self.rest_args()?;

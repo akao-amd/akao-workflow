@@ -21,7 +21,9 @@ pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("OAKA_GI
 
 /// Shell-quote one token.
 pub fn q(s: &str) -> String {
-    shlex::try_quote(s).map(|c| c.into_owned()).unwrap_or_else(|_| s.to_string())
+    shlex::try_quote(s)
+        .map(|c| c.into_owned())
+        .unwrap_or_else(|_| s.to_string())
 }
 
 /// gfx name from a KFD `gfx_target_version` (major*10000 + minor*100 + stepping).
@@ -29,14 +31,27 @@ fn gfx_name(v: u32) -> String {
     format!("gfx{}{:x}{:x}", v / 10000, (v / 100) % 100, v % 100)
 }
 
-/// GPU architectures in HIP device order, from the KFD topology.
-/// None when the topology is unreadable (not a ROCm machine).
+/// GPU architectures in HIP device order: $OAKA_GPUS (comma-separated archs; empty = no
+/// GPUs) when set, else the KFD topology.  None when neither is available.
 pub fn gpus() -> Option<Vec<String>> {
+    if let Ok(v) = std::env::var("OAKA_GPUS") {
+        return Some(
+            v.split(',')
+                .map(str::trim)
+                .filter(|a| !a.is_empty())
+                .map(String::from)
+                .collect(),
+        );
+    }
     let dir = fs::read_dir("/sys/class/kfd/kfd/topology/nodes").ok()?;
     let mut nodes: Vec<(u32, String)> = Vec::new();
     for entry in dir.flatten() {
-        let Ok(idx) = entry.file_name().to_string_lossy().parse::<u32>() else { continue };
-        let Ok(props) = fs::read_to_string(entry.path().join("properties")) else { continue };
+        let Ok(idx) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        let Ok(props) = fs::read_to_string(entry.path().join("properties")) else {
+            continue;
+        };
         let v = props
             .lines()
             .find_map(|l| l.strip_prefix("gfx_target_version "))

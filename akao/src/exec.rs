@@ -11,7 +11,9 @@ pub const ESCALATE: &str = r#"if [ "$(id -u)" -eq 0 ]; then S=; else S="sudo -n"
 
 /// Shell-quote a single token. Falls back to the raw string if quoting fails.
 pub fn q(s: &str) -> String {
-    shlex::try_quote(s).map(|c| c.into_owned()).unwrap_or_else(|_| s.to_string())
+    shlex::try_quote(s)
+        .map(|c| c.into_owned())
+        .unwrap_or_else(|_| s.to_string())
 }
 
 pub struct Runner {
@@ -87,7 +89,9 @@ impl Runner {
         if self.dry_run {
             return Ok(());
         }
-        let status = command(argv).status().with_context(|| format!("cannot start {}", argv[0]))?;
+        let status = command(argv)
+            .status()
+            .with_context(|| format!("cannot start {}", argv[0]))?;
         if !status.success() {
             bail!("command failed ({status}): {}", show(argv));
         }
@@ -126,7 +130,8 @@ impl Runner {
 
     /// Like probe, but a non-zero exit is an error and stderr is shown.
     pub fn query(&self, argv: &[String]) -> Result<String> {
-        self.capture(argv, Stdio::inherit())?.with_context(|| format!("command failed: {}", show(argv)))
+        self.capture(argv, Stdio::inherit())?
+            .with_context(|| format!("command failed: {}", show(argv)))
     }
 
     fn capture(&self, argv: &[String], stderr: Stdio) -> Result<Option<String>> {
@@ -136,7 +141,10 @@ impl Runner {
             .stderr(stderr)
             .output()
             .with_context(|| format!("cannot start {}", argv[0]))?;
-        Ok(out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned()))
+        Ok(out
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned()))
     }
 }
 
@@ -146,7 +154,10 @@ mod tests {
 
     #[test]
     fn ssh_script_is_one_quoted_arg() {
-        let r = Runner { dry_run: true, ssh: vec!["ssh".into()] };
+        let r = Runner {
+            dry_run: true,
+            ssh: vec!["ssh".into()],
+        };
         let argv = r.ssh_argv("h", "mkdir -p '/a b'");
         assert_eq!(argv[..3], ["ssh", "h", "--"]);
         // What the remote shell sees must split back into exactly sh -c <script>.

@@ -131,7 +131,8 @@ pub struct Checked {
 
 pub fn valid_server_name(s: &str) -> bool {
     let mut c = s.chars();
-    matches!(c.next(), Some(f) if f.is_ascii_alphanumeric()) && c.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+    matches!(c.next(), Some(f) if f.is_ascii_alphanumeric())
+        && c.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
 }
 
 pub fn load(dir: &Path) -> Result<Plan> {
@@ -165,14 +166,25 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: Option<Vec<Str
         }
         if s.profile.is_empty() {
             let names = lib.list()?;
-            bail!("{at}: profile is empty; pick one of: {}", if names.is_empty() { "<none in library>".into() } else { names.join(" ") });
+            bail!(
+                "{at}: profile is empty; pick one of: {}",
+                if names.is_empty() {
+                    "<none in library>".into()
+                } else {
+                    names.join(" ")
+                }
+            );
         }
         let base = lib.resolve(&s.profile).with_context(|| at.clone())?;
         let mut effective = base.clone();
-        effective.overlay(&s.env, &s.args).with_context(|| format!("{at}: env/args overrides"))?;
-        let model = s.model.clone().or_else(|| base.model.clone()).with_context(|| {
-            format!("{at}: profile {} has no model; set `model` in the server", s.profile)
-        })?;
+        effective
+            .overlay(&s.env, &s.args)
+            .with_context(|| format!("{at}: env/args overrides"))?;
+        let model = s
+            .model
+            .clone()
+            .or_else(|| base.model.clone())
+            .with_context(|| format!("{at}: profile {} has no model; set `model` in the server", s.profile))?;
         if !Path::new(&model).exists() {
             warnings.push(format!("{at}: model {model} does not exist on this machine"));
         }
@@ -187,7 +199,11 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: Option<Vec<Str
         }
         let tp = match base.tp {
             Some(tp) if tp as usize != s.gpus.len() => {
-                bail!("{at}: profile {} pins tp = {tp} but gpus lists {}", s.profile, s.gpus.len())
+                bail!(
+                    "{at}: profile {} pins tp = {tp} but gpus lists {}",
+                    s.profile,
+                    s.gpus.len()
+                )
             }
             Some(tp) => tp,
             None => s.gpus.len() as u32,
@@ -203,7 +219,11 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: Option<Vec<Str
                 for g in &s.gpus {
                     let a = &gpus[*g as usize];
                     if !base.arch.contains(a) {
-                        bail!("{at}: GPU {g} is {a}, but profile {} is for {}", s.profile, base.arch.join(" "));
+                        bail!(
+                            "{at}: GPU {g} is {a}, but profile {} is for {}",
+                            s.profile,
+                            base.arch.join(" ")
+                        );
                     }
                 }
             }
@@ -221,7 +241,15 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: Option<Vec<Str
                 bail!("{at}: port {p} is already used by another server");
             }
         }
-        servers.push(Server { name: s.name.clone(), base, effective, model, gpus: s.gpus.clone(), tp, port: s.port });
+        servers.push(Server {
+            name: s.name.clone(),
+            base,
+            effective,
+            model,
+            gpus: s.gpus.clone(),
+            tp,
+            port: s.port,
+        });
     }
     for (i, c) in plan.clients.iter().enumerate() {
         let at = format!("client #{} ({})", i + 1, c.kind());
@@ -234,7 +262,14 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: Option<Vec<Str
                     bail!("{at}: min_score must be within 0..1");
                 }
             }
-            ClientSpec::FixedSeq { isl_osl, conc, range_ratio, repeats, off_spec, .. } => {
+            ClientSpec::FixedSeq {
+                isl_osl,
+                conc,
+                range_ratio,
+                repeats,
+                off_spec,
+                ..
+            } => {
                 if isl_osl.is_empty() || isl_osl.iter().flatten().any(|n| *n == 0) {
                     bail!("{at}: isl_osl must list positive [isl, osl] pairs");
                 }
@@ -247,13 +282,21 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: Option<Vec<Str
                 if *repeats == 0 {
                     bail!("{at}: repeats must be at least 1");
                 }
-                if let Some(OffSpec { prompts_per_conc: Some(0) }) = off_spec {
+                if let Some(OffSpec {
+                    prompts_per_conc: Some(0),
+                }) = off_spec
+                {
                     bail!("{at}: off_spec.prompts_per_conc must be positive");
                 }
             }
         }
     }
-    Ok(Checked { dir: dir.to_path_buf(), plan, servers, warnings })
+    Ok(Checked {
+        dir: dir.to_path_buf(),
+        plan,
+        servers,
+        warnings,
+    })
 }
 
 /// Values compile chose automatically; kept so a recompile does not move them.
@@ -288,7 +331,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("oaka-plan-{}-{}", std::process::id(), fastrand::u32(..)));
         let lib = Library { root: dir.clone() };
         fs::create_dir_all(lib.profiles_dir().join("m")).unwrap();
-        fs::write(lib.profile_path("m/base"), "model = '/model/m'\narch = ['gfx950']\n[args]\npage-size = 1\n").unwrap();
+        fs::write(
+            lib.profile_path("m/base"),
+            "model = '/model/m'\narch = ['gfx950']\n[args]\npage-size = 1\n",
+        )
+        .unwrap();
         fs::write(lib.profile_path("m/tp2"), "extends = 'm/base'\ntp = 2\n").unwrap();
         (lib, dir)
     }
@@ -328,7 +375,9 @@ server = "a"
         assert_eq!(s.base.launch_args(), vec![vec!["--page-size", "1"]]);
         assert_eq!(s.served_name(), "/model/m");
         match &c.plan.clients[0] {
-            ClientSpec::FixedSeq { range_ratio, repeats, .. } => assert_eq!((*range_ratio, *repeats), (0.8, 1)),
+            ClientSpec::FixedSeq {
+                range_ratio, repeats, ..
+            } => assert_eq!((*range_ratio, *repeats), (0.8, 1)),
             _ => panic!(),
         }
         fs::remove_dir_all(dir).unwrap();
@@ -347,9 +396,21 @@ server = "a"
         bad(&OK.replace("m/base", "m/tp2"), None, "pins tp = 2");
         bad(&OK.replace("page-size = 64", "port = 1"), None, "set by oaka");
         bad(&OK.replace("server = \"a\"", "server = \"b\""), None, "not in the plan");
-        bad(&OK.replace("conc = [4, 8]", "conc = [4, 8]\nwarmups = 3"), None, "unknown field");
-        bad(&OK.replace("conc = [4, 8]", "conc = []"), None, "positive concurrencies");
-        bad(&format!("{OK}\n[[server]]\nname = 'b'\nprofile = 'm/base'\ngpus = [3]\n"), None, "already used by server a");
+        bad(
+            &OK.replace("conc = [4, 8]", "conc = [4, 8]\nwarmups = 3"),
+            None,
+            "unknown field",
+        );
+        bad(
+            &OK.replace("conc = [4, 8]", "conc = []"),
+            None,
+            "positive concurrencies",
+        );
+        bad(
+            &format!("{OK}\n[[server]]\nname = 'b'\nprofile = 'm/base'\ngpus = [3]\n"),
+            None,
+            "already used by server a",
+        );
         bad(&OK.replace("m/base", ""), None, "pick one of: m/base m/tp2");
         fs::remove_dir_all(dir).unwrap();
     }

@@ -22,7 +22,10 @@ pub const CLIENT_KINDS: &[&str] = &["gsm8k", "fixed-seq"];
 
 fn server_name(profile: &str, taken: &[String]) -> String {
     let recipe = profile.rsplit('/').next().unwrap_or("main");
-    let mut base: String = recipe.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+    let mut base: String = recipe
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+        .collect();
     if !valid_server_name(&base) {
         base = format!("s{base}");
     }
@@ -79,7 +82,12 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
     out += "# oaka plan.  Edit, then: oaka check / oaka compile / oaka run\n";
     match &gpus {
         Some(g) if !g.is_empty() => {
-            out += &format!("# this machine: {} GPUs (0-{}), {}\n", g.len(), g.len() - 1, arch.as_deref().unwrap_or("mixed archs"))
+            out += &format!(
+                "# this machine: {} GPUs (0-{}), {}\n",
+                g.len(),
+                g.len() - 1,
+                arch.as_deref().unwrap_or("mixed archs")
+            )
         }
         _ => out += "# this machine: no ROCm GPUs found\n",
     }
@@ -87,21 +95,33 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
     out += &format!(
         "# profiles{}: {}\n",
         arch.as_ref().map(|a| format!(" for {a}")).unwrap_or_default(),
-        if fitting.is_empty() { "<none>".to_string() } else { fitting.join(" ") }
+        if fitting.is_empty() {
+            "<none>".to_string()
+        } else {
+            fitting.join(" ")
+        }
     );
     let models = sys::models();
     if !models.is_empty() {
         out += &format!("# models under /model: {}\n", models.join(" "));
     }
 
-    let profiles = if opts.profiles.is_empty() { vec![String::new()] } else { opts.profiles.clone() };
+    let profiles = if opts.profiles.is_empty() {
+        vec![String::new()]
+    } else {
+        opts.profiles.clone()
+    };
     let mut names: Vec<String> = Vec::new();
     let mut free = opts.gpus.clone();
     for profile in &profiles {
         if !profile.is_empty() {
             lib.resolve(profile)?;
         }
-        let name = if profile.is_empty() { "main".to_string() } else { server_name(profile, &names) };
+        let name = if profile.is_empty() {
+            "main".to_string()
+        } else {
+            server_name(profile, &names)
+        };
         // GPUs: one server takes all it was given; several take tp (pinned) or 1 each, in order.
         let want = if profiles.len() == 1 {
             free.len()
@@ -110,14 +130,29 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
         } else {
             lib.resolve(profile)?.tp.unwrap_or(1) as usize
         };
-        let mine: Vec<u32> = if free.len() >= want { free.drain(..want).collect() } else { Vec::new() };
+        let mine: Vec<u32> = if free.len() >= want {
+            free.drain(..want).collect()
+        } else {
+            Vec::new()
+        };
         out += "\n[[server]]\n";
         out += &format!("name = \"{name}\"\n");
-        out += &format!("profile = \"{profile}\"{}\n", if profile.is_empty() { "             # REQUIRED: one of the profiles above" } else { "" });
+        out += &format!(
+            "profile = \"{profile}\"{}\n",
+            if profile.is_empty() {
+                "             # REQUIRED: one of the profiles above"
+            } else {
+                ""
+            }
+        );
         out += &format!(
             "gpus = {}{}\n",
             toml_list(&mine),
-            if mine.is_empty() { "                   # REQUIRED: GPU indices; --tp = their count" } else { "" }
+            if mine.is_empty() {
+                "                   # REQUIRED: GPU indices; --tp = their count"
+            } else {
+                ""
+            }
         );
         out += "# port = 29911            # default: a free port in 29900-30050, kept in plan.lock.toml\n";
         out += "# model = \"/model/...\"    # default: the profile's model\n";
@@ -169,7 +204,16 @@ mod tests {
         fs::write(lib.profile_path("m/triton"), "model = '/model/m'\n").unwrap();
         fs::write(lib.profile_path("m/tp2"), "model = '/model/m'\ntp = 2\n").unwrap();
 
-        let bare = render(&lib, &Options { profiles: vec![], gpus: vec![], clients: vec![], force: false }).unwrap();
+        let bare = render(
+            &lib,
+            &Options {
+                profiles: vec![],
+                gpus: vec![],
+                clients: vec![],
+                force: false,
+            },
+        )
+        .unwrap();
         let p: plan::Plan = toml::from_str(&bare).unwrap();
         assert!(p.clients.is_empty());
         let e = plan::check_plan(&root, p, &lib, None).err().unwrap();

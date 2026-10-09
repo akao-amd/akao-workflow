@@ -93,12 +93,26 @@ fn run(cli: Cli) -> Result<()> {
         Some(d) => d,
         None => std::env::current_dir()?,
     };
-    let dir = dir.canonicalize().with_context(|| format!("work directory {}", dir.display()))?;
+    let dir = dir
+        .canonicalize()
+        .with_context(|| format!("work directory {}", dir.display()))?;
     let lib = Library::locate();
     match cli.cmd {
-        Cmd::Draft { profiles, gpus, clients, force } => {
-            draft::run(&dir, &lib, &draft::Options { profiles, gpus, clients, force })
-        }
+        Cmd::Draft {
+            profiles,
+            gpus,
+            clients,
+            force,
+        } => draft::run(
+            &dir,
+            &lib,
+            &draft::Options {
+                profiles,
+                gpus,
+                clients,
+                force,
+            },
+        ),
         Cmd::Check => {
             let c = plan::check(&dir, &lib)?;
             describe(&c);
@@ -124,7 +138,10 @@ fn run(cli: Cli) -> Result<()> {
 
 fn describe(c: &plan::Checked) {
     for s in &c.servers {
-        println!("server {}: profile {}, model {}, gpus {:?}, tp {}", s.name, s.base.name, s.model, s.gpus, s.tp);
+        println!(
+            "server {}: profile {}, model {}, gpus {:?}, tp {}",
+            s.name, s.base.name, s.model, s.gpus, s.tp
+        );
         for o in compile::overrides(s) {
             println!("  override {o}");
         }
@@ -157,10 +174,18 @@ fn profile_cmd(dir: &Path, lib: &Library, cmd: ProfileCmd) -> Result<()> {
     match cmd {
         ProfileCmd::Ls => {
             let arch = sys::arch();
-            println!("# {}  (this machine: {})", lib.profiles_dir().display(), arch.as_deref().unwrap_or("no single GPU arch"));
+            println!(
+                "# {}  (this machine: {})",
+                lib.profiles_dir().display(),
+                arch.as_deref().unwrap_or("no single GPU arch")
+            );
             for name in lib.list()? {
                 let p = lib.resolve(&name)?;
-                let archs = if p.arch.is_empty() { "any".to_string() } else { p.arch.join(",") };
+                let archs = if p.arch.is_empty() {
+                    "any".to_string()
+                } else {
+                    p.arch.join(",")
+                };
                 let fits = arch.as_ref().is_none_or(|a| p.arch.is_empty() || p.arch.contains(a));
                 println!(
                     "{}{name:<48} {archs:<16} {}",
@@ -170,9 +195,19 @@ fn profile_cmd(dir: &Path, lib: &Library, cmd: ProfileCmd) -> Result<()> {
             }
         }
         ProfileCmd::Show { name } => show(lib, &name)?,
-        ProfileCmd::Save { server, name, arch, description, force } => {
+        ProfileCmd::Save {
+            server,
+            name,
+            arch,
+            description,
+            force,
+        } => {
             let c = plan::check(dir, lib)?;
-            let s = c.servers.iter().find(|s| s.name == server).with_context(|| format!("no server {server:?} in the plan"))?;
+            let s = c
+                .servers
+                .iter()
+                .find(|s| s.name == server)
+                .with_context(|| format!("no server {server:?} in the plan"))?;
             let mut file = delta(&s.base, &s.effective);
             if s.base.model.as_deref() != Some(s.model.as_str()) {
                 file.model = Some(s.model.clone());
@@ -186,7 +221,8 @@ fn profile_cmd(dir: &Path, lib: &Library, cmd: ProfileCmd) -> Result<()> {
                 }
             }
             file.arch = if arch.is_empty() { s.base.arch.clone() } else { arch };
-            file.description = Some(description.unwrap_or_else(|| format!("{} with the overrides of server {server}", s.base.name)));
+            file.description =
+                Some(description.unwrap_or_else(|| format!("{} with the overrides of server {server}", s.base.name)));
             file.extends = Some(s.base.name.clone());
             file.origin = Some(dir.display().to_string());
             let path = lib.save(&name, &file, force)?;
@@ -217,13 +253,23 @@ fn show(lib: &Library, name: &str) -> Result<()> {
     if chain.len() > 1 {
         println!("# chain: {}", chain.join(" <- "));
     }
-    println!("# arch: {}", if p.arch.is_empty() { "any".into() } else { p.arch.join(" ") });
+    println!(
+        "# arch: {}",
+        if p.arch.is_empty() {
+            "any".into()
+        } else {
+            p.arch.join(" ")
+        }
+    );
     for (k, v) in &p.env {
         println!("{k}={}", sys::q(v));
     }
     println!("python3 -m sglang.launch_server \\");
     println!("    --model-path {} \\", p.model.as_deref().unwrap_or("<plan model>"));
-    println!("    --tp {} \\", p.tp.map(|t| t.to_string()).unwrap_or_else(|| "<number of gpus>".into()));
+    println!(
+        "    --tp {} \\",
+        p.tp.map(|t| t.to_string()).unwrap_or_else(|| "<number of gpus>".into())
+    );
     println!("    --port <plan port> \\");
     let lines = p.launch_args();
     for (i, w) in lines.iter().enumerate() {
@@ -234,7 +280,11 @@ fn show(lib: &Library, name: &str) -> Result<()> {
 }
 
 fn arg_value(v: &Arg) -> Value {
-    let scalar = |s: &str| s.parse::<i64>().map(Value::Integer).unwrap_or_else(|_| Value::String(s.to_string()));
+    let scalar = |s: &str| {
+        s.parse::<i64>()
+            .map(Value::Integer)
+            .unwrap_or_else(|_| Value::String(s.to_string()))
+    };
     match v {
         Arg::Flag => Value::Boolean(true),
         Arg::Value(s) => scalar(s),
@@ -283,7 +333,12 @@ fn diff(a: &Profile, b: &Profile) -> Vec<String> {
     field("model", a.model.clone(), b.model.clone());
     field("tp", a.tp.map(|t| t.to_string()), b.tp.map(|t| t.to_string()));
     field("arch", Some(a.arch.join(" ")), Some(b.arch.join(" ")));
-    let env = |p: &Profile, k: &str| p.env.iter().find(|(n, _)| n == k).map(|(_, v)| format!("{k}={}", sys::q(v)));
+    let env = |p: &Profile, k: &str| {
+        p.env
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| format!("{k}={}", sys::q(v)))
+    };
     let mut seen = Vec::new();
     for (k, _) in a.env.iter().chain(&b.env) {
         if !seen.contains(&k) {

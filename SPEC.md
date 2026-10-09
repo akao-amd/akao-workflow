@@ -46,39 +46,63 @@ The following subsections define subcommands that akao supports.  Ideally it fol
   - In the container
     - Install necessary packages for my workflow. The containers are mostly Ubuntu-based, so `apt update && apt install vim less tmux docker.io` mostly does the trick.  Some more complicated stuff to be installed are `gh` (by `/2026/utils/install_gh.sh`) and Claude/Codex agents (by `/2026/utils/agent.sh`).
     - Get tmux running.  Name the first window as `controller`, and launch Claude.
+    - Check out InferenceX into `/<work year>/nocopy/InferenceX` (once, never pulled) and put
+      `oaka` on PATH; both are what `oaka` needs inside the worker.
 
 ## Worker-side plan generator and script compiler: `oaka`
 
 `oaka` runs inside a worker container and is driven by the worker agent or by hand.  It
 distills the deterministic part of `/2026/skills/sglang-dev` into a **hybrid tool**: the
 agent (or a human) writes a *plan*; `oaka` compiles the plan into stand-alone scripts that
-anyone can read, edit and rerun without `oaka`.  The point is to stop re-deriving the same
+anyone can read and rerun without `oaka`.  The point is to stop re-deriving the same
 launch/benchmark scripts per task, and to stop an agent from silently bending criteria
 that must not move (e.g. the InferenceX client policy).
+
+**Status (ww41):** milestone 1 (servers + clients: `draft`, `check`, `compile`, `run`,
+`profile`) is implemented and verified on gfx950 with real sglang + InferenceX.
+Milestone 2 (source/dependency stack, then bisect and A-B-A) is designed below, not built.
 
 ### Layers
 
 | Layer | Lives in | Holds | Edited by |
 |---|---|---|---|
-| templates | the `oaka` binary | the *shape* of every script: launch + provenance, wait/crash detection, client policy | oaka development only |
-| library | `/<year>/oaka/` (`$OAKA_LIB` overrides) | `profiles/`, `stacks.toml`, `bin/oaka` | humans; `oaka profile save` |
+| templates | the `oaka` binary | the *shape* of every script: launch + provenance, wait/crash detection, client policy, teardown | oaka development only |
+| library | `/<year>/oaka/` (`$OAKA_LIB` overrides) | `profiles/`, `bin/oaka`, `README.md`; later `stacks.toml` | humans; `oaka profile save` |
 | plan | `plan.toml` in the Work Directory | this task: servers, GPUs, overrides, clients | `oaka draft`, then the agent/human |
-| scripts | `scripts/` in the Work Directory | compiled bash; never calls `oaka` | nobody (output) |
+| lock | `plan.lock.toml` next to it | values `compile` chose (ports) | `compile`; delete to re-choose |
+| scripts | `scripts/` in the Work Directory | compiled bash; never calls `oaka` | nobody: edit the plan and recompile, or copy a script to experiment by hand |
 
-`oaka run` = `oaka compile` + execute the compiled scripts.  It never interprets the plan on
+`oaka run` = `oaka compile` + exec `scripts/run_all.sh`.  It never interprets the plan on
 its own, so "what oaka ran" and "what a human reruns" cannot diverge.
+
+The binary reaches workers through the library: a post-commit hook in this repo installs a
+static build as `/<year>/oaka/bin/oaka`, `akao init` deploys `/<year>/oaka` with the control
+plane and links the binary to `/usr/local/bin/oaka`.
 
 ### Subcommands
 
+All take `-C <dir>` for the Work Directory (default: current directory).
+
 - `oaka draft [--profile P]... [--gpus 6,7] [--client gsm8k|fixed-seq]... [--force]` — write
-  `plan.toml` in the current directory, pre-filled from the hints and from what it detects
-  (GPU arch, profiles matching it, models under `/model`).  Unknown parts are left as
-  commented choices.
-- `oaka check` — validate the plan against the library and the machine.
-- `oaka compile` — resolve automatic values into `plan.lock.toml`, then write `scripts/`.
-- `oaka run` — compile, then run `scripts/run_all.sh`.
+  `plan.toml`, pre-filled from the hints and from what it detects (GPU arch, profiles
+  matching it, models under `/model`).  One server gets all `--gpus`; several take their
+  pinned `tp` (or 1) each, in order.  Each `--client` is added for every server.  Unknown
+  parts are left empty or commented, and `check` names them.
+- `oaka check` — validate the plan against the library and the machine: profile exists and
+  fits the GPU arch, GPUs exist and are not shared between servers, `tp` matches, reserved
+  flags absent, clients reference servers, numbers in range.  Every error names the field.
+- `oaka compile` — choose missing values into `plan.lock.toml`, then write `scripts/`
+  (`server_<name>.sh`, `client_<NN>_<kind>_<server>.sh`, `run_all.sh`), removing scripts
+  an earlier compile wrote that the plan no longer has.
+- `oaka run` — compile, then `run_all.sh`: start all servers, wait until each prints sglang's
+  ready line (a crash marker, exit, or 30 min timeout fails the run), run clients in plan
+  order, stop the servers — also on failure and Ctrl-C.  Output is kept in `logs/`.
 - `oaka profile ls|show|save|diff` — browse the library; `save` consolidates an experiment.
-- (later) `oaka stack ...`, `oaka clean` — source/dependency stack, see below.
+- (milestone 2) `oaka stack ...`, `oaka clean`.
+
+Environment: `OAKA_LIB` (library root), `OAKA_INFX` (InferenceX tree, default
+`/<year>/nocopy/InferenceX/inferencex-e2e`), `OAKA_GPUS` (comma-separated archs, overrides
+GPU detection, e.g. where the KFD topology is not visible).
 
 ### Server profiles
 
@@ -88,13 +112,13 @@ is the model directory name under `/model`.  Fields:
 ```toml
 description = "W4A8, triton prefill + decode attention"
 arch = ["gfx950"]          # multiple choice: gfx942 gfx950 gfx1250; absent = any
-extends = "gpt-oss-120b-w-mxfp4-a-fp8/base"   # optional; env/args overlay the parent
+extends = "gpt-oss-120b-w-mxfp4-a-fp8/triton"   # optional; env/args overlay the parent
 model = "/model/gpt-oss-120b-w-mxfp4-a-fp8"
 tp = 1                     # optional pin; otherwise --tp = number of GPUs in the plan
 origin = "/2026/ww41/..."  # provenance, written by `oaka profile save`
 
 [env]
-SGLANG_USE_AITER = "1"
+SGLANG_USE_AITER = "1"     # NAME = false unsets an inherited one
 
 [args]                     # sglang.launch_server flags without the leading --
 trust-remote-code = true   # true = bare flag; false = drop an inherited flag
@@ -102,11 +126,15 @@ page-size = 1              # scalar = --flag value; array = --flag v1 v2
 ```
 
 `--model-path`, `--tp`, `--port` and `HIP_VISIBLE_DEVICES` are owned by `oaka` and rejected
-in profiles and plans.
+in profiles and plans.  `arch`, `description` and `origin` are not inherited.
 
 **Consolidating an experiment:** after tweaking a server's `env`/`args` in a plan,
 `oaka profile save <server> --as <model>/<recipe>` writes the delta as a new profile that
-`extends` the one the plan started from, with `origin` set to the Work Directory.
+`extends` the one the plan started from, with `origin` set to the Work Directory and
+`arch` copied from it unless `--arch` is given.
+
+Seeded from earlier work: `DeepSeek-V4-Flash/base`, `gpt-oss-120b/base`,
+`gpt-oss-120b-w-mxfp4-a-fp8/{triton,aiter,aiter-ck}`, `gpt-oss-20b-bf16/base`.
 
 ### Plan
 
@@ -115,29 +143,41 @@ in profiles and plans.
 name = "quant"
 profile = "gpt-oss-120b-w-mxfp4-a-fp8/triton"
 gpus = [7]                 # required: which GPUs this server may use
-# port = 29911             # default: random free port in 29900-30050 (not 30000)
+# port = 29911             # default: random free port in 29900-30050 (not 30000), locked
+# model = "/model/..."     # default: the profile's model
 [server.env]
 SGLANG_USE_AITER_MOE_GU_ITLV = "0"
 [server.args]
 page-size = 64
 
 [[client]]
-kind = "gsm8k"             # accuracy gate: the run stops when the score < min_score
+kind = "gsm8k"             # accuracy gate: the run stops when score < min_score
 server = "quant"
+thinking = false
+min_score = 0.90
 
 [[client]]
 kind = "fixed-seq"         # InferenceX fixed-sequence-length throughput
 server = "quant"
 isl_osl = [[1024, 1024], [8192, 1024]]
 conc = [4, 8, 16, 32, 64]
+range_ratio = 0.8
+repeats = 1
+# off_spec = { prompts_per_conc = 4 }
 ```
 
-**Client policy is not editable from the plan.**  `fixed-seq` calls InferenceX's own
-`python3 -m infx.bench fixed-seq point` from `/<year>/nocopy/InferenceX` (checked out by
-`akao init`), so warmups, `--ignore-eos`, request rate and percentiles are InferenceX's.
-The plan only exposes what is meant to vary: `isl_osl`, `conc`, `range_ratio` (default
-0.8), `repeats`.  The prompt count (10 x conc) can only be changed through an explicit
-`off_spec` table, and such results are marked `OFFSPEC` in their file names and summary.
+**Client policy is not editable from the plan.**
+- `fixed-seq` calls InferenceX's own `python3 -m infx.bench fixed-seq point` (backend
+  `vllm`, InferenceX's choice for sglang; tokenizer = model path; model = the served name),
+  so warmups, `--ignore-eos`, request rate and percentiles are InferenceX's.  The plan
+  exposes only `isl_osl`, `conc`, `range_ratio` (default 0.8, as in InferenceX's recipes)
+  and `repeats`.  The prompt count (10 x conc) changes only through `off_spec`, and such
+  results carry `OFFSPEC` in their names and summary.
+- `gsm8k` runs `sgl-eval run gsm8k` with fixed sampling (temperature 1.0, top-p 1.0, seed 42,
+  8192 max tokens, 64 threads); the plan chooses only `thinking` and `min_score`.
+
+Results land in `results/<NN>_<kind>_<server>/`; `fixed-seq` also writes `summary.csv` for
+the points of that run.  Rerunning a plan overwrites same-named points.
 
 ### Source/dependency stack (milestone 2)
 
@@ -146,6 +186,11 @@ triton): its repo, its install recipe, and what to clean before/after an install
 explicit paths (JIT caches, eggs, `easy-install.pth` lines) and glob patterns scoped to the
 tree as a fallback (e.g. `**/__pycache__`).  The plan's `[stack]` names the tree/commit per
 package and when to clean (`never` for A-B-A, `before-install` for bisect).  The installed
-version is verified with `pip show`; `PYTHONPATH` forces a tree when that is not enough.
-Bisect and A-B-A become plans whose stack varies over commits.
+version is verified with `pip show` (already printed by every server script);
+`PYTHONPATH` forces a tree when that is not enough.  Bisect and A-B-A become plans whose
+stack varies over commits.
 
+### Testing
+
+See `TEST.md`: hermetic `cargo test` (stand-ins for sglang, InferenceX and sgl-eval), a
+real GPU smoke run with gpt-oss-20b, and the `akao init` docker harness.

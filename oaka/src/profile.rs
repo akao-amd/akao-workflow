@@ -189,7 +189,10 @@ impl Library {
             return Ok(Vec::new());
         }
         let mut names = Vec::new();
-        for model in fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))?.flatten() {
+        for model in fs::read_dir(&dir)
+            .with_context(|| format!("reading {}", dir.display()))?
+            .flatten()
+        {
             if !model.path().is_dir() {
                 continue;
             }
@@ -224,7 +227,9 @@ impl Library {
             if chain.iter().any(|(c, _)| *c == n) {
                 bail!("profile {name}: extends cycle through {n}");
             }
-            let f = self.load_file(&n).with_context(|| format!("resolving profile {name}"))?;
+            let f = self
+                .load_file(&n)
+                .with_context(|| format!("resolving profile {name}"))?;
             next = f.extends.clone();
             chain.push((n, f));
         }
@@ -252,7 +257,10 @@ impl Library {
         }
         let path = self.profile_path(name);
         if path.exists() && !force {
-            bail!("profile {name} already exists ({}); use --force to replace it", path.display());
+            bail!(
+                "profile {name} already exists ({}); use --force to replace it",
+                path.display()
+            );
         }
         fs::create_dir_all(path.parent().unwrap())?;
         let text = toml::to_string(file)?;
@@ -266,7 +274,11 @@ pub fn read_profile(path: &Path) -> Result<ProfileFile> {
     let f: ProfileFile = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     for a in &f.arch {
         if !crate::sys::ARCHES.contains(&a.as_str()) {
-            bail!("{}: arch {a:?} is not one of {}", path.display(), crate::sys::ARCHES.join(" "));
+            bail!(
+                "{}: arch {a:?} is not one of {}",
+                path.display(),
+                crate::sys::ARCHES.join(" ")
+            );
         }
     }
     Ok(f)
@@ -283,12 +295,28 @@ mod tests {
     #[test]
     fn args_overlay_and_render() {
         let mut args = Vec::new();
-        overlay_args(&mut args, &table("trust-remote-code = true\npage-size = 1\nmem-fraction-static = 0.9\ncuda-graph-bs = [1, 2]")).unwrap();
+        overlay_args(
+            &mut args,
+            &table("trust-remote-code = true\npage-size = 1\nmem-fraction-static = 0.9\ncuda-graph-bs = [1, 2]"),
+        )
+        .unwrap();
         overlay_args(&mut args, &table("page-size = 64\ntrust-remote-code = false")).unwrap();
-        let p = Profile { name: "m/r".into(), description: None, arch: vec![], model: None, tp: None, env: vec![], args };
+        let p = Profile {
+            name: "m/r".into(),
+            description: None,
+            arch: vec![],
+            model: None,
+            tp: None,
+            env: vec![],
+            args,
+        };
         assert_eq!(
             p.launch_args(),
-            vec![vec!["--page-size", "64"], vec!["--mem-fraction-static", "0.9"], vec!["--cuda-graph-bs", "1", "2"]]
+            vec![
+                vec!["--page-size", "64"],
+                vec!["--mem-fraction-static", "0.9"],
+                vec!["--cuda-graph-bs", "1", "2"]
+            ]
         );
     }
 
@@ -320,8 +348,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("oaka-test-{}", std::process::id()));
         let lib = Library { root: dir.clone() };
         fs::create_dir_all(lib.profiles_dir().join("m")).unwrap();
-        fs::write(lib.profile_path("m/base"), "model = '/model/m'\ntp = 2\n[env]\nX = '1'\n[args]\npage-size = 1\nfoo = true\n").unwrap();
-        fs::write(lib.profile_path("m/var"), "extends = 'm/base'\narch = ['gfx950']\n[env]\nY = '2'\n[args]\npage-size = 64\nfoo = false\n").unwrap();
+        fs::write(
+            lib.profile_path("m/base"),
+            "model = '/model/m'\ntp = 2\n[env]\nX = '1'\n[args]\npage-size = 1\nfoo = true\n",
+        )
+        .unwrap();
+        fs::write(
+            lib.profile_path("m/var"),
+            "extends = 'm/base'\narch = ['gfx950']\n[env]\nY = '2'\n[args]\npage-size = 64\nfoo = false\n",
+        )
+        .unwrap();
         let p = lib.resolve("m/var").unwrap();
         assert_eq!(p.model.as_deref(), Some("/model/m"));
         assert_eq!(p.tp, Some(2));

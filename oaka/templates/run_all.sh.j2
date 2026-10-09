@@ -62,7 +62,7 @@ wait_ready() {
             say "server $1 not ready after ${READY_TIMEOUT_S}s"
             return 1
         fi
-        sleep 10
+        sleep 2
     done
 }
 

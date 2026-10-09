@@ -114,9 +114,24 @@ fn run(cli: Cli) -> Result<()> {
             let runner = exec::Runner::new(dry_run)?;
             cp::run(&state, &runner, &src, &dst)
         }
-        Cmd::Init { nick, name, week, skip_setup, dry_run } => {
+        Cmd::Init {
+            nick,
+            name,
+            week,
+            skip_setup,
+            dry_run,
+        } => {
             let runner = exec::Runner::new(dry_run)?;
-            init::run(&state, &runner, &init::Options { nick, name, week, skip_setup })
+            init::run(
+                &state,
+                &runner,
+                &init::Options {
+                    nick,
+                    name,
+                    week,
+                    skip_setup,
+                },
+            )
         }
         Cmd::Host(cmd) => host_cmd(&state, cmd),
         Cmd::Config(cmd) => config_cmd(&mut state, cmd),
@@ -129,8 +144,23 @@ fn host_cmd(state: &State, cmd: HostCmd) -> Result<()> {
         HostCmd::Ls => {
             print!("{}", state::format_hosts(&hosts));
         }
-        HostCmd::Add { nick, home, model, image, sock, rest, force } => {
-            let host = Host { nick, image, model_path: model, docker_sock: sock, host_home: home, rest };
+        HostCmd::Add {
+            nick,
+            home,
+            model,
+            image,
+            sock,
+            rest,
+            force,
+        } => {
+            let host = Host {
+                nick,
+                image,
+                model_path: model,
+                docker_sock: sock,
+                host_home: home,
+                rest,
+            };
             host.validate()?;
             match hosts.iter().position(|h| h.nick == host.nick) {
                 Some(_) if !force => bail!("host '{}' already exists; use --force to replace it", host.nick),
@@ -155,7 +185,11 @@ fn config_cmd(state: &mut State, cmd: ConfigCmd) -> Result<()> {
     match cmd {
         ConfigCmd::Ls => {
             println!("# AKAO_CONFIG_ROOT={}", state.root.display());
-            println!("# work year {} / week {} (ISO, from today)", state::work_year(), state::work_week());
+            println!(
+                "# work year {} / week {} (ISO, from today)",
+                state::work_year(),
+                state::work_week()
+            );
             for (key, _, desc) in state::KEYS {
                 let v = state.get(key)?;
                 let origin = if state.is_explicit(key) { "" } else { "  (default)" };

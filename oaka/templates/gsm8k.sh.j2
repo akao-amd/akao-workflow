@@ -46,10 +46,11 @@ METRICS="$(ls -t "$OUT"/*/metrics.json 2>/dev/null | head -1)"
 [ -n "$METRICS" ] || { say "FAILED: no metrics.json under $OUT"; exit 1; }
 python3 - "$METRICS" {{ min_score }} <<'PY'
 import json, sys
-path, floor = sys.argv[1], float(sys.argv[2])
+path, shown = sys.argv[1], sys.argv[2]
+floor = float(shown)
 agg = json.load(open(path))["aggregate"]
 score = agg.get("score", agg.get("pass@1"))
 verdict = "PASS" if score is not None and score >= floor else "FAIL"
-print(f"[gsm8k] score {score} (min {floor}) {verdict}  {path}")
+print(f"[gsm8k] score {score} (min {shown}) {verdict}  {path}")
 sys.exit(0 if verdict == "PASS" else 3)
 PY

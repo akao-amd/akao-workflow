@@ -10,11 +10,30 @@ use std::path::Path;
 
 /// The fixed part of every `docker run`; per-host mounts and rest args follow it.
 const DOCKER_RUN_SKELETON: &[&str] = &[
-    "run", "--rm", "-d", "--privileged", "--ulimit", "nofile=1048576", "--network=host",
-    "--device=/dev/kfd", "--device=/dev/dri", "--group-add", "video",
-    "--cap-add=SYS_PTRACE", "--security-opt", "seccomp=unconfined",
-    "-e", "PYTHONPATH=", "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8", "-e", "TERM=tmux-256color",
-    "--ipc=host", "--shm-size=32g",
+    "run",
+    "--rm",
+    "-d",
+    "--privileged",
+    "--ulimit",
+    "nofile=1048576",
+    "--network=host",
+    "--device=/dev/kfd",
+    "--device=/dev/dri",
+    "--group-add",
+    "video",
+    "--cap-add=SYS_PTRACE",
+    "--security-opt",
+    "seccomp=unconfined",
+    "-e",
+    "PYTHONPATH=",
+    "-e",
+    "LANG=C.UTF-8",
+    "-e",
+    "LC_ALL=C.UTF-8",
+    "-e",
+    "TERM=tmux-256color",
+    "--ipc=host",
+    "--shm-size=32g",
 ];
 
 const APT_PACKAGES: &[&str] = &["vim", "less", "tmux", "docker.io", "git"];
@@ -152,7 +171,11 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
     println!("  {nick} -> {hostname}");
 
     s.next("prepare host directories");
-    let script = format!("{ESCALATE}$S mkdir -p {} {}/container_home", q(&format!("{}{}", p.host.host_home, p.workdir)), q(&p.host.host_home));
+    let script = format!(
+        "{ESCALATE}$S mkdir -p {} {}/container_home",
+        q(&format!("{}{}", p.host.host_home, p.workdir)),
+        q(&p.host.host_home)
+    );
     r.run(&r.ssh_argv(nick, &script))?;
 
     s.next("deploy control plane");
@@ -160,14 +183,21 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
         println!("  skipped (--skip-setup)");
     } else {
         let src = state.require("deploy_src")?;
-        let paths: Vec<String> = state.require("deploy_paths")?.split_whitespace().map(String::from).collect();
+        let paths: Vec<String> = state
+            .require("deploy_paths")?
+            .split_whitespace()
+            .map(String::from)
+            .collect();
         for path in &paths {
             if !Path::new(&src).join(path).exists() {
                 bail!("deploy path missing locally: {src}/{path}");
             }
         }
         let extract = format!("{ESCALATE}$S tar -xzf - -C {}", q(&p.host_year_dir()));
-        r.pipe(&tar_create(Path::new(&src), &paths, DEPLOY_EXCLUDES), &r.ssh_argv(nick, &extract))?;
+        r.pipe(
+            &tar_create(Path::new(&src), &paths, DEPLOY_EXCLUDES),
+            &r.ssh_argv(nick, &extract),
+        )?;
     }
 
     s.next("container home");
@@ -189,11 +219,19 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
     // Check reachability here, or a failure surfaces later as a silently failed
     // probe (e.g. "container does not exist").
     let endpoint = format!("ssh://{nick}");
-    let version = r.query(&["docker", "-H", &endpoint, "version", "--format", "{{.Server.Version}}"].map(String::from))?;
+    let version =
+        r.query(&["docker", "-H", &endpoint, "version", "--format", "{{.Server.Version}}"].map(String::from))?;
     println!("  docker {} reachable", version.trim());
-    let inspect: Vec<String> = ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}", &p.context]
-        .map(String::from)
-        .into();
+    let inspect: Vec<String> = [
+        "docker",
+        "context",
+        "inspect",
+        "--format",
+        "{{.Endpoints.docker.Host}}",
+        &p.context,
+    ]
+    .map(String::from)
+    .into();
     let host_arg = format!("host={endpoint}");
     match r.probe(&inspect)? {
         Some(ep) if ep.trim() == endpoint => println!("  reusing context {}", p.context),
@@ -230,12 +268,17 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
         );
         r.run(&p.exec(&[], &script))?;
         r.run(&p.exec(&[], &format!("command -v gh >/dev/null || bash {utils}/install_gh.sh")))?;
-        r.run(&p.exec(&[], &format!("test -x /root/.local/bin/claude || bash {utils}/agent.sh --yes")))?;
+        r.run(&p.exec(
+            &[],
+            &format!("test -x /root/.local/bin/claude || bash {utils}/agent.sh --yes"),
+        ))?;
         // oaka ships in the control plane (step 3); put it on PATH for the worker agent.
         let oaka = format!("/{}/oaka/bin/oaka", p.year);
         r.run(&p.exec(
             &[],
-            &format!("if [ -x {oaka} ]; then ln -sf {oaka} /usr/local/bin/oaka; else echo 'no {oaka}; oaka not linked'; fi"),
+            &format!(
+                "if [ -x {oaka} ]; then ln -sf {oaka} /usr/local/bin/oaka; else echo 'no {oaka}; oaka not linked'; fi"
+            ),
         ))?;
     }
 

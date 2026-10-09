@@ -10,6 +10,8 @@ Two CLI tools for driving worker containers on remote boxes from the local conso
 cargo build --release      # target/release/akao, target/release/oaka
 ```
 
+Testing: `cargo test` (hermetic, ~10 s); real-GPU and docker layers in [TEST.md](TEST.md).
+
 ## State
 
 Everything lives in `$AKAO_CONFIG_ROOT` (e.g. `/2026/nocopy/akao-workflow-state`):

@@ -26,8 +26,14 @@ pub struct Addr {
 impl Addr {
     pub fn parse(s: &str) -> Addr {
         match s.find(':') {
-            Some(i) => Addr { nick: Some(s[..i].to_string()), rel: s[i + 1..].to_string() },
-            None => Addr { nick: None, rel: s.to_string() },
+            Some(i) => Addr {
+                nick: Some(s[..i].to_string()),
+                rel: s[i + 1..].to_string(),
+            },
+            None => Addr {
+                nick: None,
+                rel: s.to_string(),
+            },
         }
     }
 
@@ -90,9 +96,7 @@ pub fn run(state: &State, r: &Runner, src_str: &str, dst_str: &str) -> Result<()
             vec!["sh".into(), "-c".into(), script]
         }
         Some(nick) => {
-            let script = format!(
-                "{ESCALATE}$S mkdir -p {dst_q} && $S tar --owner=0 --group=0 -xzf - -C {dst_q}"
-            );
+            let script = format!("{ESCALATE}$S mkdir -p {dst_q} && $S tar --owner=0 --group=0 -xzf - -C {dst_q}");
             r.ssh_argv(nick, &script)
         }
     };
