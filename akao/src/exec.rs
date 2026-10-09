@@ -43,9 +43,25 @@ impl Runner {
         argv
     }
 
+    /// Human-readable form of a command: ssh commands built by ssh_argv print as
+    /// `[nick] <script>`, everything else shell-quoted.
+    pub fn display(&self, argv: &[String]) -> String {
+        let n = self.ssh.len();
+        if argv.len() == n + 3 && argv[..n] == self.ssh[..] && argv[n + 1] == "--" {
+            if let Some(words) = shlex::split(&argv[n + 2]) {
+                if let [sh, c, script] = &words[..] {
+                    if sh == "sh" && c == "-c" {
+                        return format!("[{}] {script}", argv[n]);
+                    }
+                }
+            }
+        }
+        show(argv)
+    }
+
     /// Run a mutating command, streaming its output. Skipped under --dry-run.
     pub fn run(&self, argv: &[String]) -> Result<()> {
-        println!("  + {}", show(argv));
+        println!("  + {}", self.display(argv));
         if self.dry_run {
             return Ok(());
         }
@@ -58,7 +74,7 @@ impl Runner {
 
     /// Run `left | right`. Skipped under --dry-run.
     pub fn pipe(&self, left: &[String], right: &[String]) -> Result<()> {
-        println!("  + {} | {}", show(left), show(right));
+        println!("  + {} | {}", self.display(left), self.display(right));
         if self.dry_run {
             return Ok(());
         }
@@ -81,20 +97,24 @@ impl Runner {
     }
 
     /// Run a read-only probe (also under --dry-run) and capture stdout.
-    /// Returns Ok(None) when the command exits non-zero.
+    /// Returns Ok(None) when the command exits non-zero; its stderr is discarded.
     pub fn probe(&self, argv: &[String]) -> Result<Option<String>> {
-        println!("  ? {}", show(argv));
+        self.capture(argv, Stdio::null())
+    }
+
+    /// Like probe, but a non-zero exit is an error and stderr is shown.
+    pub fn query(&self, argv: &[String]) -> Result<String> {
+        self.capture(argv, Stdio::inherit())?.with_context(|| format!("command failed: {}", show(argv)))
+    }
+
+    fn capture(&self, argv: &[String], stderr: Stdio) -> Result<Option<String>> {
+        println!("  ? {}", self.display(argv));
         let out = command(argv)
             .stdin(Stdio::null())
-            .stderr(Stdio::inherit())
+            .stderr(stderr)
             .output()
             .with_context(|| format!("cannot start {}", argv[0]))?;
         Ok(out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned()))
-    }
-
-    /// Like probe, but a non-zero exit is an error.
-    pub fn query(&self, argv: &[String]) -> Result<String> {
-        self.probe(argv)?.with_context(|| format!("command failed: {}", show(argv)))
     }
 }
 
@@ -109,5 +129,6 @@ mod tests {
         assert_eq!(argv[..3], ["ssh", "h", "--"]);
         // What the remote shell sees must split back into exactly sh -c <script>.
         assert_eq!(shlex::split(&argv[3]).unwrap(), ["sh", "-c", "mkdir -p '/a b'"]);
+        assert_eq!(r.display(&argv), "[h] mkdir -p '/a b'");
     }
 }

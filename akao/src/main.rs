@@ -1,4 +1,5 @@
 mod exec;
+mod init;
 mod state;
 
 use anyhow::{bail, Result};
@@ -17,6 +18,22 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Initialize worker container akao_<name> on a remote host
+    Init {
+        /// Host nick (a row in hosts.tsv, an ssh Host alias)
+        nick: String,
+        /// Container name, without the akao_ prefix
+        name: String,
+        /// Work week to place the workdir under [default: ISO week of today]
+        #[arg(long)]
+        week: Option<String>,
+        /// Skip the control-plane deploy and the package/agent installation
+        #[arg(long)]
+        skip_setup: bool,
+        /// Print the commands that would change anything instead of running them
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Manage the remote host table (hosts.tsv)
     #[command(subcommand)]
     Host(HostCmd),
@@ -78,6 +95,10 @@ fn main() {
 fn run(cli: Cli) -> Result<()> {
     let mut state = State::load()?;
     match cli.cmd {
+        Cmd::Init { nick, name, week, skip_setup, dry_run } => {
+            let runner = exec::Runner::new(dry_run)?;
+            init::run(&state, &runner, &init::Options { nick, name, week, skip_setup })
+        }
         Cmd::Host(cmd) => host_cmd(&state, cmd),
         Cmd::Config(cmd) => config_cmd(&mut state, cmd),
     }
