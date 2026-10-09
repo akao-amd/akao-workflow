@@ -46,7 +46,7 @@ Everything lives in `$AKAO_CONFIG_ROOT` (e.g. `/2026/nocopy/akao-workflow-state`
 
 | File | Content |
 |---|---|
-| `config.toml` | `default_image`, `deploy_src` (default `/<year>`), `deploy_paths` (default `CLAUDE.md AGENTS.md AGCP.md skills utils oaka`), `infx_repo` |
+| `config.toml` | `default_image`, `deploy_src` (default `/<year>`), `deploy_paths` (default `CLAUDE.md AGENTS.md skills utils oaka`), `infx_repo` |
 | `hosts.tsv` | one row per box: `nick image model_path docker_sock host_home rest`; `-` = default |
 | `container_home/` | home template, copied once per container to `<host_home>/container_home/akao_<name>` |
 

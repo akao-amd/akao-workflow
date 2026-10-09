@@ -27,7 +27,7 @@ pub const KEYS: &[(&str, Option<&str>, &str)] = &[
     ),
     (
         "deploy_paths",
-        Some("CLAUDE.md AGENTS.md AGCP.md skills utils oaka"),
+        Some("CLAUDE.md AGENTS.md skills utils oaka"),
         "space-separated paths under deploy_src shipped to <host_home>/<year>",
     ),
     (
