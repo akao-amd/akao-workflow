@@ -21,6 +21,7 @@ oaka check      # every error names the field to fix
 oaka compile    # -> scripts/ (+ plan.lock.toml)
 oaka run        # compile, then scripts/run_all.sh
 oaka doctor     # this worker's prerequisites, when something environmental fails
+oaka probe      # this container's GPU arch and ROCm version
 oaka profile ls | show <p> | diff <a> <b> | save <server> --as <model>/<recipe>
 ```
 
@@ -200,7 +201,7 @@ there.  An `origin` field is rejected for this reason.
 ```toml
 # <what this recipe is, where it came from, what it measured, why each flag is here>
 description = "one line: what this recipe is"
-arch = ["gfx950"]          # any of gfx942 gfx950 gfx1250; absent = any
+arch = ["gfx950"]          # what it is for: GPU arch, or [arch, ROCm version]; absent = any
 extends = "<model>/<recipe>"   # optional; [env]/[args] below overlay the parent
 model = "/model/<dir>"
 tp = 1                     # optional pin
@@ -216,12 +217,32 @@ key = 1                    # --key 1; a list gives --key v1 v2
 `--model-path`, `--tp`, `--port` and `HIP_VISIBLE_DEVICES` come from the plan and are
 rejected in profiles and plans.  `arch` and `description` are not inherited.
 `profile save` writes a server's plan overrides as a new profile that `extends` the one
-it started from, with `arch` copied unless `--arch`, and a dated history comment naming
-the task; add the evidence to it by hand.
+it started from, with `arch` copied unless `--arch` (`gfx950`, or `gfx950:10.1` with a ROCm
+version), and a dated history comment naming the task; add the evidence to it by hand.
+
+**What a profile is for** (`arch`): a list of targets, each a GPU arch (any ROCm) or an
+`[arch, ROCm version]` pair, `*` for any in either place; one of them must fit the
+container.  A ROCm version matches as a prefix: `"10.0"` is any 10.0.x, and a component may
+be `*` (`"10.*"`).  For a known issue in ROCm 10.0 fixed in 10.1, two profiles:
+
+```toml
+arch = [["gfx950", "10.0"]]               # <model>/rocm10.0: the workaround
+arch = [["gfx950", "10.1"], ["*", "11"]]   # <model>/base: without it
+```
+
+`oaka check` (so `compile` and `run`) aborts when no target fits the arch of a server's
+GPUs and this container's ROCm version (`oaka probe` shows both; the version comes from
+`.info/version` under `$ROCM_PATH`, `$ROCM_HOME` or `/opt/rocm`).  A target naming a ROCm
+version fails when the version cannot be found.  The compiled `server_<name>.sh` checks
+again before launching, because scripts can be rerun by hand in another container.
+`profile ls` marks profiles not for this container with `!`, and `draft` offers only those
+that are.
 
 ## Environment
 
 `OAKA_LIB` (library root, default `/<year>/oaka`), `OAKA_INFX` (InferenceX tree, default
 `/<year>/nocopy/InferenceX/inferencex-e2e`), `OAKA_GPUS` (comma-separated archs; overrides
-GPU detection where the KFD topology is not visible), `OAKA_STACK_STATE` (read by
+GPU detection where the KFD topology is not visible), `OAKA_ROCM` (overrides the ROCm
+version; `OAKA_GPUS` and `OAKA_ROCM` are honoured by `server_<name>.sh`'s check too),
+`OAKA_STACK_STATE` (read by
 `stack.sh`: its lock and per-package markers, default `<site-packages>/.oaka-stack`).

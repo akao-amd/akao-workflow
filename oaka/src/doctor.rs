@@ -77,6 +77,15 @@ pub fn run(lib: &Library) -> Result<()> {
         ),
     }
 
+    match sys::rocm() {
+        Some((v, from)) => r.ok("rocm", format!("{v} (from {from})")),
+        None => r.warn(
+            "rocm",
+            "version unknown: no .info/version under $ROCM_PATH, $ROCM_HOME or /opt/rocm; \
+             profiles whose arch names a ROCm version will not check (set OAKA_ROCM)",
+        ),
+    }
+
     for tool in ["bash", "python3"] {
         if which(tool).is_none() {
             r.fail(tool, "not on PATH; every compiled script needs it");

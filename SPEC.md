@@ -101,6 +101,13 @@ Where the how lives: worker reference (commands, plan and profile fields)
 - **The oaka library is the single home of server recipes.**  The sglang-dev skill's
   `profiles/*.sh` were converted into it (ww41) and are retired from the skill; recipe
   changes go into the library only.  Why: two stores of the same recipes drift.
+- **A profile says what it is for as (GPU arch, ROCm version) targets, `*` allowed**, by
+  extending `arch` (a plain arch is the old meaning, any ROCm), and a plan whose profile
+  does not fit the container aborts at `check` and again in `server.sh`.  Why: a known
+  ROCm 10.0 issue fixed in 10.1 means two recipes for one model, and applying the wrong
+  one in a container from another image must fail, not run; extending `arch` keeps every
+  existing profile valid.  The ROCm version is read from `.info/version` (HIP reports its
+  own, e.g. 7.15 on ROCm 10.0).  `akao init` prints it for each new worker.
 - **The plan owns the per-task restriction**: GPUs (hence `--tp` and `HIP_VISIBLE_DEVICES`),
   port and model path; profiles may not set them.  Ports are random in 29900-30100 (never
   30000) and locked once chosen.

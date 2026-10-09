@@ -22,6 +22,63 @@ if (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; then
 fi
 
 export HIP_VISIBLE_DEVICES={{ gpus }}
+{% if targets %}
+
+# Profile {{ profile }} is for {{ targets_text }} (GPU arch[:ROCm version]).  oaka checked this
+# container at compile time; this script may be rerun by hand elsewhere, so check again.
+python3 - "$HIP_VISIBLE_DEVICES" <<'PY' || exit 1
+import glob, os, sys
+TARGETS = [{{ targets }}]
+WANT = {{ targets_text | tojson_str }}
+
+def rocm():
+    if os.environ.get("OAKA_ROCM", "").strip():
+        return os.environ["OAKA_ROCM"].strip()
+    for root in (os.environ.get("ROCM_PATH"), os.environ.get("ROCM_HOME"), "/opt/rocm"):
+        try:
+            text = open(os.path.join(root, ".info", "version")).read().strip()
+        except (TypeError, OSError):
+            continue
+        n = ""
+        for c in text:
+            if not (c.isdigit() or c == "."):
+                break
+            n += c
+        if n.strip("."):
+            return n.strip(".")
+    return None
+
+def gpus():
+    if "OAKA_GPUS" in os.environ:
+        return [a.strip() for a in os.environ["OAKA_GPUS"].split(",") if a.strip()]
+    nodes = []
+    for props in glob.glob("/sys/class/kfd/kfd/topology/nodes/*/properties"):
+        for line in open(props):
+            if line.startswith("gfx_target_version "):
+                v = int(line.split()[1])
+                if v:
+                    nodes.append((int(props.split("/")[-2]), f"gfx{v // 10000}{(v // 100) % 100:x}{v % 100:x}"))
+    return [a for _, a in sorted(nodes)] or None
+
+def fits(pattern, version):
+    have = version.split(".")
+    for i, want in enumerate(pattern.split(".")):
+        got = have[i] if i < len(have) else "0"
+        if want != "*" and not (got.isdigit() and int(got) == int(want)):
+            return False
+    return True
+
+r, archs = rocm(), gpus()
+for d in sys.argv[1].split(","):
+    a = archs[int(d)] if archs and int(d) < len(archs) else None
+    found = [t for t in TARGETS if a is None or t[0] in ("*", a)]
+    if not found:
+        sys.exit(f"[server {{ name }}] FATAL: GPU {d} is {a}, but profile {{ profile }} is for {WANT}")
+    if not any(t[1] == "*" or (r is not None and fits(t[1], r)) for t in found):
+        sys.exit(f"[server {{ name }}] FATAL: this container has ROCm {r or 'unknown'}"
+                 f"{' on ' + a if a else ''}, but profile {{ profile }} is for {WANT}")
+PY
+{% endif %}
 {% if pythonpath %}
 # The plan's stack trees go first: the image puts its own checkouts on PYTHONPATH too.
 export PYTHONPATH={{ pythonpath | q }}${PYTHONPATH:+:$PYTHONPATH}

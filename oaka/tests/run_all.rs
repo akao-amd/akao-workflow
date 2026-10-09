@@ -129,14 +129,20 @@ impl Sandbox {
     }
 
     fn oaka(&self, args: &[&str]) -> Command {
-        let mut c = Command::new(env!("CARGO_BIN_EXE_oaka"));
+        let mut c = self.sandboxed(env!("CARGO_BIN_EXE_oaka"));
+        c.args(args);
+        c
+    }
+
+    /// `program` with the sandbox's environment, in the Work Directory.
+    fn sandboxed(&self, program: &str) -> Command {
+        let mut c = Command::new(program);
         let path = format!(
             "{}:{}",
             self.root.join("bin").display(),
             std::env::var("PATH").unwrap_or_default()
         );
-        c.args(args)
-            .current_dir(self.work())
+        c.current_dir(self.work())
             .env("OAKA_LIB", self.root.join("lib"))
             .env("OAKA_INFX", self.root.join("infx"))
             .env("OAKA_GPUS", "gfx950,gfx950")
@@ -145,6 +151,7 @@ impl Sandbox {
             .env("FAKE_STATE", self.root.join("state"))
             .env("OAKA_STACK_STATE", self.root.join("stack-state"))
             .env_remove("GPU_ARCH_LIST")
+            .env("OAKA_ROCM", "10.0.0")
             .stdin(Stdio::null());
         c
     }
@@ -745,4 +752,57 @@ fn recipes_follow_the_gpu_arch() {
         err.contains("no recipe for gfx90a; it has recipes for: gfx942 gfx950 gfx1250"),
         "{err}"
     );
+}
+
+#[test]
+fn profiles_for_another_rocm_are_refused() {
+    let _servers = servers_shared();
+    let sb = Sandbox::new("rocm");
+    fs::write(
+        sb.root.join("lib/profiles/m/new.toml"),
+        "extends = 'm/base'\narch = [['gfx950', '10.1'], 'gfx1250']\n",
+    )
+    .unwrap();
+    let plan = server("a", 0, "").replace("m/base", "m/new") + GSM8K;
+    fs::write(sb.work().join("plan.toml"), &plan).unwrap();
+
+    // `oaka check` (and compile, run) aborts in a ROCm 10.0 container...
+    let out = sb.oaka(&["check"]).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        err.contains("this container has ROCm 10.0.0 on gfx950, but profile m/new is for gfx950:10.1 gfx1250"),
+        "{err}"
+    );
+
+    // ...and scripts compiled in a 10.1 container refuse to start there when rerun by hand.
+    let out = sb.oaka(&["compile"]).env("OAKA_ROCM", "10.1.2").output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let run = |rocm: &str| {
+        let out = sb
+            .sandboxed("bash")
+            .arg("scripts/run_all.sh")
+            .env("OAKA_ROCM", rocm)
+            .output()
+            .unwrap();
+        (
+            out.status.code(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+    let (code, out) = run("10.0.0");
+    assert_eq!(code, Some(1), "{out}");
+    assert!(
+        out.contains(
+            "[server a] FATAL: this container has ROCm 10.0.0 on gfx950, but profile m/new is for gfx950:10.1 gfx1250"
+        ),
+        "{out}"
+    );
+    let (code, out) = run("10.1.0");
+    assert_eq!(code, Some(0), "{out}");
+    sb.assert_no_leftovers();
 }

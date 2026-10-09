@@ -24,9 +24,9 @@ pub const RESERVED_ENV: &[&str] = &["HIP_VISIBLE_DEVICES"];
 pub struct ProfileFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Multiple choice from sys::ARCHES; empty = any.
+    /// What it is for, multiple choice: "gfx950" or ["gfx950", "10.0"]; empty = any.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub arch: Vec<String>,
+    pub arch: Vec<Target>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extends: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -37,6 +37,86 @@ pub struct ProfileFile {
     pub env: Table,
     #[serde(default)]
     pub args: Table,
+}
+
+/// What a profile is for: a GPU arch and a ROCm version, either `*` for any.  Written as
+/// "gfx950" (any ROCm, as before ROCm versions mattered) or ["gfx950", "10.0"]; the
+/// version matches as a prefix (sys::rocm_matches): "10.0" is any 10.0.x.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum Target {
+    Arch(String),
+    Tuple([String; 2]),
+}
+
+impl Target {
+    pub fn arch(&self) -> &str {
+        match self {
+            Target::Arch(a) | Target::Tuple([a, _]) => a,
+        }
+    }
+
+    pub fn rocm(&self) -> &str {
+        match self {
+            Target::Arch(_) => "*",
+            Target::Tuple([_, r]) => r,
+        }
+    }
+
+    pub fn fits_arch(&self, arch: &str) -> bool {
+        self.arch() == "*" || self.arch() == arch
+    }
+
+    /// None when the ROCm version matters to this target but is unknown.
+    pub fn fits_rocm(&self, rocm: Option<&str>) -> Option<bool> {
+        match (self.rocm(), rocm) {
+            ("*", _) => Some(true),
+            (_, None) => None,
+            (p, Some(v)) => Some(crate::sys::rocm_matches(p, v)),
+        }
+    }
+
+    /// From the command line: "gfx950" or "gfx950:10.0".
+    pub fn parse(s: &str) -> Result<Target> {
+        let t = match s.split_once(':') {
+            None => Target::Arch(s.to_string()),
+            Some((a, r)) => Target::Tuple([a.to_string(), r.to_string()]),
+        };
+        t.validate()?;
+        Ok(t)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let a = self.arch();
+        if a != "*" && !crate::sys::ARCHES.contains(&a) {
+            bail!("{a:?} is not one of {} or *", crate::sys::ARCHES.join(" "));
+        }
+        if !crate::sys::valid_rocm_pattern(self.rocm()) {
+            bail!(
+                "ROCm version {:?} must be dotted numbers or *, e.g. \"10.0\" (any 10.0.x)",
+                self.rocm()
+            );
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for Target {
+    /// "gfx950" for any ROCm, else "gfx950:10.0" (the command-line form).
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self.rocm() {
+            "*" => write!(f, "{}", self.arch()),
+            r => write!(f, "{}:{r}", self.arch()),
+        }
+    }
+}
+
+/// "gfx942 gfx950:10.0" for messages; "any" when empty.
+pub fn targets_text(arch: &[Target]) -> String {
+    if arch.is_empty() {
+        return "any".into();
+    }
+    arch.iter().map(Target::to_string).collect::<Vec<_>>().join(" ")
 }
 
 /// A `launch_server` flag value.
@@ -55,7 +135,7 @@ pub enum Arg {
 pub struct Profile {
     pub name: String,
     pub description: Option<String>,
-    pub arch: Vec<String>,
+    pub arch: Vec<Target>,
     pub model: Option<String>,
     pub tp: Option<u32>,
     pub env: Vec<(String, String)>,
@@ -77,6 +157,16 @@ impl Profile {
                 words
             })
             .collect()
+    }
+
+    /// Whether some target fits this arch and ROCm version (None = unknown, not held
+    /// against it): for listing; `oaka check` is strict.
+    pub fn fits(&self, arch: Option<&str>, rocm: Option<&str>) -> bool {
+        self.arch.is_empty()
+            || self
+                .arch
+                .iter()
+                .any(|t| arch.is_none_or(|a| t.fits_arch(a)) && t.fits_rocm(rocm) != Some(false))
     }
 
     pub fn arg(&self, key: &str) -> Option<&Arg> {
@@ -294,14 +384,8 @@ pub fn read_profile(path: &Path) -> Result<ProfileFile> {
         );
     }
     let f: ProfileFile = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-    for a in &f.arch {
-        if !crate::sys::ARCHES.contains(&a.as_str()) {
-            bail!(
-                "{}: arch {a:?} is not one of {}",
-                path.display(),
-                crate::sys::ARCHES.join(" ")
-            );
-        }
+    for t in &f.arch {
+        t.validate().with_context(|| format!("{}: arch", path.display()))?;
     }
     Ok(f)
 }
@@ -358,6 +442,25 @@ mod tests {
     }
 
     #[test]
+    fn targets() {
+        let t: ProfileFile = toml::from_str("arch = ['gfx942', ['gfx950', '10.0'], ['*', '10.1']]").unwrap();
+        let [a, b, c] = &t.arch[..] else { panic!() };
+        assert!(a.fits_arch("gfx942") && a.fits_rocm(None) == Some(true));
+        assert!(b.fits_arch("gfx950") && b.fits_rocm(Some("10.0.2")) == Some(true));
+        assert_eq!(b.fits_rocm(Some("10.1.0")), Some(false));
+        assert_eq!(b.fits_rocm(None), None, "unknown ROCm cannot be judged");
+        assert!(c.fits_arch("gfx1250") && c.fits_rocm(Some("10.1.0")) == Some(true));
+        assert_eq!(Target::parse("gfx950:10.0").unwrap(), *b);
+        assert!(Target::parse("gfx90a").is_err() && Target::parse("gfx950:ten").is_err());
+        // Old single-arch strings write back as strings, tuples as arrays.
+        let text = toml::to_string(&t).unwrap();
+        assert!(
+            text.starts_with("arch = [\"gfx942\", [\"gfx950\", \"10.0\"], [\"*\", \"10.1\"]]\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn names() {
         assert!(valid_name("gpt-oss-120b/triton"));
         assert!(!valid_name("gpt-oss-120b"));
@@ -380,13 +483,20 @@ mod tests {
         .unwrap();
         fs::write(
             lib.profile_path("m/var"),
-            "extends = 'm'\narch = ['gfx950']\n[env]\nY = '2'\n[args]\npage-size = 64\nfoo = false\n",
+            "extends = 'm'\narch = ['gfx942', ['gfx950', '10.1']]\n[env]\nY = '2'\n[args]\npage-size = 64\nfoo = false\n",
         )
         .unwrap();
         let p = lib.resolve("m/var").unwrap();
         assert_eq!(p.model.as_deref(), Some("/model/m"));
         assert_eq!(p.tp, Some(2));
-        assert_eq!(p.arch, ["gfx950"]);
+        assert_eq!(targets_text(&p.arch), "gfx942 gfx950:10.1");
+        fs::write(lib.profile_path("m/child"), "extends = 'm/var'\n").unwrap();
+        assert!(lib.resolve("m/child").unwrap().arch.is_empty(), "arch is not inherited");
+        fs::write(lib.profile_path("m/badrocm"), "arch = [['gfx950', '>=10.1']]\n").unwrap();
+        let e = format!("{:#}", lib.resolve("m/badrocm").unwrap_err());
+        assert!(e.contains("ROCm version \">=10.1\" must be dotted numbers or *"), "{e}");
+        fs::remove_file(lib.profile_path("m/badrocm")).unwrap();
+        fs::remove_file(lib.profile_path("m/child")).unwrap();
         assert_eq!(p.env.len(), 2);
         assert_eq!(p.args, vec![("page-size".to_string(), Arg::Value("64".into()))]);
         assert_eq!(lib.list().unwrap(), ["m/base", "m/var"]);

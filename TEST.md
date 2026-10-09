@@ -21,7 +21,10 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
   `SPEED`, which the fake InferenceX reports as tok/s; a `BROKEN` file makes its recipe
   fail): install + verify + clean + dirty-tree refusal, a failing recipe and a running
   server stopping `stack.sh`, A-B-A's `compare.csv`, and a bisect that skips a broken
-  commit and finds the planted regression.  They fail if a real sglang server runs in the
+  commit and finds the planted regression.
+- A profile for another ROCm version: `oaka check` aborts, and scripts compiled for 10.1
+  refuse to start servers when rerun by hand with `OAKA_ROCM=10.0.0`.  The sandbox pins
+  `OAKA_ROCM` and removes `GPU_ARCH_LIST`, so the host's ROCm does not leak in.  They fail if a real sglang server runs in the
   same container (`stack.sh` refuses then, by design).
 
 ## 2. Real GPU smoke (~2 min)

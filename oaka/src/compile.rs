@@ -25,6 +25,8 @@ fn templates() -> Result<Environment<'static>> {
     env.set_lstrip_blocks(true);
     env.set_keep_trailing_newline(true);
     env.add_filter("q", |v: minijinja::Value| q(&v.to_string()));
+    // A Python/JSON string literal (the json feature's tojson is not built in).
+    env.add_filter("tojson_str", |v: minijinja::Value| format!("{:?}", v.to_string()));
     env.add_template("server.sh", include_str!("../templates/server.sh.j2"))?;
     env.add_template("gsm8k.sh", include_str!("../templates/gsm8k.sh.j2"))?;
     env.add_template("fixed_seq.sh", include_str!("../templates/fixed_seq.sh.j2"))?;
@@ -160,6 +162,8 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
             port => port_of(&s.name), gpus => gpus.join(","), env => s.effective.env,
             model => s.model, tp => s.tp, args, packages => PROVENANCE_PACKAGES,
             pythonpath => pythonpath.join(":"),
+            targets => s.base.arch.iter().map(|t| format!("({:?}, {:?})", t.arch(), t.rocm())).collect::<Vec<_>>().join(", "),
+            targets_text => crate::profile::targets_text(&s.base.arch),
         })?;
         files.push((file, text));
     }
@@ -396,7 +400,7 @@ off_spec = { prompts_per_conc = 4 }
         .unwrap();
         fs::write(work.join("scripts/mine.sh"), "#!/bin/bash\n# by hand\n").unwrap();
 
-        let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, None).unwrap();
+        let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, &plan::Machine::default()).unwrap();
         let out = compile(&checked).unwrap();
         assert_eq!(out.written.len(), 5);
         assert_eq!(out.removed, vec![work.join("scripts/server_old.sh")]);
@@ -431,7 +435,7 @@ off_spec = { prompts_per_conc = 4 }
         }
         // Recompiling keeps the lock's ports stable.
         fs::write(work.join(plan::PLAN), plan.replace("port = 29950\n", "")).unwrap();
-        let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, None).unwrap();
+        let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, &plan::Machine::default()).unwrap();
         compile(&checked).unwrap();
         let p1 = plan::load_lock(&work).unwrap().port["a"];
         compile(&checked).unwrap();
@@ -468,7 +472,7 @@ off_spec = { prompts_per_conc = 4 }
                 format!("{base}[stack.pkg]\ntree = '{tree}'\n{stack}\n"),
             )
             .unwrap();
-            let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, None).unwrap();
+            let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, &plan::Machine::default()).unwrap();
             let out = compile(&checked).unwrap();
             for f in out.written.iter().filter(|f| f.extension().is_some_and(|e| e == "sh")) {
                 let st = std::process::Command::new("bash").arg("-n").arg(f).status().unwrap();
@@ -522,7 +526,7 @@ off_spec = { prompts_per_conc = 4 }
 
         // Back to a plain plan: every stack script goes, and so does the PYTHONPATH.
         fs::write(work.join(plan::PLAN), base).unwrap();
-        let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, None).unwrap();
+        let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, &plan::Machine::default()).unwrap();
         let gone: Vec<_> = compile(&checked)
             .unwrap()
             .removed
@@ -535,7 +539,7 @@ off_spec = { prompts_per_conc = 4 }
         assert!(!read("server_a.sh").contains("PYTHONPATH"));
         compile_plan("");
         fs::write(work.join(plan::PLAN), base).unwrap();
-        let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, None).unwrap();
+        let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, &plan::Machine::default()).unwrap();
         let mut removed: Vec<String> = compile(&checked)
             .unwrap()
             .removed

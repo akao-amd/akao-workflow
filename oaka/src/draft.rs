@@ -91,11 +91,12 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
     }
     let gpus = sys::gpus();
     let arch = sys::arch();
+    let rocm = sys::rocm().map(|(v, _)| v);
     let all = lib.list()?;
     let mut fitting = Vec::new();
     for name in &all {
         let p = lib.resolve(name)?;
-        if arch.as_ref().is_none_or(|a| p.arch.is_empty() || p.arch.contains(a)) {
+        if p.fits(arch.as_deref(), rocm.as_deref()) {
             fitting.push(name.clone());
         }
     }
@@ -105,10 +106,11 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
     match &gpus {
         Some(g) if !g.is_empty() => {
             out += &format!(
-                "# this machine: {} GPUs (0-{}), {}\n",
+                "# this machine: {} GPUs (0-{}), {}, ROCm {}\n",
                 g.len(),
                 g.len() - 1,
-                arch.as_deref().unwrap_or("mixed archs")
+                arch.as_deref().unwrap_or("mixed archs"),
+                rocm.as_deref().unwrap_or("unknown")
             )
         }
         _ => out += "# this machine: no ROCm GPUs found\n",
@@ -116,7 +118,9 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
     out += &format!("# library: {}\n", lib.root.display());
     out += &format!(
         "# profiles{}: {}\n",
-        arch.as_ref().map(|a| format!(" for {a}")).unwrap_or_default(),
+        arch.as_ref()
+            .map(|a| format!(" for {a}{}", rocm.as_ref().map(|r| format!(":{r}")).unwrap_or_default()))
+            .unwrap_or_default(),
         if fitting.is_empty() {
             "<none>".to_string()
         } else {
@@ -259,7 +263,9 @@ mod tests {
         .unwrap();
         let p: plan::Plan = toml::from_str(&bare).unwrap();
         assert!(p.clients.is_empty());
-        let e = plan::check_plan(&root, p, &lib, None).err().unwrap();
+        let e = plan::check_plan(&root, p, &lib, &plan::Machine::default())
+            .err()
+            .unwrap();
         assert!(format!("{e:#}").contains("profile is empty"));
 
         let opts = Options {
@@ -270,7 +276,7 @@ mod tests {
             force: false,
         };
         let text = render(&lib, &opts).unwrap();
-        let checked = plan::check_plan(&root, toml::from_str(&text).unwrap(), &lib, None).unwrap();
+        let checked = plan::check_plan(&root, toml::from_str(&text).unwrap(), &lib, &plan::Machine::default()).unwrap();
         assert_eq!(checked.servers[0].gpus, [5]);
         assert_eq!(checked.servers[1].gpus, [6, 7]);
         assert_eq!(checked.servers[1].name, "tp2");

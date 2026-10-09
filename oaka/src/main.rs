@@ -8,7 +8,7 @@ mod sys;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use profile::{Arg, Library, Profile, ProfileFile};
+use profile::{targets_text, Arg, Library, Profile, ProfileFile, Target};
 use std::path::{Path, PathBuf};
 use toml::Value;
 
@@ -56,6 +56,8 @@ enum Cmd {
     Run,
     /// Check what compiled scripts need in this worker (read-only)
     Doctor,
+    /// Print this container's GPU arch and ROCm version, what profiles' `arch` targets match
+    Probe,
     /// Browse and extend the profile library
     #[command(subcommand)]
     Profile(ProfileCmd),
@@ -74,7 +76,8 @@ enum ProfileCmd {
         /// New profile name, <model>/<recipe>
         #[arg(long = "as", value_name = "NAME")]
         name: String,
-        /// GPU architectures it is for [default: those of the profile it extends]
+        /// What it is for: an arch, or arch:ROCm version (gfx950:10.1, *:10.1); repeatable
+        /// [default: those of the profile it extends]
         #[arg(long)]
         arch: Vec<String>,
         /// One line on what this recipe is
@@ -142,11 +145,36 @@ fn run(cli: Cli) -> Result<()> {
             Err(err).context("cannot exec bash")
         }
         Cmd::Doctor => doctor::run(&lib),
+        Cmd::Probe => {
+            let m = plan::Machine::probe();
+            println!("arch {}", sys::arch().unwrap_or_else(|| "unknown".into()));
+            println!(
+                "gpus {}",
+                m.gpus.map(|g| g.join(",")).unwrap_or_else(|| "unknown".into())
+            );
+            match sys::rocm() {
+                Some((v, from)) => println!("rocm {v}  # from {from}"),
+                None => println!("rocm unknown  # no .info/version under $ROCM_PATH, $ROCM_HOME or /opt/rocm"),
+            }
+            Ok(())
+        }
         Cmd::Profile(cmd) => profile_cmd(&dir, &lib, cmd),
     }
 }
 
+/// "8 x gfx950, ROCm 10.0.0" for a machine.
+fn machine_text(m: &plan::Machine) -> String {
+    let gpus = match &m.gpus {
+        None => "GPUs unknown".to_string(),
+        Some(g) if g.is_empty() => "no GPUs".to_string(),
+        Some(g) if g.iter().all(|a| *a == g[0]) => format!("{} x {}", g.len(), g[0]),
+        Some(g) => g.join(","),
+    };
+    format!("{gpus}, ROCm {}", m.rocm.as_deref().unwrap_or("unknown"))
+}
+
 fn describe(c: &plan::Checked) {
+    println!("machine: {}", machine_text(&c.machine));
     for s in &c.servers {
         println!(
             "server {}: profile {}, model {}, gpus {:?}, tp {}",
@@ -194,10 +222,12 @@ fn profile_cmd(dir: &Path, lib: &Library, cmd: ProfileCmd) -> Result<()> {
     match cmd {
         ProfileCmd::Ls => {
             let arch = sys::arch();
+            let rocm = sys::rocm().map(|(v, _)| v);
             println!(
-                "# {}  (this machine: {}; ! = other arch, x = broken)",
+                "# {}  (this machine: {}, ROCm {}; ! = not for it, x = broken)",
                 lib.profiles_dir().display(),
-                arch.as_deref().unwrap_or("no single GPU arch")
+                arch.as_deref().unwrap_or("no single GPU arch"),
+                rocm.as_deref().unwrap_or("unknown")
             );
             for name in lib.list()? {
                 let p = match lib.resolve(&name) {
@@ -207,12 +237,8 @@ fn profile_cmd(dir: &Path, lib: &Library, cmd: ProfileCmd) -> Result<()> {
                         continue;
                     }
                 };
-                let archs = if p.arch.is_empty() {
-                    "any".to_string()
-                } else {
-                    p.arch.join(",")
-                };
-                let fits = arch.as_ref().is_none_or(|a| p.arch.is_empty() || p.arch.contains(a));
+                let archs = targets_text(&p.arch);
+                let fits = p.fits(arch.as_deref(), rocm.as_deref());
                 println!(
                     "{}{name:<48} {archs:<16} {}",
                     if fits { " " } else { "!" },
@@ -241,11 +267,10 @@ fn profile_cmd(dir: &Path, lib: &Library, cmd: ProfileCmd) -> Result<()> {
             if file.env.is_empty() && file.args.is_empty() && file.model.is_none() {
                 bail!("server {server} has no overrides over {}; nothing to save", s.base.name);
             }
-            for a in &arch {
-                if !sys::ARCHES.contains(&a.as_str()) {
-                    bail!("arch {a:?} is not one of {}", sys::ARCHES.join(" "));
-                }
-            }
+            let arch = arch
+                .iter()
+                .map(|a| Target::parse(a).with_context(|| format!("--arch {a}")))
+                .collect::<Result<Vec<_>>>()?;
             file.arch = if arch.is_empty() { s.base.arch.clone() } else { arch };
             file.description =
                 Some(description.unwrap_or_else(|| format!("{} with the overrides of server {server}", s.base.name)));
@@ -290,14 +315,7 @@ fn show(lib: &Library, name: &str) -> Result<()> {
     if chain.len() > 1 {
         println!("# chain: {}", chain.join(" <- "));
     }
-    println!(
-        "# arch: {}",
-        if p.arch.is_empty() {
-            "any".into()
-        } else {
-            p.arch.join(" ")
-        }
-    );
+    println!("# arch: {}", targets_text(&p.arch));
     for (k, v) in &p.env {
         println!("{k}={}", sys::q(v));
     }
@@ -369,7 +387,7 @@ fn diff(a: &Profile, b: &Profile) -> Vec<String> {
     };
     field("model", a.model.clone(), b.model.clone());
     field("tp", a.tp.map(|t| t.to_string()), b.tp.map(|t| t.to_string()));
-    field("arch", Some(a.arch.join(" ")), Some(b.arch.join(" ")));
+    field("arch", Some(targets_text(&a.arch)), Some(targets_text(&b.arch)));
     let env = |p: &Profile, k: &str| {
         p.env
             .iter()

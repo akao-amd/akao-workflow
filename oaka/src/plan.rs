@@ -1,6 +1,6 @@
 //! `plan.toml` in a Work Directory, its validation, and `plan.lock.toml`.
 
-use crate::profile::{Arg, Library, Profile};
+use crate::profile::{targets_text, Arg, Library, Profile, Target};
 use crate::stack::{self, Stacks};
 use crate::sys;
 use anyhow::{bail, Context, Result};
@@ -202,6 +202,8 @@ pub struct Checked {
     pub stacks: Stacks,
     /// Non-fatal findings, e.g. a model directory that does not exist here.
     pub warnings: Vec<String>,
+    /// The machine the plan was checked against.
+    pub machine: Machine,
 }
 
 pub fn valid_server_name(s: &str) -> bool {
@@ -219,13 +221,31 @@ pub fn load(dir: &Path) -> Result<Plan> {
     toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
+/// What a plan is checked against: this container's GPUs and ROCm.
+#[derive(Debug, Default)]
+pub struct Machine {
+    /// GPU archs in HIP device order; None when they cannot be seen.
+    pub gpus: Option<Vec<String>>,
+    /// ROCm version, e.g. "10.0.0"; None when it cannot be found.
+    pub rocm: Option<String>,
+}
+
+impl Machine {
+    pub fn probe() -> Machine {
+        Machine {
+            gpus: sys::gpus(),
+            rocm: sys::rocm().map(|(v, _)| v),
+        }
+    }
+}
+
 /// Validate the plan in `dir`.  Every error names the field to fix.
 pub fn check(dir: &Path, lib: &Library) -> Result<Checked> {
     let plan = load(dir)?;
-    check_plan(dir, plan, lib, sys::gpus())
+    check_plan(dir, plan, lib, &Machine::probe())
 }
 
-pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: Option<Vec<String>>) -> Result<Checked> {
+pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: &Machine) -> Result<Checked> {
     let mut warnings = Vec::new();
     if plan.servers.is_empty() {
         bail!("the plan has no [[server]]");
@@ -283,26 +303,15 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: Option<Vec<Str
             Some(tp) => tp,
             None => s.gpus.len() as u32,
         };
-        if let Some(gpus) = &machine {
+        if let Some(gpus) = &machine.gpus {
             if let Some(g) = s.gpus.iter().find(|g| **g as usize >= gpus.len()) {
                 match gpus.len() {
                     0 => bail!("{at}: GPU {g} does not exist; this machine has no GPUs"),
                     n => bail!("{at}: GPU {g} does not exist; this machine has {n} GPUs (0-{})", n - 1),
                 }
             }
-            if !base.arch.is_empty() {
-                for g in &s.gpus {
-                    let a = &gpus[*g as usize];
-                    if !base.arch.contains(a) {
-                        bail!(
-                            "{at}: GPU {g} is {a}, but profile {} is for {}",
-                            s.profile,
-                            base.arch.join(" ")
-                        );
-                    }
-                }
-            }
         }
+        check_targets(&at, &s.profile, &base, &s.gpus, machine)?;
         for o in &servers {
             if let Some(g) = s.gpus.iter().find(|g| o.gpus.contains(g)) {
                 bail!("{at}: GPU {g} is already used by server {}", o.name);
@@ -371,7 +380,7 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: Option<Vec<Str
         }
     }
     // The arch of the GPUs the plan uses picks per-arch recipes.
-    let arch = machine.as_ref().and_then(|gpus| {
+    let arch = machine.gpus.as_ref().and_then(|gpus| {
         let mut used: Vec<&String> = servers
             .iter()
             .flat_map(|s| &s.gpus)
@@ -391,7 +400,58 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: Option<Vec<Str
         vary,
         stacks,
         warnings,
+        machine: Machine {
+            gpus: machine.gpus.clone(),
+            rocm: machine.rocm.clone(),
+        },
     })
+}
+
+/// The profile's `arch` targets against this container: for every GPU of the server, one
+/// target must fit its arch and the container's ROCm version.  Unknown GPUs leave only
+/// the ROCm part to judge; an unknown ROCm version fails a target that names one.
+fn check_targets(at: &str, profile: &str, base: &Profile, gpus: &[u32], machine: &Machine) -> Result<()> {
+    if base.arch.is_empty() {
+        return Ok(());
+    }
+    let wanted = targets_text(&base.arch);
+    let on: Vec<(Option<u32>, Option<&str>)> = match &machine.gpus {
+        Some(archs) => gpus
+            .iter()
+            .map(|g| (Some(*g), Some(archs[*g as usize].as_str())))
+            .collect(),
+        None => vec![(None, None)],
+    };
+    for (g, arch) in on {
+        let by_arch: Vec<&Target> = base
+            .arch
+            .iter()
+            .filter(|t| arch.is_none_or(|a| t.fits_arch(a)))
+            .collect();
+        if by_arch.is_empty() {
+            bail!(
+                "{at}: GPU {} is {}, but profile {profile} is for {wanted}",
+                g.unwrap(),
+                arch.unwrap()
+            );
+        }
+        let fits: Vec<Option<bool>> = by_arch.iter().map(|t| t.fits_rocm(machine.rocm.as_deref())).collect();
+        if fits.contains(&Some(true)) {
+            continue;
+        }
+        match &machine.rocm {
+            None => bail!(
+                "{at}: profile {profile} is for {wanted}, and this container's ROCm version is unknown \
+                 (no .info/version under $ROCM_PATH, $ROCM_HOME or /opt/rocm; set OAKA_ROCM)"
+            ),
+            Some(v) => bail!(
+                "{at}: this container has ROCm {v}{}, but profile {profile} is for {wanted}; \
+                 pick a profile for it (oaka profile ls) or a matching container",
+                arch.map(|a| format!(" on {a}")).unwrap_or_default()
+            ),
+        }
+    }
+    Ok(())
 }
 
 /// A revision as git takes it; quoted where it is used, but never an option.
@@ -574,15 +634,30 @@ mod tests {
         )
         .unwrap();
         fs::write(lib.profile_path("m/tp2"), "extends = 'm/base'\ntp = 2\n").unwrap();
+        fs::write(
+            lib.profile_path("m/new"),
+            "extends = 'm/base'\narch = [['gfx950', '10.1']]\n",
+        )
+        .unwrap();
         (lib, dir)
     }
 
-    fn checked(lib: &Library, text: &str, machine: Option<Vec<String>>) -> Result<Checked> {
-        check_plan(Path::new("/w"), toml::from_str(text)?, lib, machine)
+    fn checked(lib: &Library, text: &str, machine: Machine) -> Result<Checked> {
+        check_plan(Path::new("/w"), toml::from_str(text)?, lib, &machine)
     }
 
-    fn eight(arch: &str) -> Option<Vec<String>> {
-        Some(vec![arch.to_string(); 8])
+    fn eight(arch: &str) -> Machine {
+        Machine {
+            gpus: Some(vec![arch.to_string(); 8]),
+            rocm: None,
+        }
+    }
+
+    fn rocm(v: &str) -> Machine {
+        Machine {
+            gpus: None,
+            rocm: Some(v.to_string()),
+        }
     }
 
     const OK: &str = r#"
@@ -629,26 +704,58 @@ server = "a"
         };
         bad(OK, eight("gfx1250"), "is for gfx950");
         bad(&OK.replace("[3]", "[9]"), eight("gfx950"), "does not exist");
-        bad(&OK.replace("[3]", "[]"), None, "gpus is empty");
-        bad(&OK.replace("m/base", "m/tp2"), None, "pins tp = 2");
-        bad(&OK.replace("page-size = 64", "port = 1"), None, "set by oaka");
-        bad(&OK.replace("server = \"a\"", "server = \"b\""), None, "not in the plan");
+        bad(&OK.replace("[3]", "[]"), Machine::default(), "gpus is empty");
+        bad(&OK.replace("m/base", "m/tp2"), Machine::default(), "pins tp = 2");
+        bad(
+            &OK.replace("page-size = 64", "port = 1"),
+            Machine::default(),
+            "set by oaka",
+        );
+        bad(
+            &OK.replace("server = \"a\"", "server = \"b\""),
+            Machine::default(),
+            "not in the plan",
+        );
         bad(
             &OK.replace("conc = [4, 8]", "conc = [4, 8]\nwarmups = 3"),
-            None,
+            Machine::default(),
             "unknown field",
         );
         bad(
             &OK.replace("conc = [4, 8]", "conc = []"),
-            None,
+            Machine::default(),
             "positive concurrencies",
         );
         bad(
             &format!("{OK}\n[[server]]\nname = 'b'\nprofile = 'm/base'\ngpus = [3]\n"),
-            None,
+            Machine::default(),
             "already used by server a",
         );
-        bad(&OK.replace("m/base", ""), None, "pick one of: m/base m/tp2");
+        bad(
+            &OK.replace("m/base", ""),
+            Machine::default(),
+            "pick one of: m/base m/new m/tp2",
+        );
+        // ROCm: a profile for another version, or a container whose version is unknown.
+        let new = OK.replace("m/base", "m/new");
+        bad(
+            &new,
+            rocm("10.0.0"),
+            "this container has ROCm 10.0.0, but profile m/new is for gfx950:10.1",
+        );
+        let mut both = eight("gfx950");
+        both.rocm = Some("10.0.1".into());
+        bad(
+            &new,
+            both,
+            "this container has ROCm 10.0.1 on gfx950, but profile m/new is for gfx950:10.1",
+        );
+        bad(&new, Machine::default(), "this container's ROCm version is unknown");
+        assert!(checked(&lib, &new, rocm("10.1.2")).is_ok());
+        let mut fits = eight("gfx950");
+        fits.rocm = Some("10.1.0".into());
+        assert!(checked(&lib, &new, fits).is_ok());
+        assert!(checked(&lib, OK, rocm("10.0.0")).is_ok(), "no rocm in the profile: any");
         fs::remove_dir_all(dir).unwrap();
     }
 }
