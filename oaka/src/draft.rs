@@ -6,6 +6,7 @@
 
 use crate::plan::{valid_server_name, PLAN};
 use crate::profile::Library;
+use crate::stack;
 use crate::sys;
 use anyhow::{bail, Result};
 use std::fs;
@@ -15,6 +16,8 @@ pub struct Options {
     pub profiles: Vec<String>,
     pub gpus: Vec<u32>,
     pub clients: Vec<String>,
+    /// Packages of stacks.toml to add [stack.<name>] blocks for.
+    pub stacks: Vec<String>,
     pub force: bool,
 }
 
@@ -51,7 +54,8 @@ fn client_block(kind: &str, server: &str, commented: bool) -> String {
         _ => format!(
             "[[client]]\nkind = \"fixed-seq\"        # InferenceX fixed-seq-len throughput\n\
              server = \"{server}\"\nisl_osl = [[1024, 1024], [8192, 1024]]\nconc = [4, 8, 16, 32, 64]\n\
-             range_ratio = 0.8\nrepeats = 1\n"
+             range_ratio = 0.8\nrepeats = 1\n\
+             # min_output_tok_s = 0       # gate: every point's median must reach it (bisect's verdict)\n"
         ),
     };
     if commented {
@@ -59,6 +63,24 @@ fn client_block(kind: &str, server: &str, commented: bool) -> String {
     } else {
         body
     }
+}
+
+fn stack_block(name: &str, repo: &str, tree: &str) -> String {
+    [
+        format!(
+            "[stack.{name}]                # install {name} from a git tree before the servers (library stacks.toml)"
+        ),
+        format!("# a worktree of {repo}; created at the revision when missing"),
+        format!("tree = \"{tree}\""),
+        "commit = \"\"                   # REQUIRED unless the tree exists; remove to install the tree as it is".into(),
+        "# commits = [\"<A>\", \"<B>\", \"<A>\"]          # instead: the whole plan once per revision (A-B-A)".into(),
+        "# bisect = { good = \"<A>\", bad = \"<B>\" }   # instead: git bisect; needs a gate (gsm8k, min_output_tok_s)"
+            .into(),
+        "# clean = \"never\"              # or \"before-install\" (bisect's default): delete its caches first".into(),
+    ]
+    .iter()
+    .map(|l| format!("{l}\n"))
+    .collect()
 }
 
 pub fn render(lib: &Library, opts: &Options) -> Result<String> {
@@ -111,6 +133,16 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
     } else {
         opts.profiles.clone()
     };
+    let stacks = stack::load(lib)?;
+    for name in &opts.stacks {
+        if stacks.get(name).is_none() {
+            bail!(
+                "--stack {name}: not in {}; it has: {}",
+                stacks.path.display(),
+                stacks.names().join(" ")
+            );
+        }
+    }
     let mut names: Vec<String> = Vec::new();
     let mut free = opts.gpus.clone();
     for profile in &profiles {
@@ -159,6 +191,16 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
         out += "[server.env]               # overrides on top of the profile; NAME = false unsets\n";
         out += "[server.args]              # launch_server flags without --; true = bare flag, false = drop\n";
         names.push(name);
+    }
+
+    let task = std::env::current_dir()
+        .ok()
+        .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "task".into());
+    for name in &opts.stacks {
+        let repo = &stacks.get(name).unwrap().repo;
+        out += "\n";
+        out += &stack_block(name, repo, &format!("/{}/nocopy/{name}-{task}", sys::work_year()));
     }
 
     out += "\n";
@@ -210,6 +252,7 @@ mod tests {
                 profiles: vec![],
                 gpus: vec![],
                 clients: vec![],
+                stacks: vec![],
                 force: false,
             },
         )
@@ -223,6 +266,7 @@ mod tests {
             profiles: vec!["m/triton".into(), "m/tp2".into()],
             gpus: vec![5, 6, 7],
             clients: vec!["gsm8k".into(), "fixed-seq".into()],
+            stacks: vec![],
             force: false,
         };
         let text = render(&lib, &opts).unwrap();

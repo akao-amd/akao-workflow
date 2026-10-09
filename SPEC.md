@@ -70,7 +70,10 @@ Where the how lives: worker reference (commands, plan and profile fields)
 
 - Milestone 1 — servers and clients: `draft`, `check`, `compile`, `run`, `profile`,
   `doctor`.  Done in ww41; verified on gfx950 with real sglang and InferenceX.
-- Milestone 2 — the stack, then bisect and A-B-A.  Designed below, not built.
+- Milestone 2 — the stack, A-B-A and bisect: `[stack.<package>]`, the library's
+  `stacks.toml`, `commits` and `bisect` plans, `draft --stack`, `doctor` checks.  Built in
+  ww42 with hermetic tests (a stand-in package in a scratch git repo); only sglang has a
+  recipe so far (AITER/Triton recipes wait for the user).
 
 ### Decisions
 
@@ -101,8 +104,9 @@ Where the how lives: worker reference (commands, plan and profile fields)
 - **The plan owns the per-task restriction**: GPUs (hence `--tp` and `HIP_VISIBLE_DEVICES`),
   port and model path; profiles may not set them.  Ports are random in 29900-30100 (never
   30000) and locked once chosen.
-- **The stack is verified with `pip show`**; `PYTHONPATH` forces a tree when that is not
-  enough.  Every server script already prints it.
+- **The stack is verified by where the module imports from and the tree's git HEAD**, not
+  by `__version__` (setuptools_scm's string misleads across a fetch).  Every server script
+  also prints `pip show` for the record.
 - **Delivery, not deployment.**  The "deployment helper" role was dropped: a static (musl)
   binary is installed into the library by this repo's post-commit hook, and `akao init`
   ships the library.  Why: worker images vary in glibc; akao already deploys `/<year>`.
@@ -111,11 +115,32 @@ Where the how lives: worker reference (commands, plan and profile fields)
 - **GSM8K through `sgl-eval`, never `sglang[test]`**, which pulls PyPI sglang over the
   image's.
 
-### Milestone 2: source/dependency stack (open)
+### Decisions on the stack (milestone 2)
 
-One `stacks.toml` in the library names each package that may be swapped (sglang, aiter,
-triton): its repo, its install recipe, and what to clean before/after an install —
-explicit paths (JIT caches, eggs, `easy-install.pth` lines) and glob patterns scoped to the
-tree as a fallback (e.g. `**/__pycache__`).  The plan's `[stack]` names the tree/commit per
-package and when to clean (`never` for A-B-A, `before-install` for bisect).  Bisect and
-A-B-A become plans whose stack varies over commits.
+- **One stack per plan, from `stacks.toml` in the library.**  A container has one venv, so
+  every server of a plan shares the stack and a plan names each package once
+  (`[stack.<package>]`: tree, revision, clean policy).  `stacks.toml` says how to install
+  a package (repo, recipe, module to verify, files the recipe edits, caches) and travels
+  with the library like profiles.  Why: the recipe is the hard-won part (install_tree.sh's
+  traps); the plan only says which tree and revision.
+- **`clean` is only what is safe to delete any time (caches); install mechanics live in the
+  recipe.**  SPEC's first sketch listed eggs and `easy-install.pth` lines under clean, but
+  purging an egg without rebuilding breaks the import, so the recipe purges them as part
+  of every rebuild.  Tree globs remove only what git ignores and holds no tracked file:
+  `git clean -X` with a glob pathspec also deleted an unrelated ignored `build/`.
+- **A tree's files are never reset before an install.**  install_tree.sh's blanket
+  `git checkout -- .` destroys a user's patch silently; now a modified tracked file blocks a
+  checkout, and only the files the recipe itself edits (`restore`) are put back after it.
+- **Revisions are never fetched**: an unknown revision fails with a hint.  Why:
+  determinism, and no network surprise in the middle of a bisect.
+- **The stack never changes under a running server** (`stack.sh` refuses).  Why: the server
+  imports lazily and JIT-builds from the venv being replaced.
+- **A-B-A is a plan run once per revision** (`commits = [A, B, A]`, `clean = never`), and a
+  failed step does not stop the run.  Why: a cache that survived the swap shows up only as
+  A2 not returning to A1, and losing A2 because B failed its gate defeats the point.
+- **Bisect's verdict is the plan's gates** (gsm8k `min_score`, fixed-seq
+  `min_output_tok_s`); anything that is not a gate result is a skip, never a verdict.  Every
+  commit's numbers are recorded, not only the verdict (ww40: a bimodal column proves one
+  step regressed), and a commit whose numbers cannot be recorded stops the bisect.  The bad end is installed before bisecting (proves the recipe), and the
+  tree is reinstalled as it is after `git bisect reset`, so the editable Python and the
+  built kernels agree again.

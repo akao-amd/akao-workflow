@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+# {{ marker }}
+"""The numbers of a measurement step: gsm8k scores and fixed-seq median output tok/s per
+point.  scripts/run_all.sh compares steps with it, scripts/bisect_step.sh records each
+bisect commit with it.
+
+  python3 {{ self_path }} show <results-dir>
+  python3 {{ self_path }} compare <results-dir> <package> aba|list <rev>... -- <label>... -- <status>...
+  python3 {{ self_path }} record <bisect-dir> <short> <commit> <verdict> <note> <subject>
+"""
+import csv, glob, json, os, statistics, sys
+
+# Every client of the plan: (results subdirectory, kind, fixed-seq points as isl osl conc).
+CLIENTS = [
+{% for c in clients %}
+    {{ c }},
+{% endfor %}
+]
+
+
+def keys():
+    out = []
+    for d, kind, points in CLIENTS:
+        if kind == "gsm8k":
+            out.append(f"{d}:score")
+        else:
+            out += [f"{d}:isl{i}_osl{o}_c{c}" for i, o, c in points]
+    return out
+
+
+def collect(step_dir):
+    """{key: value} for what the step produced; missing numbers are absent."""
+    vals = {}
+    for d, kind, _ in CLIENTS:
+        path = os.path.join(step_dir, d)
+        if kind == "gsm8k":
+            found = sorted(glob.glob(os.path.join(path, "*", "metrics.json")), key=os.path.getmtime)
+            if found:
+                agg = json.load(open(found[-1])).get("aggregate", {})
+                score = agg.get("score", agg.get("pass@1"))
+                if isinstance(score, (int, float)):
+                    vals[f"{d}:score"] = float(score)
+            continue
+        try:
+            rows = list(csv.DictReader(open(os.path.join(path, "summary.csv"))))
+        except OSError:
+            rows = []
+        runs = {}
+        for r in rows:
+            try:
+                runs.setdefault(f"{d}:isl{r['isl']}_osl{r['osl']}_c{r['conc']}", []).append(float(r["output_tok_s"]))
+            except (KeyError, TypeError, ValueError):
+                pass
+        for k, v in runs.items():
+            vals[k] = statistics.median(v)
+    return vals
+
+
+def fmt(v):
+    if v is None:
+        return "NA"
+    return f"{v:.3f}" if abs(v) < 10 else f"{v:.1f}"
+
+
+def show(step_dir):
+    vals = collect(step_dir)
+    for k in keys():
+        print(f"{k:<48} {fmt(vals.get(k))}")
+
+
+def compare(results, package, mode, rest):
+    revs, labels, status = [], [], []
+    part = revs
+    for a in rest:
+        if a == "--":
+            part = labels if part is revs else status
+        else:
+            part.append(a)
+    steps = [collect(os.path.join(results, label)) for label in labels]
+    aba = mode == "aba" and len(steps) == 3
+    head = ["metric"] + labels + (["B/A1", "A2/A1"] if aba else [])
+    rows = []
+    for k in keys():
+        vs = [s.get(k) for s in steps]
+        row = [k] + [fmt(v) for v in vs]
+        if aba:
+            a1, b, a2 = vs
+            ratio = lambda x: f"{x / a1:.3f}" if x is not None and a1 else "NA"
+            row += [ratio(b), ratio(a2)]
+        rows.append(row)
+    with open(os.path.join(results, "compare.csv"), "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(head)
+        w.writerow([f"{package} rev"] + revs)
+        w.writerow(["status"] + status)
+        w.writerows(rows)
+    width = max(len(h) for h in head[1:] + revs + status + ["NA"]) + 1
+    line = lambda cells: print(f"{cells[0]:<48}" + "".join(f"{c:>{width}}" for c in cells[1:]))
+    print()
+    line(head)
+    line([f"{package} rev"] + revs)
+    line(["status"] + status)
+    for row in rows:
+        line(row)
+    if aba:
+        print("A2/A1 should be ~1.000: A must come back after B, or something survived the swap (a cache, an install)")
+    print(f"compare: {os.path.join(results, 'compare.csv')}")
+
+
+def record(out, short, commit, verdict, note, subject):
+    path = os.path.join(out, "bisect.csv")
+    vals = collect(os.path.join(out, short))
+    new = not os.path.exists(path)
+    with open(path, "a", newline="") as f:
+        w = csv.writer(f)
+        if new:
+            w.writerow(["commit", "short", "verdict", "note"] + keys() + ["subject"])
+        w.writerow([commit, short, verdict, note] + [fmt(vals.get(k)) for k in keys()] + [subject])
+    print(" ".join(f"{k}={fmt(vals.get(k))}" for k in keys()))
+
+
+if __name__ == "__main__":
+    cmd, args = sys.argv[1], sys.argv[2:]
+    if cmd == "show":
+        show(*args)
+    elif cmd == "compare":
+        compare(args[0], args[1], args[2], args[3:])
+    elif cmd == "record":
+        record(*args)
+    else:
+        sys.exit(__doc__)

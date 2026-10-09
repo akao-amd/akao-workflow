@@ -4,7 +4,7 @@ Three layers, cheapest first.  Layer 1 is required for every change; add layer 2
 change touches `oaka/templates/` or how scripts run, layer 3 when it touches what a machine
 must provide (paths, env vars, tools) or after setting one up.
 
-## 1. Hermetic: `cargo test` (~10 s, no GPU, no network)
+## 1. Hermetic: `cargo test` (~30 s, no GPU, no network)
 
 ```bash
 cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
@@ -17,6 +17,12 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
   faked with `OAKA_GPUS`.  It covers a two-server plan, a server crashing at startup, a
   failed GSM8K gate, double Ctrl-C during startup, and no process outliving any of them.
   The stand-ins are short Python strings at the top of that file; extend them there.
+- The stack cases use a stand-in package `fakepkg` in a scratch git repo (one commit per
+  `SPEED`, which the fake InferenceX reports as tok/s; a `BROKEN` file makes its recipe
+  fail): install + verify + clean + dirty-tree refusal, a failing recipe and a running
+  server stopping `stack.sh`, A-B-A's `compare.csv`, and a bisect that skips a broken
+  commit and finds the planted regression.  They fail if a real sglang server runs in the
+  same container (`stack.sh` refuses then, by design).
 
 ## 2. Real GPU smoke (~2 min)
 
@@ -36,6 +42,15 @@ cd / && rm -rf $S
 
 Pass: exit 0, one result row (~680 out tok/s on one MI355X), "no leftovers".  Pick an idle
 GPU (`amd-smi metric --usage`) instead of 0 if needed.
+
+**The stack**, for changes to `stack.sh`, `install.sh` or the library's `stacks.toml`.  It
+replaces sglang in the venv, so never on a container anyone uses: a throwaway one from a
+local `rocm/sgl-dev` image, with `/<year>` mounted read-only and the static `oaka` and a copy
+of the library `docker cp`'d in (`OAKA_LIB`).  In it, the smoke plan above plus
+`oaka draft ... --stack sglang`, `tree = "/m2/sglang-tree"`, `commit = "<the image's HEAD>"`,
+then `commits = ["<HEAD>", "<HEAD~1>", "<HEAD>"]`.  Pass (ww42, MI355X): the first install
+~70 s (AOT + cold cargo), later ones ~8 s, `sglang ok: ... imports from the tree`, 666-740 out
+tok/s; A-B-A A2/A1 ~1.0; `git -C <tree> status --untracked-files=no` clean; `docker rm -f` afterwards.
 
 ## 3. Environment: `akao doctor`, `oaka doctor` (seconds, read-only)
 

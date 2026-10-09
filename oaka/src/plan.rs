@@ -1,6 +1,7 @@
 //! `plan.toml` in a Work Directory, its validation, and `plan.lock.toml`.
 
 use crate::profile::{Arg, Library, Profile};
+use crate::stack::{self, Stacks};
 use crate::sys;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,69 @@ pub struct Plan {
     pub servers: Vec<ServerSpec>,
     #[serde(default, rename = "client")]
     pub clients: Vec<ClientSpec>,
+    /// Packages from the library's stacks.toml to install from a tree before the servers.
+    #[serde(default)]
+    pub stack: BTreeMap<String, StackSpec>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackSpec {
+    /// A git worktree of the package's repo; created from it when missing.
+    pub tree: String,
+    /// One revision.  None with no commits/bisect: install the tree as it is.
+    pub commit: Option<String>,
+    /// The whole plan runs once per revision, in order (A-B-A: [A, B, A]).
+    pub commits: Option<Vec<String>>,
+    /// `git bisect run` over good..bad, with the plan's gates as the verdict.
+    pub bisect: Option<BisectSpec>,
+    pub clean: Option<CleanWhen>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BisectSpec {
+    pub good: String,
+    pub bad: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CleanWhen {
+    /// Keep caches: what A-B-A needs, since a cache reused across commits must show up.
+    Never,
+    /// Delete the package's clean paths before every install.
+    BeforeInstall,
+}
+
+impl CleanWhen {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CleanWhen::Never => "never",
+            CleanWhen::BeforeInstall => "before-install",
+        }
+    }
+}
+
+/// One package of the plan's stack, resolved against stacks.toml.
+#[derive(Debug)]
+pub struct StackPkg {
+    pub name: String,
+    pub tree: String,
+    /// The fixed revision, or None for "the tree as it is" (and for the varying package).
+    pub commit: Option<String>,
+    pub clean: CleanWhen,
+}
+
+/// How the stack varies over the run.
+#[derive(Debug, PartialEq)]
+pub enum Vary {
+    /// One stack (or none): the plan runs once.
+    No,
+    /// The plan runs once per revision of `package`.
+    Commits { package: String, commits: Vec<String> },
+    /// `git bisect run` over good..bad of `package`.
+    Bisect { package: String, good: String, bad: String },
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,6 +123,8 @@ pub enum ClientSpec {
         #[serde(default = "default_repeats")]
         repeats: u32,
         off_spec: Option<OffSpec>,
+        /// Gate: every point's median output tok/s over its repeats must reach this.
+        min_output_tok_s: Option<f64>,
     },
 }
 
@@ -125,6 +191,11 @@ pub struct Checked {
     pub dir: PathBuf,
     pub plan: Plan,
     pub servers: Vec<Server>,
+    /// The plan's packages, in stacks.toml (= install) order.
+    pub stack: Vec<StackPkg>,
+    pub vary: Vary,
+    /// The library's stacks.toml.
+    pub stacks: Stacks,
     /// Non-fatal findings, e.g. a model directory that does not exist here.
     pub warnings: Vec<String>,
 }
@@ -268,6 +339,7 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: Option<Vec<Str
                 range_ratio,
                 repeats,
                 off_spec,
+                min_output_tok_s,
                 ..
             } => {
                 if isl_osl.is_empty() || isl_osl.iter().flatten().any(|n| *n == 0) {
@@ -288,15 +360,156 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: Option<Vec<Str
                 {
                     bail!("{at}: off_spec.prompts_per_conc must be positive");
                 }
+                if min_output_tok_s.is_some_and(|m| !m.is_finite() || m <= 0.0) {
+                    bail!("{at}: min_output_tok_s must be positive");
+                }
             }
         }
     }
+    let stacks = stack::load(lib)?;
+    let (stack, vary) = check_stack(&plan, &stacks, &mut warnings)?;
     Ok(Checked {
         dir: dir.to_path_buf(),
         plan,
         servers,
+        stack,
+        vary,
+        stacks,
         warnings,
     })
+}
+
+/// A revision as git takes it; quoted where it is used, but never an option.
+fn valid_rev(r: &str) -> bool {
+    !r.is_empty() && !r.starts_with('-') && !r.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
+fn check_stack(plan: &Plan, stacks: &Stacks, warnings: &mut Vec<String>) -> Result<(Vec<StackPkg>, Vary)> {
+    for name in plan.stack.keys() {
+        if stacks.get(name).is_none() {
+            bail!(
+                "[stack.{name}]: no package {name} in {}; it has: {}",
+                stacks.path.display(),
+                if stacks.packages.is_empty() {
+                    "<none>".to_string()
+                } else {
+                    stacks.names().join(" ")
+                }
+            );
+        }
+    }
+    let mut pkgs = Vec::new();
+    let mut vary = Vary::No;
+    for (name, pkg) in &stacks.packages {
+        let Some(s) = plan.stack.get(name) else {
+            continue;
+        };
+        let at = format!("[stack.{name}]");
+        if !s.tree.starts_with('/') || s.tree.contains(['\n', '\t']) {
+            bail!("{at}: tree must be an absolute path, e.g. /<year>/nocopy/{name}-<task>");
+        }
+        let tree = s.tree.trim_end_matches('/').to_string();
+        if tree == pkg.repo.trim_end_matches('/') {
+            bail!(
+                "{at}: tree is the package's repo {}; use a worktree of it \
+                 (oaka creates one when the tree does not exist)",
+                pkg.repo
+            );
+        }
+        let given = [s.commit.is_some(), s.commits.is_some(), s.bisect.is_some()];
+        if given.iter().filter(|g| **g).count() > 1 {
+            bail!("{at}: set one of commit, commits, bisect");
+        }
+        let mut revs: Vec<&String> = s.commit.iter().collect();
+        let mut default_clean = CleanWhen::Never;
+        if let Some(commits) = &s.commits {
+            if commits.len() < 2 {
+                bail!("{at}: commits needs at least two revisions, e.g. [\"<A>\", \"<B>\", \"<A>\"]; one is `commit`");
+            }
+            revs.extend(commits);
+        }
+        if let Some(b) = &s.bisect {
+            if b.good == b.bad {
+                bail!("{at}: bisect.good and bisect.bad are the same revision");
+            }
+            revs.extend([&b.good, &b.bad]);
+            default_clean = CleanWhen::BeforeInstall;
+        }
+        if revs.iter().any(|r| r.is_empty()) {
+            bail!("{at}: a revision is empty; fill it in, or remove commit to install the tree as it is");
+        }
+        if let Some(r) = revs.iter().find(|r| !valid_rev(r)) {
+            bail!("{at}: {r:?} is not a git revision");
+        }
+        let exists = Path::new(&tree).exists();
+        if !exists && revs.is_empty() {
+            bail!(
+                "{at}: tree {tree} does not exist; set commit to create it as a worktree of {}",
+                pkg.repo
+            );
+        }
+        if !exists && !Path::new(&pkg.repo).is_dir() {
+            warnings.push(format!(
+                "{at}: neither the tree {tree} nor the repo {} exists on this machine",
+                pkg.repo
+            ));
+        }
+        let varying = s.commits.is_some() || s.bisect.is_some();
+        if varying && vary != Vary::No {
+            bail!("{at}: only one package may vary (commits or bisect) in a plan");
+        }
+        if let Some(commits) = &s.commits {
+            vary = Vary::Commits {
+                package: name.clone(),
+                commits: commits.clone(),
+            };
+        }
+        if let Some(b) = &s.bisect {
+            vary = Vary::Bisect {
+                package: name.clone(),
+                good: b.good.clone(),
+                bad: b.bad.clone(),
+            };
+        }
+        pkgs.push(StackPkg {
+            name: name.clone(),
+            tree,
+            commit: if varying { None } else { s.commit.clone() },
+            clean: s.clean.unwrap_or(default_clean),
+        });
+    }
+    if vary != Vary::No && plan.clients.is_empty() {
+        bail!("[stack]: a plan that varies the stack needs at least one [[client]] to measure with");
+    }
+    if let Vary::Bisect { package, .. } = &vary {
+        let mut gated = false;
+        for c in &plan.clients {
+            match c {
+                ClientSpec::Gsm8k { .. } => gated = true,
+                ClientSpec::FixedSeq {
+                    min_output_tok_s,
+                    isl_osl,
+                    conc,
+                    ..
+                } => {
+                    gated |= min_output_tok_s.is_some();
+                    if isl_osl.len() * conc.len() > 1 {
+                        warnings.push(format!(
+                            "[stack.{package}]: bisect measures every point of every client at each step; \
+                             one cheap, high-contrast point is usually enough"
+                        ));
+                    }
+                }
+            }
+        }
+        if !gated {
+            bail!(
+                "[stack.{package}]: bisect needs a gate to decide good/bad: a gsm8k client (min_score) \
+                 or a fixed-seq client with min_output_tok_s"
+            );
+        }
+    }
+    Ok((pkgs, vary))
 }
 
 /// Values compile chose automatically; kept so a recompile does not move them.

@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# {{ marker }}
+# The plan's stack: install {{ names }} from {{ "its tree" if pkgs | length == 1 else "their trees" }} into this container's Python (every
+# process in the container sees it), then verify that each imports from its tree at the
+# expected commit.  Each recipe is scripts/install_<package>.sh, from the library's
+# {{ stacks }}.
+#   bash {{ self_path }}                  # the revisions in plan.toml
+#   bash {{ self_path }} <package>=<rev>  # another revision (run_all.sh does this per step)
+#   bash {{ self_path }} <package>=.      # the tree as it is checked out (bisect steps)
+# Exits 2 when anything fails.  State (markers, lock): $OAKA_STACK_STATE, default
+# <site-packages>/.oaka-stack.
+set -uo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+say() { echo "[stack $(date +%H:%M:%S)] $*"; }
+die() { say "FAILED: $*"; exit 2; }
+
+# Revisions from plan.toml; empty = the tree as it is.
+declare -A REV=(
+{% for p in pkgs %}
+    [{{ p.name }}]={{ p.rev | q }}
+{% endfor %}
+)
+for a in "$@"; do
+    name="${a%%=*}" rev="${a#*=}"
+    [ "$name" != "$a" ] && [ -n "${REV[$name]+set}" ] || die "argument $a: expected <package>=<rev> or <package>=. for: ${!REV[*]}"
+    [ "$rev" = . ] && rev=""
+    REV[$name]="$rev"
+done
+
+# Swapping the venv under a live server changes the code it lazily imports and JIT-builds.
+SERVERS='^[^ ]*python[0-9.]* -m sglang[.]launch_server( |$)|^[^ ]*sglang serve( |$)'
+if pgrep -f "$SERVERS" >/dev/null; then
+    say "a server runs in this container; stop it before changing the stack:"
+    pgrep -af "$SERVERS" | sed 's/^/    /'
+    die "server running"
+fi
+SP="$(cd / && python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" || die "python3 cannot name its site-packages"
+STATE_ROOT="${OAKA_STACK_STATE:-$SP/.oaka-stack}"
+mkdir -p "$STATE_ROOT" || die "cannot create $STATE_ROOT"
+exec 9>"$STATE_ROOT/lock"
+if command -v flock >/dev/null && ! flock -n 9; then
+    die "another stack.sh is installing into $SP"
+fi
+GPU_ARCH={{ gpu_arch | q }}
+shopt -s nullglob
+
+# The files a recipe edits in place go back after every install, also on failure/Ctrl-C.
+RESTORE_TREE=""
+RESTORE=()
+restore() {
+    [ -n "$RESTORE_TREE" ] && [ -n "${RESTORE[*]:-}" ] || return 0
+    local tracked
+    tracked="$(git -C "$RESTORE_TREE" ls-files -- "${RESTORE[@]}")"
+    [ -z "$tracked" ] || (cd "$RESTORE_TREE" && echo "$tracked" | xargs -d '\n' git checkout -q --)
+    RESTORE_TREE=""
+}
+trap restore EXIT
+trap 'exit 130' INT TERM
+
+# clean_paths before-install|never <path-or-glob>...: delete them, or show what is kept.
+clean_paths() {
+    local when=$1 pat p
+    shift
+    for pat in "$@"; do
+        for p in $pat; do
+            if [ ! -e "$p" ]; then
+                say "  $p: none"
+            elif [ "$when" = before-install ]; then
+                rm -rf -- "$p" && say "  removed $p"
+            else
+                say "  kept $p ($(find "$p" -type f 2>/dev/null | wc -l) files)"
+            fi
+        done
+    done
+}
+
+# clean_tree before-install|never <tree> <glob>...: delete matches inside the tree that git
+# ignores and that hold no tracked file; tracked and user files are never touched.
+clean_tree() {
+    local when=$1 tree=$2
+    shift 2
+    [ "$when" = before-install ] && [ $# -gt 0 ] || return 0
+    local n
+    n="$(
+        cd "$tree" || exit
+        shopt -s globstar nullglob
+        n=0
+        for pat in "$@"; do
+            for p in $pat; do
+                git check-ignore -q -- "$p" || continue
+                [ -z "$(git ls-files -- "$p" | head -1)" ] || continue
+                rm -rf -- "$p" && n=$((n + 1))
+            done
+        done
+        echo $n
+    )"
+    say "  removed $n ignored path(s) matching $* in the tree"
+}
+
+# install_pkg <name> <tree> <repo> <module> <clean> <rev>; uses RESTORE, CLEAN_PATHS, CLEAN_TREE.
+install_pkg() {
+    local name=$1 tree=$2 repo=$3 module=$4 clean=$5 rev=$6 dirty commit file rc
+    say "== $name: ${rev:-the tree as it is} in $tree"
+    if [ ! -e "$tree" ]; then
+        [ -n "$rev" ] || die "$name: $tree does not exist; give a revision to create it from $repo"
+        git -C "$repo" worktree prune
+        git -C "$repo" worktree add --detach "$tree" "$rev" \
+            || die "$name: cannot create $tree as a worktree of $repo at $rev (unknown revision? git -C $repo fetch)"
+    fi
+    [ "$(git -C "$tree" rev-parse --show-toplevel 2>/dev/null)" = "$(realpath "$tree")" ] \
+        || die "$name: $tree is not the top of a git work tree"
+    if [ -n "$rev" ]; then
+        dirty="$(git -C "$tree" status --porcelain --untracked-files=no)"
+        [ -z "$dirty" ] || die "$name: $tree has local changes; commit or stash them, or install the tree as it is ($name=.):"$'\n'"$dirty"
+        git -C "$tree" checkout -q --detach "$rev" \
+            || die "$name: cannot check out $rev in $tree (unknown revision? git -C $repo fetch)"
+    elif [ -n "${RESTORE[*]:-}" ]; then
+        dirty="$(git -C "$tree" status --porcelain --untracked-files=no -- "${RESTORE[@]}")"
+        [ -z "$dirty" ] || die "$name: the install rewrites these modified files; restore them first (git -C $tree checkout -- <file>):"$'\n'"$dirty"
+    fi
+    commit="$(git -C "$tree" rev-parse HEAD)"
+    say "$name at $(git -C "$tree" log -1 --format='%h %cs %s')"
+    dirty="$(git -C "$tree" status --porcelain --untracked-files=no)"
+    [ -z "$dirty" ] || { say "$name: with local changes:"; echo "$dirty" | sed 's/^/    /'; }
+
+    say "clean: $clean"
+    clean_paths "$clean" "${CLEAN_PATHS[@]}"
+    clean_tree "$clean" "$tree" "${CLEAN_TREE[@]}"
+
+    local state="$STATE_ROOT/$name"
+    mkdir -p "$state" || die "cannot create $state"
+    RESTORE_TREE=$tree
+    (cd "$tree" && TREE="$tree" SP="$SP" STATE="$state" GPU_ARCH="$GPU_ARCH" bash "$HERE/install_$name.sh")
+    rc=$?
+    restore
+    [ $rc -ne 130 ] || exit 130
+    [ $rc -eq 0 ] || die "$name: scripts/install_$name.sh exited $rc"
+
+    [ "$(git -C "$tree" rev-parse HEAD)" = "$commit" ] || die "$name: the recipe moved $tree off $commit"
+    file="$(cd / && python3 -c 'import importlib, sys; print(importlib.import_module(sys.argv[1]).__file__)' "$module" 2>&1)" \
+        || die "$name: python3 cannot import $module after the install:"$'\n'"$file"
+    case "$(realpath "$file")" in
+        "$(realpath "$tree")"/*) ;;
+        *) die "$name: $module imports from $file, not from $tree" ;;
+    esac
+    echo "$commit $tree $(date -Is)" >"$state/installed"
+    say "$name ok: $tree at ${commit:0:12}, $module from $file"
+}
+
+{% for p in pkgs %}
+RESTORE=({% for f in p.restore %} {{ f | q }}{% endfor %} )
+CLEAN_PATHS=({% for c in p.clean_paths %} {{ c }}{% endfor %} )
+CLEAN_TREE=({% for c in p.clean_tree %} {{ c | q }}{% endfor %} )
+install_pkg {{ p.name }} {{ p.tree | q }} {{ p.repo | q }} {{ p.module }} {{ p.clean }} "${REV[{{ p.name }}]}"
+
+{% endfor %}
+say "stack ready"

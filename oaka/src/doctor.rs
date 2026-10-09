@@ -3,6 +3,7 @@
 
 use crate::compile::infx_root;
 use crate::profile::Library;
+use crate::stack;
 use crate::sys;
 use anyhow::{bail, Result};
 use std::os::unix::fs::PermissionsExt;
@@ -56,6 +57,7 @@ fn output(argv: &[&str], env: &[(&str, &str)]) -> Option<String> {
 pub fn run(lib: &Library) -> Result<()> {
     let mut r = Report::default();
     check_library(&mut r, lib);
+    check_stacks(&mut r, lib);
 
     match sys::gpus() {
         Some(g) if !g.is_empty() => {
@@ -152,5 +154,62 @@ fn check_library(r: &mut Report, lib: &Library) {
         r.ok("library", format!("{}: {} profiles", lib.root.display(), names.len()));
     } else {
         r.fail("library", broken.join("; "));
+    }
+}
+
+/// stacks.toml parses; per package: its repo is a git checkout here, and where its module
+/// imports from now (and what oaka last installed).
+fn check_stacks(r: &mut Report, lib: &Library) {
+    let path = stack::path(lib);
+    if !path.exists() {
+        return r.warn("stacks", format!("no {}: plans cannot use [stack]", path.display()));
+    }
+    let stacks = match stack::load(lib) {
+        Ok(s) => s,
+        Err(e) => return r.fail("stacks", format!("{e:#}")),
+    };
+    r.ok("stacks", format!("{}: {}", path.display(), stacks.names().join(" ")));
+    let state = match std::env::var("OAKA_STACK_STATE") {
+        Ok(s) if !s.is_empty() => Some(PathBuf::from(s)),
+        _ => output(
+            &[
+                "python3",
+                "-c",
+                "import sysconfig; print(sysconfig.get_paths()['purelib'])",
+            ],
+            &[],
+        )
+        .map(|sp| Path::new(&sp).join(".oaka-stack")),
+    };
+    for (name, p) in &stacks.packages {
+        let what = format!("stack {name}");
+        if output(&["git", "-C", &p.repo, "rev-parse", "--git-dir"], &[]).is_none() {
+            r.warn(
+                &what,
+                format!(
+                    "repo {} is not a git checkout here; plans need an existing tree",
+                    p.repo
+                ),
+            );
+            continue;
+        }
+        let find = format!(
+            "import importlib.util as u; s = u.find_spec({:?}); print(s.origin if s else '')",
+            p.module
+        );
+        let origin = output(&["python3", "-c", &find], &[]).unwrap_or_default();
+        let installed = state
+            .as_ref()
+            .and_then(|s| std::fs::read_to_string(s.join(name).join("installed")).ok())
+            .map(|l| format!("; oaka last installed {}", l.trim()))
+            .unwrap_or_default();
+        r.ok(
+            &what,
+            format!(
+                "{} imports from {}{installed}",
+                p.module,
+                if origin.is_empty() { "nowhere" } else { &origin }
+            ),
+        );
     }
 }

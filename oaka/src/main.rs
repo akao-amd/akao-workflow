@@ -3,6 +3,7 @@ mod doctor;
 mod draft;
 mod plan;
 mod profile;
+mod stack;
 mod sys;
 
 use anyhow::{bail, Context, Result};
@@ -40,6 +41,9 @@ enum Cmd {
         /// Client to add for every server: gsm8k or fixed-seq; repeatable
         #[arg(long = "client", value_name = "KIND")]
         clients: Vec<String>,
+        /// Package of the library's stacks.toml to install from a tree (sglang); repeatable
+        #[arg(long = "stack", value_name = "PACKAGE")]
+        stacks: Vec<String>,
         /// Overwrite an existing plan.toml
         #[arg(long)]
         force: bool,
@@ -105,6 +109,7 @@ fn run(cli: Cli) -> Result<()> {
             profiles,
             gpus,
             clients,
+            stacks,
             force,
         } => draft::run(
             &dir,
@@ -113,6 +118,7 @@ fn run(cli: Cli) -> Result<()> {
                 profiles,
                 gpus,
                 clients,
+                stacks,
                 force,
             },
         ),
@@ -152,6 +158,16 @@ fn describe(c: &plan::Checked) {
     }
     for (i, cl) in c.plan.clients.iter().enumerate() {
         println!("client {:02}: {} on {}", i + 1, cl.kind(), cl.server());
+    }
+    for p in &c.stack {
+        let what = match &c.vary {
+            plan::Vary::Commits { package, commits } if *package == p.name => {
+                format!("each of {}", commits.join(" "))
+            }
+            plan::Vary::Bisect { package, good, bad } if *package == p.name => format!("bisect good {good} bad {bad}"),
+            _ => p.commit.clone().unwrap_or_else(|| "the tree as it is".into()),
+        };
+        println!("stack {}: {what} in {}, clean {}", p.name, p.tree, p.clean.as_str());
     }
     for w in &c.warnings {
         println!("warning: {w}");

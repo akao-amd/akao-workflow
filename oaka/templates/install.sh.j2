@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# {{ marker }}
+# Install recipe of {{ name }}, from the library's {{ stacks }}{% if description %}:
+#   {{ description }}{% endif %}
+
+# scripts/stack.sh runs it inside the tree, with checkout, cleaning, restoring the files it
+# edits and verifying the result around it; by hand that is all yours:
+#   cd <tree> && TREE=$PWD SP=<site-packages> STATE=<dir> GPU_ARCH=<gfx...> bash {{ self_path }}
+set -euo pipefail
+: "${TREE:?}" "${SP:?}" "${STATE:?}" "${GPU_ARCH?}"
+cd "$TREE"
+
+{{ install }}

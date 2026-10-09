@@ -2,8 +2,9 @@
 //!
 //! The scripts never call oaka.  `oaka run` executes exactly these files.
 
-use crate::plan::{self, Checked, ClientSpec, OffSpec, Server, PROMPTS_PER_CONC};
+use crate::plan::{self, Checked, ClientSpec, OffSpec, Server, Vary, PROMPTS_PER_CONC};
 use crate::profile::Arg;
+use crate::stack;
 use crate::sys::{self, q};
 use anyhow::{Context, Result};
 use minijinja::{context, Environment, UndefinedBehavior};
@@ -28,6 +29,11 @@ fn templates() -> Result<Environment<'static>> {
     env.add_template("gsm8k.sh", include_str!("../templates/gsm8k.sh.j2"))?;
     env.add_template("fixed_seq.sh", include_str!("../templates/fixed_seq.sh.j2"))?;
     env.add_template("run_all.sh", include_str!("../templates/run_all.sh.j2"))?;
+    env.add_template("step.sh", include_str!("../templates/step.sh.j2"))?;
+    env.add_template("stack.sh", include_str!("../templates/stack.sh.j2"))?;
+    env.add_template("install.sh", include_str!("../templates/install.sh.j2"))?;
+    env.add_template("bisect_step.sh", include_str!("../templates/bisect_step.sh.j2"))?;
+    env.add_template("metrics.py", include_str!("../templates/metrics.py.j2"))?;
     Ok(env)
 }
 
@@ -156,7 +162,7 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
         let index = format!("{:02}", i + 1);
         let s = c.servers.iter().find(|s| s.name == cl.server()).unwrap();
         let file = format!("client_{index}_{}_{}.sh", cl.kind(), s.name);
-        let out = format!("results/{index}_{}_{}", cl.kind(), s.name);
+        let out = format!("{index}_{}_{}", cl.kind(), s.name);
         let common = context! {
             marker, index, server => s.name, port => port_of(&s.name), served => s.served_name(),
             out, self_path => format!("{SCRIPTS}/{file}"),
@@ -173,6 +179,7 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
                 range_ratio,
                 repeats,
                 off_spec,
+                min_output_tok_s,
                 ..
             } => {
                 let ppc = match off_spec {
@@ -189,7 +196,8 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
                 env.get_template("fixed_seq.sh")?.render(context! {
                     points, repeats, range_ratio, prompts_per_conc => ppc, offspec,
                     spec_prompts_per_conc => PROMPTS_PER_CONC, suffix => if offspec { "_OFFSPEC" } else { "" },
-                    tokenizer => s.model, infx => infx_root(), ..common
+                    tokenizer => s.model, infx => infx_root(), min_tok_s => min_output_tok_s.map(|m| m.to_string()),
+                    ..common
                 })?
             }
         };
@@ -198,9 +206,45 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
     }
 
     let servers: Vec<&str> = c.servers.iter().map(|s| s.name.as_str()).collect();
+    let text = env.get_template("step.sh")?.render(context! {
+        marker, self_path => format!("{SCRIPTS}/step.sh"), servers, clients,
+        ready_timeout_s => READY_TIMEOUT_S,
+    })?;
+    files.push(("step.sh".into(), text));
+
+    if !c.stack.is_empty() {
+        files.extend(stack_scripts(&env, c, &marker)?);
+    }
+    let (vary, package, revs, good, bad) = match &c.vary {
+        Vary::No => ("no", String::new(), Vec::new(), String::new(), String::new()),
+        Vary::Commits { package, commits } => (
+            "commits",
+            package.clone(),
+            commits.clone(),
+            String::new(),
+            String::new(),
+        ),
+        Vary::Bisect { package, good, bad } => ("bisect", package.clone(), Vec::new(), good.clone(), bad.clone()),
+    };
+    let tree = c
+        .stack
+        .iter()
+        .find(|p| p.name == package)
+        .map(|p| p.tree.clone())
+        .unwrap_or_default();
+    if vary != "no" {
+        files.push(("metrics.py".into(), metrics_script(&env, c, &marker)?));
+    }
+    if vary == "bisect" {
+        let text = env.get_template("bisect_step.sh")?.render(context! {
+            marker, self_path => format!("{SCRIPTS}/bisect_step.sh"), package, tree,
+        })?;
+        files.push(("bisect_step.sh".into(), text));
+    }
+    let aba = revs.len() == 3 && revs[0] == revs[2];
     let text = env.get_template("run_all.sh")?.render(context! {
         marker, self_path => format!("{SCRIPTS}/run_all.sh"), plan => dir.join(plan::PLAN).display().to_string(),
-        version => sys::VERSION, servers, clients, ready_timeout_s => READY_TIMEOUT_S,
+        version => sys::VERSION, stack => !c.stack.is_empty(), vary, package, tree, revs, aba, good, bad,
     })?;
     files.push(("run_all.sh".into(), text));
 
@@ -228,6 +272,59 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
         removed,
         notes,
     })
+}
+
+/// scripts/stack.sh and one scripts/install_<package>.sh per package of the plan's stack.
+fn stack_scripts(env: &Environment, c: &Checked, marker: &str) -> Result<Vec<(String, String)>> {
+    let stacks = c.stacks.path.display().to_string();
+    let mut files = Vec::new();
+    let mut pkgs = Vec::new();
+    for p in &c.stack {
+        let lib = c.stacks.get(&p.name).expect("checked against stacks.toml");
+        let file = format!("install_{}.sh", p.name);
+        let text = env.get_template("install.sh")?.render(context! {
+            marker, name => p.name, stacks, description => lib.description, install => lib.install.trim_end(),
+            self_path => format!("{SCRIPTS}/{file}"),
+        })?;
+        files.push((file, text));
+        let clean_paths = lib
+            .clean
+            .paths
+            .iter()
+            .map(|x| stack::clean_path(x))
+            .collect::<Result<Vec<_>>>()?;
+        pkgs.push(context! {
+            name => p.name, tree => p.tree, repo => lib.repo, module => lib.module, clean => p.clean.as_str(),
+            rev => p.commit.clone().unwrap_or_default(), restore => lib.restore, clean_paths,
+            clean_tree => lib.clean.tree,
+        });
+    }
+    let names: Vec<&str> = c.stack.iter().map(|p| p.name.as_str()).collect();
+    let text = env.get_template("stack.sh")?.render(context! {
+        marker, self_path => format!("{SCRIPTS}/stack.sh"), stacks, pkgs, names => names.join(", "),
+        gpu_arch => sys::arch().unwrap_or_default(),
+    })?;
+    files.push(("stack.sh".into(), text));
+    Ok(files)
+}
+
+/// scripts/metrics.py, which knows the plan's clients and points.
+fn metrics_script(env: &Environment, c: &Checked, marker: &str) -> Result<String> {
+    let mut clients = Vec::new();
+    for (i, cl) in c.plan.clients.iter().enumerate() {
+        let dir = format!("{:02}_{}_{}", i + 1, cl.kind(), cl.server());
+        let points: Vec<String> = match cl {
+            ClientSpec::Gsm8k { .. } => Vec::new(),
+            ClientSpec::FixedSeq { isl_osl, conc, .. } => isl_osl
+                .iter()
+                .flat_map(|[i, o]| conc.iter().map(move |c| format!("({i}, {o}, {c})")))
+                .collect(),
+        };
+        clients.push(format!("({dir:?}, {:?}, [{}])", cl.kind(), points.join(", ")));
+    }
+    Ok(env.get_template("metrics.py")?.render(context! {
+        marker, self_path => format!("{SCRIPTS}/metrics.py"), clients,
+    })?)
 }
 
 fn generated(path: &Path) -> bool {
@@ -292,7 +389,7 @@ off_spec = { prompts_per_conc = 4 }
 
         let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, None).unwrap();
         let out = compile(&checked).unwrap();
-        assert_eq!(out.written.len(), 4);
+        assert_eq!(out.written.len(), 5);
         assert_eq!(out.removed, vec![work.join("scripts/server_old.sh")]);
         assert!(work.join("scripts/mine.sh").exists());
 
@@ -313,9 +410,11 @@ off_spec = { prompts_per_conc = 4 }
         assert!(fixed.contains("--model mm "));
         assert!(fixed.contains("--tokenizer /model/m "));
         assert!(read("client_01_gsm8k_a.sh").contains("    --thinking \\\n"));
-        let run_all = read("run_all.sh");
-        assert!(run_all.contains("start_server a\n"));
-        assert!(run_all.contains("bash \"$HERE/client_02_fixed-seq_a.sh\""));
+        let step = read("step.sh");
+        assert!(step.contains("start_server a\n"));
+        assert!(step.contains("run_client client_02_fixed-seq_a.sh\n"));
+        assert!(read("run_all.sh").contains("bash \"$HERE/step.sh\"\n"));
+        assert!(!work.join("scripts/stack.sh").exists());
 
         for f in &out.written {
             let st = std::process::Command::new("bash").arg("-n").arg(f).status().unwrap();
@@ -328,6 +427,96 @@ off_spec = { prompts_per_conc = 4 }
         let p1 = plan::load_lock(&work).unwrap().port["a"];
         compile(&checked).unwrap();
         assert_eq!(plan::load_lock(&work).unwrap().port["a"], p1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stack_plans_compile_to_scripts_that_parse() {
+        let root = std::env::temp_dir().join(format!(
+            "oaka-compile-stack-{}-{}",
+            std::process::id(),
+            fastrand::u32(..)
+        ));
+        let lib = Library { root: root.join("lib") };
+        let work = root.join("work");
+        fs::create_dir_all(lib.profiles_dir().join("m")).unwrap();
+        fs::create_dir_all(work.join("tree")).unwrap();
+        fs::write(lib.profile_path("m/base"), "model = '/model/m'\n").unwrap();
+        fs::write(
+            lib.root.join("stacks.toml"),
+            "[pkg]\nrepo = '/r'\nmodule = 'pkg'\nrestore = ['a.toml']\n\
+             install = '''\nif true; then echo \"{# not jinja #}\"; fi\n'''\n\
+             [pkg.clean]\npaths = ['~/.cache/pkg/jit', '/opt/x/*.egg']\ntree = ['**/__pycache__']\n",
+        )
+        .unwrap();
+        let base = "[[server]]\nname = 'a'\nprofile = 'm'\ngpus = [0]\nport = 29950\n\
+                    [[client]]\nkind = 'fixed-seq'\nserver = 'a'\nisl_osl = [[128, 32]]\nconc = [1, 2]\n\
+                    min_output_tok_s = 75\n";
+        let tree = work.join("tree").display().to_string();
+        let compile_plan = |stack: &str| {
+            fs::write(
+                work.join(plan::PLAN),
+                format!("{base}[stack.pkg]\ntree = '{tree}'\n{stack}\n"),
+            )
+            .unwrap();
+            let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, None).unwrap();
+            let out = compile(&checked).unwrap();
+            for f in out.written.iter().filter(|f| f.extension().is_some_and(|e| e == "sh")) {
+                let st = std::process::Command::new("bash").arg("-n").arg(f).status().unwrap();
+                assert!(st.success(), "bash -n {}", f.display());
+            }
+            out
+        };
+        let read = |f: &str| fs::read_to_string(work.join(SCRIPTS).join(f)).unwrap();
+
+        compile_plan("commits = ['v1', 'v2', 'v1']");
+        let stack = read("stack.sh");
+        assert!(
+            stack.contains("    [pkg]=''\n"),
+            "the varying package defaults to the tree as it is"
+        );
+        assert!(
+            stack.contains("CLEAN_PATHS=( \"$HOME/.cache/pkg/jit\" \"/opt/x/*.egg\" )"),
+            "{stack}"
+        );
+        assert!(stack.contains("RESTORE=( a.toml )"), "{stack}");
+        assert!(
+            stack.contains(&format!("install_pkg pkg {tree} /r pkg never \"${{REV[pkg]}}\"")),
+            "{stack}"
+        );
+        assert!(read("install_pkg.sh").contains("echo \"{# not jinja #}\""));
+        let run_all = read("run_all.sh");
+        assert!(run_all.contains("REVS=( v1 v2 v1 )"), "{run_all}");
+        assert!(run_all.contains("A2/A1"), "A-B-A is recognised: {run_all}");
+        assert!(read("metrics.py").contains("(\"01_fixed-seq_a\", \"fixed-seq\", [(128, 32, 1), (128, 32, 2)]),"));
+        assert!(read("client_01_fixed-seq_a.sh").contains("python3 - \"$OUT\" 75 "));
+        let py = std::process::Command::new("python3")
+            .args(["-c", "import ast, sys; ast.parse(open(sys.argv[1]).read())"])
+            .arg(work.join("scripts/metrics.py"))
+            .status()
+            .unwrap();
+        assert!(py.success());
+
+        let out = compile_plan("bisect = { good = 'v1', bad = 'v2' }");
+        assert!(
+            read("stack.sh").contains(" before-install \"${REV[pkg]}\""),
+            "bisect cleans by default"
+        );
+        assert!(read("run_all.sh").contains("bisect start v2 v1"));
+        assert!(read("bisect_step.sh").contains("bash \"$HERE/stack.sh\" \"pkg=.\""));
+        assert!(out.removed.is_empty(), "{:?}", out.removed);
+
+        // Back to a plain plan: every stack script goes.
+        fs::write(work.join(plan::PLAN), base).unwrap();
+        let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, None).unwrap();
+        let mut removed: Vec<String> = compile(&checked)
+            .unwrap()
+            .removed
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        removed.sort();
+        assert_eq!(removed, ["bisect_step.sh", "install_pkg.sh", "metrics.py", "stack.sh"]);
         fs::remove_dir_all(root).unwrap();
     }
 }

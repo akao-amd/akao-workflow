@@ -10,7 +10,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORKDIR="$(dirname "$HERE")"
 PORT={{ port }}
-OUT="$WORKDIR/{{ out }}"
+OUT="${RESULTS:-$WORKDIR/results}/{{ out }}"
 say() { echo "[client {{ index }} gsm8k {{ server }}] $*"; }
 
 if ! (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; then

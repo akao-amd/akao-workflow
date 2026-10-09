@@ -6,6 +6,9 @@
 # warmups, --ignore-eos, request rate and percentiles are not set here and must not be.
 # This script only chooses the points: ISL/OSL, concurrency, range ratio {{ range_ratio }},
 # {{ prompts_per_conc }} prompts per unit of concurrency{% if offspec %} (OFF-SPEC: InferenceX uses {{ spec_prompts_per_conc }}){% endif %}.
+{% if min_tok_s %}
+# Gate: exits 3 when a point's median output tok/s over its runs is below {{ min_tok_s }}.
+{% endif %}
 #
 # Needs the server running (scripts/server_{{ server }}.sh).
 #   bash {{ self_path }}
@@ -15,7 +18,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 WORKDIR="$(dirname "$HERE")"
 PORT={{ port }}
 INFX={{ infx | q }}
-OUT="$WORKDIR/{{ out }}"
+OUT="${RESULTS:-$WORKDIR/results}/{{ out }}"
 say() { echo "[client {{ index }} fixed-seq {{ server }}] $*"; }
 
 if ! (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; then
@@ -65,9 +68,9 @@ for point in "${POINTS[@]}"; do
 done
 
 # One row per point of this run, also kept as summary.csv.
-python3 - "$OUT" "${DONE[@]}" <<'PY'
-import csv, json, os, re, sys
-out, names = sys.argv[1], sys.argv[2:]
+python3 - "$OUT" {{ min_tok_s or "-" }} "${DONE[@]}" <<'PY'
+import csv, json, os, re, statistics, sys
+out, floor, names = sys.argv[1], sys.argv[2], sys.argv[3:]
 cols = ["file", "isl", "osl", "conc", "output_tok_s", "total_tok_s", "mean_ttft_ms", "mean_tpot_ms", "completed"]
 rows = []
 for name in names:
@@ -87,4 +90,15 @@ fmt = lambda v, p: f"{v:.{p}f}" if isinstance(v, (int, float)) else "NA"
 for row in rows:
     print(f"{row[0]:<44} {row[3]!s:>5} {fmt(row[4], 1):>10} {fmt(row[6], 1):>9} {fmt(row[7], 2):>8}")
 print(f"summary: {os.path.join(out, 'summary.csv')}")
+if floor != "-":
+    points = {}
+    for row in rows:
+        points.setdefault(tuple(row[1:4]), []).append(row[4] if isinstance(row[4], (int, float)) else 0.0)
+    low = 0
+    for (isl, osl, conc), vals in points.items():
+        med = statistics.median(vals)
+        ok = med >= float(floor)
+        low += not ok
+        print(f"[fixed-seq] isl={isl} osl={osl} conc={conc} median {med:.1f} tok/s (min {floor}) {'PASS' if ok else 'FAIL'}")
+    sys.exit(3 if low else 0)
 PY

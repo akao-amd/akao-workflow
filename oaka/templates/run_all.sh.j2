@@ -1,81 +1,116 @@
 #!/usr/bin/env bash
 # {{ marker }}
-# The whole plan: start every server, wait until each is ready, run the clients in plan
-# order, then stop the servers (also on failure or Ctrl-C).  Each step is its own script
-# and can be run by hand instead.
+{% if vary == "no" %}
+# The whole plan: {% if stack %}install the stack (scripts/stack.sh), then {% endif %}one
+# measurement (scripts/step.sh: servers up, clients in order, servers down).
+{% elif vary == "commits" %}
+# The whole plan once per {{ package }} revision, in order: install it (scripts/stack.sh
+# {{ package }}=<rev>), then measure (scripts/step.sh <n>_<sha>).  A step that fails is
+# recorded and the next one still runs.  Then results/compare.csv puts the steps side by
+# side{% if aba %}, with the A-B-A ratios: B/A1 (the effect) and A2/A1 (must return to 1:
+# a cache or state that survived the swap shows up here){% endif %}.
+{% else %}
+# Bisect {{ package }} over good {{ good }} .. bad {{ bad }} in {{ tree }}: git bisect run
+# calls scripts/bisect_step.sh at every commit it picks (install, measure, the plan's gates
+# decide good/bad; a commit that cannot be installed or served is skipped).  Every
+# commit's numbers go to results/bisect/bisect.csv, git's log to results/bisect/bisect.log.
+{% endif %}
 #   bash {{ self_path }}
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORKDIR="$(dirname "$HERE")"
-LOGS="$WORKDIR/logs"
-mkdir -p "$LOGS"
-# tee ignores Ctrl-C: it must outlive this script's cleanup, or the cleanup dies of SIGPIPE.
-exec > >(trap '' INT TERM; exec tee -a "$LOGS/run_all.log") 2>&1
+mkdir -p "$WORKDIR/logs"
+# tee ignores Ctrl-C: it must outlive the cleanup, or the cleanup dies of SIGPIPE.
+exec > >(trap '' INT TERM; exec tee -a "$WORKDIR/logs/run_all.log") 2>&1
 say() { echo "[run_all $(date +%H:%M:%S)] $*"; }
-
-READY_MARK="The server is fired up and ready"
-CRASH_MARKS="Received sigquit from a child process|Scheduler hit an exception|Capture cuda graph failed"
-READY_TIMEOUT_S={{ ready_timeout_s }}
-
-PIDS=()
-stop_servers() {
-    [ -z "${PIDS[*]:-}" ] && return
-    trap '' INT TERM PIPE   # a second Ctrl-C must not cut the cleanup short
-    say "stopping servers"
-    # TERM the server process only: sglang tears down its own workers, while a TERM to
-    # the whole group reaches the scheduler first and reads as a crash.  KILL the group
-    # only if something is still alive after the grace period.
-    for pid in "${PIDS[@]}"; do kill -TERM "$pid" 2>/dev/null; done
-    for _ in $(seq 1 60); do
-        alive=0
-        for pid in "${PIDS[@]}"; do kill -0 -- "-$pid" 2>/dev/null && alive=1; done
-        [ $alive -eq 0 ] && break
-        sleep 1
-    done
-    for pid in "${PIDS[@]}"; do kill -KILL -- "-$pid" 2>/dev/null; done
-    PIDS=()
-}
-trap stop_servers EXIT
 trap 'exit 130' INT TERM
 
-# start_server <name>: own process group, so stopping it also stops its workers.
-start_server() {
-    : >"$LOGS/server_$1.log"
-    setsid bash "$HERE/server_$1.sh" >"$LOGS/server_$1.log" 2>&1 &
-    PIDS+=($!)
-    disown
-    say "server $1 started (pid $!), log logs/server_$1.log"
-}
-
-# wait_ready <name> <pid>
-wait_ready() {
-    local log="$LOGS/server_$1.log" deadline=$(( $(date +%s) + READY_TIMEOUT_S ))
-    while true; do
-        grep -q "$READY_MARK" "$log" && { say "server $1 ready"; return 0; }
-        if grep -qE "$CRASH_MARKS" "$log" || ! kill -0 "$2" 2>/dev/null; then
-            say "server $1 died during startup; last lines of logs/server_$1.log:"
-            tail -30 "$log"
-            return 1
-        fi
-        if [ "$(date +%s)" -ge $deadline ]; then
-            say "server $1 not ready after ${READY_TIMEOUT_S}s"
-            return 1
-        fi
-        sleep 2
-    done
-}
-
 say "plan {{ plan }}  (compiled by oaka {{ version }})"
-{% for s in servers %}
-start_server {{ s }}
-{% endfor %}
-{% for s in servers %}
-wait_ready {{ s }} "${PIDS[{{ loop.index0 }}]}" || exit 1
-{% endfor %}
-
-{% for c in clients %}
-say "client {{ c }}"
-bash "$HERE/{{ c }}" || { say "client {{ c }} failed (exit $?); stopping"; exit 1; }
-{% endfor %}
+{% if vary == "no" %}
+{% if stack %}
+bash "$HERE/stack.sh" || { say "stack install failed; nothing measured"; exit 2; }
+{% endif %}
+bash "$HERE/step.sh"
+RC=$?
+[ $RC -eq 0 ] && say "done" || say "failed (exit $RC)"
+exit $RC
+{% elif vary == "commits" %}
+TREE={{ tree | q }}
+REVS=({% for r in revs %} {{ r | q }}{% endfor %} )
+LABELS=()
+STATUS=()
+n=0
+for rev in "${REVS[@]}"; do
+    n=$((n + 1))
+    say "step $n/{{ revs | length }}: {{ package }} $rev"
+    bash "$HERE/stack.sh" "{{ package }}=$rev"
+    rc=$?
+    [ $rc -eq 130 ] && exit 130
+    if [ $rc -eq 0 ]; then
+        label="${n}_$(git -C "$TREE" rev-parse --short HEAD)"
+        bash "$HERE/step.sh" "$label"
+        rc=$?
+        [ $rc -eq 130 ] && exit 130
+        case $rc in 0) status=ok ;; 3) status=gate-failed ;; *) status=failed ;; esac
+    else
+        label="${n}_not-installed"
+        status=stack-failed
+    fi
+    say "step $n ($label): $status"
+    LABELS+=("$label")
+    STATUS+=("$status")
+done
+python3 "$HERE/metrics.py" compare "$WORKDIR/results" "{{ package }}" {{ "aba" if aba else "list" }} \
+    "${REVS[@]}" -- "${LABELS[@]}" -- "${STATUS[@]}" \
+    || { say "cannot compare the steps (metrics.py failed); per-step results are in results/"; exit 1; }
+for s in "${STATUS[@]}"; do
+    [ "$s" = ok ] || { say "done; not every step succeeded"; exit 1; }
+done
 say "done"
+{% else %}
+TREE={{ tree | q }}
+OUT="$WORKDIR/results/bisect"
+if git -C "$TREE" bisect log >/dev/null 2>&1; then
+    say "a bisect is already in progress in $TREE; finish it, or: git -C $TREE bisect reset"
+    exit 1
+fi
+# Install the bad end first: proves the tree, the recipe and the venv work before hours of
+# bisecting, and creates the tree when it does not exist yet.
+bash "$HERE/stack.sh" {{ (package ~ "=" ~ bad) | q }} || { say "cannot install the bad end {{ bad }}; not bisecting"; exit 2; }
+mkdir -p "$OUT"
+INTERRUPTED=0
+finish() {
+    trap '' INT TERM
+    git -C "$TREE" bisect log >"$OUT/bisect.log" 2>/dev/null
+    git -C "$TREE" bisect reset >/dev/null 2>&1
+    # git moved the tree under the editable install: make the venv match the tree again
+    # (but not after Ctrl-C, which asked to stop now).
+    local now
+    now="$(git -C "$TREE" rev-parse --short HEAD)"
+    if [ $INTERRUPTED -eq 1 ]; then
+        say "interrupted; the tree is back at $now but the venv holds the last step's install:"
+        say "  bash scripts/stack.sh {{ package }}=.    # makes them agree"
+        return
+    fi
+    say "reinstalling {{ package }} as the tree is now ($now)"
+    bash "$HERE/stack.sh" "{{ package }}=." || say "reinstall failed; run: bash scripts/stack.sh {{ package }}=."
+}
+trap finish EXIT
+trap 'INTERRUPTED=1; exit 130' INT TERM
+git -C "$TREE" bisect start {{ bad | q }} {{ good | q }} || exit 1
+git -C "$TREE" bisect run bash "$HERE/bisect_step.sh"
+RC=$?
+git -C "$TREE" bisect log >"$OUT/bisect.log"
+if grep -q '^# first bad commit:' "$OUT/bisect.log"; then
+    say "$(grep '^# first bad commit:' "$OUT/bisect.log")"
+    say "confirm it: measure its parent and it directly, e.g. commits = [\"<culprit>^\", \"<culprit>\", \"<culprit>^\"]"
+    RC=0
+else
+    say "no single first bad commit (skipped commits around it?); see results/bisect/bisect.log and bisect.csv"
+    grep '^# possible first bad commit:' "$OUT/bisect.log" | sed 's/^/    /'
+    RC=1
+fi
+say "per-commit numbers: results/bisect/bisect.csv"
+exit $RC
+{% endif %}

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# {{ marker }}
+# One bisect step, for `git bisect run` (scripts/run_all.sh drives it): install the
+# {{ package }} commit git checked out in {{ tree }}, measure it with scripts/step.sh, and
+# answer with git bisect's exit codes:
+#   0 good: every gate passed      1 bad: a gate failed (score or throughput too low)
+#   125 skip: could not install, serve or measure (not a verdict)
+#   130 Ctrl-C, 128 its numbers could not be recorded: git aborts the bisect
+# Every commit's numbers, not only the verdict, go to results/bisect/bisect.csv: a bimodal
+# column means one step regressed; values spread in between mean bisect answers the
+# wrong question.
+#   git -C {{ tree }} bisect run bash {{ self_path }}
+set -uo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+WORKDIR="$(dirname "$HERE")"
+TREE={{ tree | q }}
+cd "$WORKDIR"   # git runs this inside the tree; keep everything else out of it
+COMMIT="$(git -C "$TREE" rev-parse HEAD)"
+SHORT="$(git -C "$TREE" rev-parse --short HEAD)"
+SUBJECT="$(git -C "$TREE" log -1 --format=%s)"
+say() { echo "[bisect $SHORT $(date +%H:%M:%S)] $*"; }
+say "=== $SUBJECT"
+
+bash "$HERE/stack.sh" "{{ package }}=."
+rc=$?
+if [ $rc -eq 0 ]; then
+    bash "$HERE/step.sh" "bisect/$SHORT"
+    rc=$?
+    note=step
+else
+    note=install
+fi
+case $rc in
+    0) verdict=good; code=0 ;;
+    3) verdict=bad; code=1 ;;
+    130) say "interrupted; aborting the bisect"; exit 130 ;;
+    *) verdict=skip; code=125; note="${note}_failed" ;;
+esac
+[ $code -ne 125 ] && note=ok
+# Without the numbers the bisect is not worth its hours: stop it (an exit above 127 aborts).
+python3 "$HERE/metrics.py" record "$WORKDIR/results/bisect" "$SHORT" "$COMMIT" "$verdict" "$note" "$SUBJECT" \
+    || { say "cannot record this commit's numbers (metrics.py failed); aborting the bisect"; exit 128; }
+say "$verdict"
+exit $code

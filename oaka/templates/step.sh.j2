@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# {{ marker }}
+# One measurement with whatever stack is installed: start every server, wait until each
+# is ready, run the clients in plan order, then stop the servers (also on failure or
+# Ctrl-C).  Each part is its own script and can be run by hand instead.
+#   bash {{ self_path }} [<label>]     # logs/<label>/ and results/<label>/ (emptied first);
+#                                      # no label: logs/ and results/, overwriting same-named points
+# Exits 0, 3 when a client's gate failed (score or throughput below its minimum), 1 for
+# anything else (a server that did not come up, a client that broke).
+set -uo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+WORKDIR="$(dirname "$HERE")"
+LABEL="${1:-}"
+case "$LABEL" in
+    /* | *..* | *[!A-Za-z0-9_./-]*) echo "step.sh: label $LABEL must be a relative name like 1_abc123 or bisect/abc123" >&2; exit 1 ;;
+esac
+LOGS="$WORKDIR/logs${LABEL:+/$LABEL}"
+export RESULTS="$WORKDIR/results${LABEL:+/$LABEL}"
+# A labeled step is a fresh measurement: no numbers from an earlier run of it may remain.
+[ -n "$LABEL" ] && rm -rf "$RESULTS"
+mkdir -p "$LOGS"
+say() { echo "[step${LABEL:+ $LABEL} $(date +%H:%M:%S)] $*"; }
+
+READY_MARK="The server is fired up and ready"
+CRASH_MARKS="Received sigquit from a child process|Scheduler hit an exception|Capture cuda graph failed"
+READY_TIMEOUT_S={{ ready_timeout_s }}
+
+PIDS=()
+stop_servers() {
+    [ -z "${PIDS[*]:-}" ] && return
+    trap '' INT TERM PIPE   # a second Ctrl-C must not cut the cleanup short
+    say "stopping servers"
+    # TERM the server process only: sglang tears down its own workers, while a TERM to
+    # the whole group reaches the scheduler first and reads as a crash.  KILL the group
+    # only if something is still alive after the grace period.
+    for pid in "${PIDS[@]}"; do kill -TERM "$pid" 2>/dev/null; done
+    for _ in $(seq 1 60); do
+        alive=0
+        for pid in "${PIDS[@]}"; do kill -0 -- "-$pid" 2>/dev/null && alive=1; done
+        [ $alive -eq 0 ] && break
+        sleep 1
+    done
+    for pid in "${PIDS[@]}"; do kill -KILL -- "-$pid" 2>/dev/null; done
+    PIDS=()
+}
+trap stop_servers EXIT
+trap 'exit 130' INT TERM
+
+# start_server <name>: own process group, so stopping it also stops its workers.
+start_server() {
+    : >"$LOGS/server_$1.log"
+    setsid bash "$HERE/server_$1.sh" >"$LOGS/server_$1.log" 2>&1 &
+    PIDS+=($!)
+    disown
+    say "server $1 started (pid $!), log ${LOGS#"$WORKDIR"/}/server_$1.log"
+}
+
+# wait_ready <name> <pid>
+wait_ready() {
+    local log="$LOGS/server_$1.log" deadline=$(( $(date +%s) + READY_TIMEOUT_S ))
+    while true; do
+        grep -q "$READY_MARK" "$log" && { say "server $1 ready"; return 0; }
+        if grep -qE "$CRASH_MARKS" "$log" || ! kill -0 "$2" 2>/dev/null; then
+            say "server $1 died during startup; last lines of ${log#"$WORKDIR"/}:"
+            tail -30 "$log"
+            return 1
+        fi
+        if [ "$(date +%s)" -ge $deadline ]; then
+            say "server $1 not ready after ${READY_TIMEOUT_S}s"
+            return 1
+        fi
+        sleep 1
+    done
+}
+
+# run_client <script>: a gate failure (exit 3) stays 3, anything else becomes 1.
+run_client() {
+    say "client $1"
+    bash "$HERE/$1"
+    local rc=$?
+    case $rc in
+        0) return 0 ;;
+        3) say "client $1: gate failed; stopping" ;;
+        130) exit 130 ;;
+        *) say "client $1 failed (exit $rc); stopping"; rc=1 ;;
+    esac
+    exit $rc
+}
+
+{% for s in servers %}
+start_server {{ s }}
+{% endfor %}
+{% for s in servers %}
+wait_ready {{ s }} "${PIDS[{{ loop.index0 }}]}" || exit 1
+{% endfor %}
+
+{% for c in clients %}
+run_client {{ c }}
+{% endfor %}
+say "done"

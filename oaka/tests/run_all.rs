@@ -8,7 +8,21 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
+
+/// scripts/stack.sh refuses to swap the stack while any sglang server runs in the
+/// container, which includes the stand-in servers of tests running in parallel.  Tests
+/// that start servers share this lock; tests that install a stack hold it alone.
+static SERVERS: RwLock<()> = RwLock::new(());
+
+fn servers_shared() -> RwLockReadGuard<'static, ()> {
+    SERVERS.read().unwrap_or_else(|e| e.into_inner())
+}
+
+fn servers_exclusive() -> RwLockWriteGuard<'static, ()> {
+    SERVERS.write().unwrap_or_else(|e| e.into_inner())
+}
 
 /// `python3 -m sglang.launch_server`: listens on --port, prints sglang's ready line, keeps
 /// a child process like sglang's scheduler, and stops both on SIGTERM.
@@ -39,13 +53,19 @@ while True:
 "#;
 
 /// `python3 -m infx.bench fixed-seq point --k v ...`: writes a result JSON that echoes argv.
+/// Output tok/s is conc times the installed stand-in package's SPEED (100 without one).
 const FAKE_INFX: &str = r#"
 import json, sys
+try:
+    import fakepkg
+    speed = float(fakepkg.SPEED)
+except ImportError:
+    speed = 100.0
 a = sys.argv[1:]
 assert a[:2] == ["fixed-seq", "point"], a
 o = {a[i][2:]: a[i + 1] for i in range(2, len(a), 2)}
 c = int(o["conc"])
-json.dump({"output_throughput": 100.0 * c, "total_token_throughput": 200.0 * c, "mean_ttft_ms": 10.0,
+json.dump({"output_throughput": speed * c, "total_token_throughput": 200.0 * c, "mean_ttft_ms": 10.0,
            "mean_tpot_ms": 1.0, "completed": int(o["num-prompts"]), "argv": a}, open(o["result"], "w"))
 "#;
 
@@ -117,6 +137,7 @@ impl Sandbox {
             .env("PYTHONPATH", self.root.join("py"))
             .env("PATH", path)
             .env("FAKE_STATE", self.root.join("state"))
+            .env("OAKA_STACK_STATE", self.root.join("stack-state"))
             .stdin(Stdio::null());
         c
     }
@@ -131,6 +152,10 @@ impl Sandbox {
             String::from_utf8_lossy(&out.stderr)
         );
         (out.status.code().unwrap_or(-1), text)
+    }
+
+    fn read_tree(&self, rel: &str) -> String {
+        fs::read_to_string(self.tree().join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
     }
 
     fn read(&self, rel: &str) -> String {
@@ -152,6 +177,111 @@ impl Sandbox {
             .filter(|e| e.file_name().to_string_lossy().starts_with("server_"))
             .map(|e| fs::read_to_string(e.path()).unwrap())
             .collect()
+    }
+}
+
+/// The stand-in package's recipe: fails where BROKEN exists, edits setup.cfg in place
+/// (stack.sh restores it), links the tree's fakepkg into the sandbox's PYTHONPATH and logs
+/// each install to state/installs.
+const FAKE_RECIPE: &str = r#"
+if [ -e BROKEN ]; then echo "fakepkg: does not build here" >&2; exit 1; fi
+echo "built for $GPU_ARCH" >>setup.cfg
+ln -sfn "$TREE/fakepkg" "@ROOT@/py/fakepkg"
+echo "$(git rev-parse --short HEAD)" >>"@ROOT@/state/installs"
+"#;
+
+impl Sandbox {
+    /// A git repo `repo/` of the stand-in package fakepkg, one commit per entry of
+    /// `speeds` (fakepkg.SPEED), with a BROKEN file in the commits whose indices are in
+    /// `broken`, and the library's stacks.toml describing it.  Short shas, oldest first.
+    fn fake_repo(&self, speeds: &[u32], broken: &[usize]) -> Vec<String> {
+        let repo = self.root.join("repo");
+        let git = |args: &[&str]| {
+            let out = Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "init.defaultBranch=main",
+                ])
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        fs::create_dir_all(repo.join("fakepkg")).unwrap();
+        git(&["init", "-q"]);
+        fs::write(repo.join(".gitignore"), "__pycache__/\n").unwrap();
+        fs::write(repo.join("setup.cfg"), "[fakepkg]\n").unwrap();
+        let mut shas = Vec::new();
+        for (i, speed) in speeds.iter().enumerate() {
+            fs::write(repo.join("fakepkg/__init__.py"), format!("SPEED = {speed}\n")).unwrap();
+            if broken.contains(&i) {
+                fs::write(repo.join("BROKEN"), "").unwrap();
+            } else {
+                let _ = fs::remove_file(repo.join("BROKEN"));
+            }
+            git(&["add", "-A"]);
+            git(&["commit", "-q", "--allow-empty", "-m", &format!("c{i} speed {speed}")]);
+            shas.push(git(&["rev-parse", "--short", "HEAD"]));
+        }
+        let root = self.root.display().to_string();
+        fs::write(
+            self.root.join("lib/stacks.toml"),
+            format!(
+                "[fakepkg]\ndescription = 'stand-in'\nrepo = '{}'\nmodule = 'fakepkg'\nrestore = ['setup.cfg']\n\
+                 install = '''{}'''\n[fakepkg.clean]\npaths = ['{root}/cache/jit']\ntree = ['**/__pycache__']\n",
+                repo.display(),
+                FAKE_RECIPE.replace("@ROOT@", &root)
+            ),
+        )
+        .unwrap();
+        shas
+    }
+
+    fn tree(&self) -> PathBuf {
+        self.root.join("tree")
+    }
+
+    /// `git -C tree <args>`: success and stdout.
+    fn git_tree(&self, args: &[&str]) -> (bool, String) {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(self.tree())
+            .args(args)
+            .output()
+            .unwrap();
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        )
+    }
+
+    /// Short shas the recipe installed, in order.
+    fn installs(&self) -> Vec<String> {
+        fs::read_to_string(self.root.join("state/installs"))
+            .unwrap_or_default()
+            .lines()
+            .map(String::from)
+            .collect()
+    }
+
+    /// One server, one fixed-seq point at conc 1 (so tok/s = SPEED), and `[stack.fakepkg]`.
+    fn stack_plan(&self, client_extra: &str, stack_extra: &str) -> String {
+        format!(
+            "{}[[client]]\nkind = 'fixed-seq'\nserver = 'a'\nisl_osl = [[128, 32]]\nconc = [1]\n{client_extra}\n\
+             [stack.fakepkg]\ntree = '{}'\n{stack_extra}\n",
+            server("a", 0, ""),
+            self.tree().display()
+        )
     }
 }
 
@@ -192,6 +322,7 @@ const FIXED_SEQ: &str = "[[client]]\nkind = 'fixed-seq'\nserver = 'b'\nisl_osl =
 
 #[test]
 fn full_plan_runs_and_cleans_up() {
+    let _servers = servers_shared();
     let sb = Sandbox::new("full");
     // Server a has no port, so compile picks one and keeps it in plan.lock.toml.
     let a = "[[server]]\nname = 'a'\nprofile = 'm/base'\ngpus = [0]\n";
@@ -238,6 +369,7 @@ fn full_plan_runs_and_cleans_up() {
 
 #[test]
 fn server_crash_at_startup_stops_the_run() {
+    let _servers = servers_shared();
     let sb = Sandbox::new("crash");
     let plan = format!("{}{}", server("a", 0, "[server.args]\ncrash = true"), GSM8K);
     let (code, out) = sb.run(&plan, &[]);
@@ -249,10 +381,11 @@ fn server_crash_at_startup_stops_the_run() {
 
 #[test]
 fn failed_gsm8k_gate_stops_the_run() {
+    let _servers = servers_shared();
     let sb = Sandbox::new("gate");
     let plan = format!("{}{}{GSM8K}{}", server("a", 0, ""), server("b", 1, ""), FIXED_SEQ);
     let (code, out) = sb.run(&plan, &[("FAKE_GSM8K_SCORE", "0.5")]);
-    assert_eq!(code, 1, "{out}");
+    assert_eq!(code, 3, "a failed gate exits 3: {out}");
     assert!(out.contains("score 0.5 (min 0.90) FAIL"), "{out}");
     assert!(
         !sb.work().join("results/02_fixed-seq_b").exists(),
@@ -263,6 +396,7 @@ fn failed_gsm8k_gate_stops_the_run() {
 
 #[test]
 fn ctrl_c_during_startup_stops_servers() {
+    let _servers = servers_shared();
     use std::os::unix::process::CommandExt;
     let sb = Sandbox::new("int");
     fs::write(sb.work().join("plan.toml"), format!("{}{}", server("a", 0, ""), GSM8K)).unwrap();
@@ -319,6 +453,18 @@ fn doctor_reports_missing_prerequisites() {
     ] {
         assert!(text.contains(want), "{want:?} not in {text}");
     }
+    assert!(text.contains("warn  stacks      no "), "{text}");
+    // With a stacks.toml: each package's repo and where its module imports from.
+    sb.fake_repo(&[100], &[]);
+    let text = String::from_utf8_lossy(&sb.oaka(&["doctor"]).output().unwrap().stdout).into_owned();
+    assert!(
+        text.contains("ok    stacks      ") && text.contains("stack fakepkg fakepkg imports from nowhere"),
+        "{text}"
+    );
+    fs::write(sb.root.join("lib/stacks.toml"), "[x]\nrepo = 'relative'\n").unwrap();
+    let text = String::from_utf8_lossy(&sb.oaka(&["doctor"]).output().unwrap().stdout).into_owned();
+    assert!(text.contains("FAIL  stacks"), "{text}");
+    fs::remove_file(sb.root.join("lib/stacks.toml")).unwrap();
     // The stand-in sglang is the one found, so the check really looks at PYTHONPATH.
     assert!(
         text.contains(&format!("ok    sglang      {}", sb.root.join("py/sglang").display())),
@@ -332,4 +478,184 @@ fn doctor_reports_missing_prerequisites() {
     assert!(text.contains("FAIL  inferencex"), "{text}");
     assert!(text.contains("FAIL  gpus"), "{text}");
     assert!(String::from_utf8_lossy(&out.stderr).contains("2 check(s) failed"));
+}
+
+#[test]
+fn stack_installs_a_commit_verifies_and_cleans() {
+    let _servers = servers_exclusive();
+    let sb = Sandbox::new("stack");
+    let shas = sb.fake_repo(&[100, 200], &[]);
+    let plan = sb.stack_plan("", &format!("commit = '{}'\nclean = 'before-install'", shas[0]));
+
+    // First run creates the tree as a worktree of the repo at the commit.
+    let (code, out) = sb.run(&plan, &[]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(sb.installs(), [shas[0].clone()]);
+    assert!(out.contains("[stack") && out.contains("fakepkg ok:"), "{out}");
+    assert!(sb.read("results/01_fixed-seq_a/summary.csv").contains(",100.0,"));
+    // The recipe's in-place edit was put back.
+    assert_eq!(sb.git_tree(&["status", "--porcelain", "--untracked-files=no"]).1, "");
+
+    // Caches and ignored build products go before an install; user files stay.
+    let pycache = sb.tree().join("fakepkg/__pycache__");
+    fs::create_dir_all(&pycache).unwrap();
+    fs::write(pycache.join("x.pyc"), "").unwrap();
+    fs::write(sb.tree().join("notes.txt"), "mine").unwrap();
+    fs::create_dir_all(sb.root.join("cache/jit/k")).unwrap();
+    let plan = sb.stack_plan("", &format!("commit = '{}'\nclean = 'before-install'", shas[1]));
+    let (code, out) = sb.run(&plan, &[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        !pycache.join("x.pyc").exists() && !sb.root.join("cache/jit").exists(),
+        "{out}"
+    );
+    assert!(sb.tree().join("notes.txt").exists());
+    assert!(sb.read("results/01_fixed-seq_a/summary.csv").contains(",200.0,"));
+
+    // clean = never keeps them and says so.
+    fs::create_dir_all(sb.root.join("cache/jit/k")).unwrap();
+    fs::write(sb.root.join("cache/jit/k/a.so"), "").unwrap();
+    let (code, out) = sb.run(&sb.stack_plan("", &format!("commit = '{}'", shas[1])), &[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("(1 files)"), "{out}");
+    assert!(sb.root.join("cache/jit/k/a.so").exists());
+
+    // A modified tracked file blocks a checkout: never reset someone's patch.
+    fs::write(sb.tree().join("fakepkg/__init__.py"), "SPEED = 1  # my patch\n").unwrap();
+    let (code, out) = sb.run(&plan, &[]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("has local changes"), "{out}");
+    assert!(sb.read_tree("fakepkg/__init__.py").contains("my patch"));
+    // ...but the tree as it is (no commit) installs with the patch, and says so.
+    let (code, out) = sb.run(&sb.stack_plan("", ""), &[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("with local changes"), "{out}");
+    assert!(sb.read("results/01_fixed-seq_a/summary.csv").contains(",1.0,"));
+    sb.assert_no_leftovers();
+}
+
+#[test]
+fn stack_failures_stop_before_servers() {
+    let _servers = servers_exclusive();
+    let sb = Sandbox::new("stackfail");
+    let shas = sb.fake_repo(&[100, 100], &[1]);
+    // A recipe failure exits 2 and starts nothing; the edited file is still restored.
+    let (code, out) = sb.run(&sb.stack_plan("", &format!("commit = '{}'", shas[1])), &[]);
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains("does not build here") && out.contains("install_fakepkg.sh exited 1"),
+        "{out}"
+    );
+    assert!(!sb.work().join("logs/server_a.log").exists(), "a server started: {out}");
+    assert_eq!(sb.git_tree(&["status", "--porcelain", "--untracked-files=no"]).1, "");
+
+    // A running server in the container blocks any stack change.
+    let port = ephemeral_port();
+    let mut server = Command::new("python3")
+        .args(["-m", "sglang.launch_server", "--port", &port.to_string()])
+        .env("PYTHONPATH", sb.root.join("py"))
+        .env("FAKE_STATE", sb.root.join("state"))
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !sb.root.join("state/pids").exists() {
+        assert!(Instant::now() < deadline, "server never started");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let (code, out) = sb.run(&sb.stack_plan("", &format!("commit = '{}'", shas[0])), &[]);
+    Command::new("kill")
+        .args(["-TERM", &server.id().to_string()])
+        .status()
+        .unwrap();
+    server.wait().unwrap();
+    sb.assert_no_leftovers();
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("a server runs in this container"), "{out}");
+}
+
+#[test]
+fn commits_run_aba_and_compare() {
+    let _servers = servers_exclusive();
+    let sb = Sandbox::new("aba");
+    let shas = sb.fake_repo(&[100, 50], &[]);
+    let (a, b) = (&shas[0], &shas[1]);
+    let plan = sb.stack_plan("", &format!("commits = ['{a}', '{b}', '{a}']"));
+    let (code, out) = sb.run(&plan, &[]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(sb.installs(), [a.clone(), b.clone(), a.clone()]);
+    for (n, sha, tok) in [(1, a, "100.0"), (2, b, "50.0"), (3, a, "100.0")] {
+        let summary = sb.read(&format!("results/{n}_{sha}/01_fixed-seq_a/summary.csv"));
+        assert!(summary.contains(&format!(",{tok},")), "{summary}");
+    }
+    let compare = sb.read("results/compare.csv");
+    // metric, A1, B, A2, B/A1, A2/A1
+    assert!(
+        compare.contains("01_fixed-seq_a:isl128_osl32_c1,100.0,50.0,100.0,0.500,1.000"),
+        "{compare}"
+    );
+    assert!(out.contains("A2/A1 should be ~1.000"), "{out}");
+    sb.assert_no_leftovers();
+}
+
+#[test]
+fn bisect_finds_the_regression_and_skips_broken_commits() {
+    let _servers = servers_exclusive();
+    let sb = Sandbox::new("bisect");
+    // c0..c4 fast, c5 (the culprit) on slow; c3, git's first pick, does not build.
+    let shas = sb.fake_repo(&[100, 100, 100, 100, 100, 50, 50, 50], &[3]);
+    let plan = sb.stack_plan(
+        "min_output_tok_s = 75",
+        &format!("bisect = {{ good = '{}', bad = '{}' }}", shas[0], shas[7]),
+    );
+    let (code, out) = sb.run(&plan, &[]);
+    assert_eq!(code, 0, "{out}");
+    let log = sb.read("results/bisect/bisect.log");
+    assert!(log.contains("# first bad commit:"), "{log}");
+    let culprit = sb.git_tree(&["rev-parse", &shas[5]]).1;
+    assert!(out.contains(&format!("first bad commit: [{culprit}]")), "{out}");
+    let csv = sb.read("results/bisect/bisect.csv");
+    assert!(
+        csv.lines().next().unwrap().contains("01_fixed-seq_a:isl128_osl32_c1"),
+        "{csv}"
+    );
+    assert!(csv.contains(&format!(",{},bad,ok,50.0,", shas[5])), "{csv}");
+    assert!(csv.contains(&format!(",{},skip,install_failed,NA,", shas[3])), "{csv}");
+    // No bisect left in progress; the venv was reinstalled from where the tree is now.
+    assert!(!sb.git_tree(&["bisect", "log"]).0, "a bisect is still in progress");
+    let (_, head) = sb.git_tree(&["rev-parse", "--short", "HEAD"]);
+    assert_eq!(sb.installs().last(), Some(&head));
+    assert_eq!(sb.git_tree(&["status", "--porcelain", "--untracked-files=no"]).1, "");
+    sb.assert_no_leftovers();
+}
+
+#[test]
+fn check_rejects_bad_stacks() {
+    let sb = Sandbox::new("checkstack");
+    let shas = sb.fake_repo(&[100, 50], &[]);
+    let check = |plan: &str| {
+        fs::write(sb.work().join("plan.toml"), plan).unwrap();
+        let out = sb.oaka(&["check"]).output().unwrap();
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    let unknown = sb.stack_plan("", "").replace("[stack.fakepkg]", "[stack.nope]");
+    assert!(check(&unknown).contains("no package nope in"), "{}", check(&unknown));
+    let both = sb.stack_plan(
+        "",
+        &format!("commit = '{}'\ncommits = ['{}', '{}']", shas[0], shas[0], shas[1]),
+    );
+    assert!(check(&both).contains("set one of commit, commits, bisect"));
+    let missing = sb.stack_plan("", "");
+    assert!(
+        check(&missing).contains("does not exist; set commit"),
+        "{}",
+        check(&missing)
+    );
+    let ungated = sb.stack_plan("", &format!("bisect = {{ good = '{}', bad = '{}' }}", shas[0], shas[1]));
+    assert!(check(&ungated).contains("bisect needs a gate"), "{}", check(&ungated));
+    let repo = sb.stack_plan("", "commit = 'x'").replace(
+        &sb.tree().display().to_string(),
+        &sb.root.join("repo").display().to_string(),
+    );
+    assert!(check(&repo).contains("use a worktree of it"), "{}", check(&repo));
 }
