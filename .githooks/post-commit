@@ -1,6 +1,7 @@
 #!/bin/sh
 # Install a static oaka into the library after every commit, so `akao init` ships the
-# committed version to workers: ${OAKA_LIB:-/<ISO year>/oaka}/bin/oaka.
+# committed version to workers: ${OAKA_LIB:-/<ISO year>/oaka}/bin/oaka, plus
+# oaka/README.md as the library's README.md.
 #
 # Enable once per clone:  git config core.hooksPath .githooks
 # A failed build never blocks the commit (it already happened); it is reported instead.
@@ -16,4 +17,6 @@ if ! cargo build --release -q -p oaka --target "$target" --manifest-path "$top/C
 fi
 mkdir -p "$dest" && cp "$bin" "$dest/oaka.tmp" && mv "$dest/oaka.tmp" "$dest/oaka" \
     && echo "post-commit: installed $dest/oaka ($("$dest/oaka" --version))"
+# The worker reference travels with the binary.
+cp "$top/oaka/README.md" "$dest/../README.md" && echo "post-commit: installed $(dirname "$dest")/README.md"
 exit 0

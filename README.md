@@ -1,7 +1,7 @@
 # akao-workflow
 
 Two CLI tools for driving worker containers on remote boxes from the local console
-(see [SPEC.md](SPEC.md)). Target: `x86_64-unknown-linux-gnu`.
+(intent and decisions: [SPEC.md](SPEC.md)). Target: `x86_64-unknown-linux-gnu`.
 
 - `akao` — local driver (this README).
 - `oaka` — inside a worker: plan generator and script compiler (see below).
@@ -71,29 +71,14 @@ own ssh transport for the context still uses plain `ssh`.
 
 ## `oaka` (inside a worker)
 
-Write a plan, compile it to scripts, run them.  The scripts in `scripts/` stand alone:
-read them, rerun them, copy one to experiment by hand.
+Write a plan, compile it to stand-alone scripts, run them:
 
 ```bash
-cd /2026/ww42/gpt_oss/0003_quant_vs_vanilla
 oaka draft --profile gpt-oss-120b-w-mxfp4-a-fp8/triton --gpus 7 --client gsm8k --client fixed-seq
-vim plan.toml          # GPUs, overrides, ISL/OSL and concurrencies
-oaka check             # validate against the library and this machine
-oaka compile           # -> scripts/server_*.sh, client_NN_*.sh, run_all.sh (+ plan.lock.toml)
-oaka run               # compile, then scripts/run_all.sh: servers, clients, teardown
+vim plan.toml && oaka check && oaka run
 ```
 
-Results go to `results/<NN>_<kind>_<server>/`, logs to `logs/`.
-
-Profiles live in the library `/<year>/oaka/profiles/<model>/<recipe>.toml` (`$OAKA_LIB`
-overrides the library root):
-
-```bash
-oaka profile ls                       # '!' marks profiles for another GPU arch
-oaka profile show gpt-oss-120b-w-mxfp4-a-fp8/aiter-ck
-oaka profile diff gpt-oss-120b/base gpt-oss-120b-w-mxfp4-a-fp8/triton
-oaka profile save quant --as gpt-oss-120b-w-mxfp4-a-fp8/page64   # keep a plan's tweaks
-```
-
-Every commit installs a static `oaka` to `/<year>/oaka/bin/oaka` through
-`.githooks/post-commit` (`git config core.hooksPath .githooks` once per clone).
+Commands, plan and profile fields: [oaka/README.md](oaka/README.md), which every commit
+installs as `/<year>/oaka/README.md` together with a static `/<year>/oaka/bin/oaka`
+(`.githooks/post-commit`; `git config core.hooksPath .githooks` once per clone).
+Why it is built this way: [SPEC.md](SPEC.md).
