@@ -10,20 +10,34 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+/// The checks, printed as they run, or kept for one JSON document at the end.
 #[derive(Default)]
 struct Report {
+    json: bool,
     failed: usize,
+    checks: Vec<serde_json::Value>,
 }
 
 impl Report {
+    fn add(&mut self, status: &str, what: &str, detail: &str) {
+        if self.json {
+            self.checks
+                .push(serde_json::json!({ "status": status, "check": what, "detail": detail }));
+        } else {
+            println!(
+                "{:<5} {what:<11} {detail}",
+                if status == "fail" { "FAIL" } else { status }
+            );
+        }
+    }
     fn ok(&mut self, what: &str, detail: impl AsRef<str>) {
-        println!("ok    {what:<11} {}", detail.as_ref());
+        self.add("ok", what, detail.as_ref());
     }
     fn warn(&mut self, what: &str, detail: impl AsRef<str>) {
-        println!("warn  {what:<11} {}", detail.as_ref());
+        self.add("warn", what, detail.as_ref());
     }
     fn fail(&mut self, what: &str, detail: impl AsRef<str>) {
-        println!("FAIL  {what:<11} {}", detail.as_ref());
+        self.add("fail", what, detail.as_ref());
         self.failed += 1;
     }
 }
@@ -54,8 +68,11 @@ fn output(argv: &[&str], env: &[(&str, &str)]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-pub fn run(lib: &Library) -> Result<()> {
-    let mut r = Report::default();
+pub fn run(lib: &Library, json: bool) -> Result<()> {
+    let mut r = Report {
+        json,
+        ..Report::default()
+    };
     check_library(&mut r, lib);
     check_stacks(&mut r, lib);
 
@@ -134,6 +151,10 @@ pub fn run(lib: &Library) -> Result<()> {
         ),
     }
 
+    if json {
+        let out = serde_json::json!({ "ok": r.failed == 0, "checks": r.checks });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    }
     if r.failed > 0 {
         bail!("{} check(s) failed", r.failed);
     }

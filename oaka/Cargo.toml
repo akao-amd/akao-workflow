@@ -11,5 +11,6 @@ clap = { version = "4", features = ["derive"] }
 fastrand = "2"
 minijinja = "2"
 serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
 shlex = "1"
 toml = { version = "0.8", features = ["preserve_order"] }

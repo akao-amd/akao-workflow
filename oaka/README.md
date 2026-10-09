@@ -17,10 +17,10 @@ In a Work Directory (or anywhere with `-C <dir>`):
 ```bash
 oaka draft --profile <model>/<recipe> --gpus 6,7 --client gsm8k --client fixed-seq [--stack sglang]
 # edit plan.toml
-oaka check      # every error names the field to fix
+oaka check      # every error names the field to fix; --json for agents
 oaka compile    # -> scripts/ (+ plan.lock.toml)
 oaka run        # compile, then scripts/run_all.sh
-oaka doctor     # this worker: GPU arch, ROCm version, prerequisites (when something fails)
+oaka doctor     # this worker: GPU arch, ROCm version, prerequisites; --json for agents
 oaka profile ls | show <p> | diff <a> <b> | save <server> --as <model>/<recipe>
 ```
 
@@ -28,6 +28,10 @@ oaka profile ls | show <p> | diff <a> <b> | save <server> --as <model>/<recipe>
   under `/model`).  One server gets all `--gpus`; several take their pinned `tp` (or 1) each,
   in order.  Each `--client` is added for every server; each `--stack` adds a
   `[stack.<package>]` block.
+- `check --json` prints `{"ok": true, "machine", "servers", "clients", "stack", "vary",
+  "warnings"}`, or `{"ok": false, "error"}` (exit 1); `doctor --json` prints
+  `{"ok", "checks": [{"status": ok|warn|fail, "check", "detail"}]}`.  Same exit codes as
+  without `--json`.
 - `compile` writes into `scripts/`, and removes scripts an earlier compile wrote that the
   plan no longer has.  Do not edit `scripts/`: change the plan and recompile, or copy a
   script to experiment.

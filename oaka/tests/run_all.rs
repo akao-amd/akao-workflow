@@ -453,6 +453,22 @@ fn check_names_the_field_to_fix() {
         err.contains("GPU 5 does not exist; this machine has 2 GPUs (0-1)"),
         "{err}"
     );
+    // The same for agents, as JSON: the error in the document, the exit code unchanged.
+    let out = sb.oaka(&["check", "--json"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["ok"], false);
+    assert!(v["error"].as_str().unwrap().contains("GPU 5 does not exist"), "{v}");
+
+    fs::write(sb.work().join("plan.toml"), server("a", 1, "") + GSM8K).unwrap();
+    let out = sb.oaka(&["check", "--json"]).output().unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["machine"]["rocm"], "10.0.0");
+    assert_eq!(v["servers"][0]["gpus"], serde_json::json!([1]));
+    assert_eq!(v["clients"][0]["kind"], "gsm8k");
+    assert_eq!(v["vary"], serde_json::Value::Null);
 }
 
 #[test]
@@ -488,6 +504,19 @@ fn doctor_reports_missing_prerequisites() {
         "{text}"
     );
 
+    let out = sb.oaka(&["doctor", "--json"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["ok"], true);
+    let gpus = v["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["check"] == "gpus")
+        .unwrap();
+    assert_eq!(gpus["status"], "ok");
+    assert!(gpus["detail"].as_str().unwrap().starts_with("2 x gfx950"), "{gpus}");
+
     fs::remove_dir_all(sb.root.join("infx")).unwrap();
     let out = sb.oaka(&["doctor"]).env("OAKA_GPUS", "").output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
@@ -495,6 +524,15 @@ fn doctor_reports_missing_prerequisites() {
     assert!(text.contains("FAIL  inferencex"), "{text}");
     assert!(text.contains("FAIL  gpus"), "{text}");
     assert!(String::from_utf8_lossy(&out.stderr).contains("2 check(s) failed"));
+    let out = sb.oaka(&["doctor", "--json"]).env("OAKA_GPUS", "").output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["ok"], false);
+    assert!(v["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["check"] == "inferencex" && c["status"] == "fail"));
 }
 
 #[test]

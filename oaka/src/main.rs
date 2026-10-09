@@ -49,13 +49,21 @@ enum Cmd {
         force: bool,
     },
     /// Validate plan.toml against the library and this machine
-    Check,
+    Check {
+        /// Print JSON instead, for agents: {"ok": true, "servers": ...} or {"ok": false, "error": ...}
+        #[arg(long)]
+        json: bool,
+    },
     /// Write scripts/ from plan.toml (automatic choices go to plan.lock.toml)
     Compile,
     /// Compile, then run scripts/run_all.sh
     Run,
     /// This worker: GPU arch, ROCm version and what compiled scripts need (read-only)
-    Doctor,
+    Doctor {
+        /// Print JSON instead, for agents: {"ok": ..., "checks": [{"status", "check", "detail"}]}
+        #[arg(long)]
+        json: bool,
+    },
     /// Browse and extend the profile library
     #[command(subcommand)]
     Profile(ProfileCmd),
@@ -123,10 +131,22 @@ fn run(cli: Cli) -> Result<()> {
                 force,
             },
         ),
-        Cmd::Check => {
+        Cmd::Check { json: false } => {
             let c = plan::check(&dir, &lib)?;
             describe(&c);
             println!("ok");
+            Ok(())
+        }
+        Cmd::Check { json: true } => {
+            // The verdict is in the JSON, errors included; the exit code still says it.
+            let (out, ok) = match plan::check(&dir, &lib) {
+                Ok(c) => (checked_json(&c), true),
+                Err(e) => (serde_json::json!({ "ok": false, "error": format!("{e:#}") }), false),
+            };
+            println!("{}", serde_json::to_string_pretty(&out)?);
+            if !ok {
+                std::process::exit(1);
+            }
             Ok(())
         }
         Cmd::Compile => {
@@ -142,7 +162,7 @@ fn run(cli: Cli) -> Result<()> {
             let err = std::process::Command::new("bash").arg(&script).current_dir(&dir).exec();
             Err(err).context("cannot exec bash")
         }
-        Cmd::Doctor => doctor::run(&lib),
+        Cmd::Doctor { json } => doctor::run(&lib, json),
         Cmd::Profile(cmd) => profile_cmd(&dir, &lib, cmd),
     }
 }
@@ -156,6 +176,36 @@ fn machine_text(m: &plan::Machine) -> String {
         Some(g) => g.join(","),
     };
     format!("{gpus}, ROCm {}", m.rocm.as_deref().unwrap_or("unknown"))
+}
+
+/// What `describe` prints, as JSON for agents.
+fn checked_json(c: &plan::Checked) -> serde_json::Value {
+    use serde_json::json;
+    let vary = match &c.vary {
+        plan::Vary::No => serde_json::Value::Null,
+        plan::Vary::Commits { package, commits } => {
+            json!({ "kind": "commits", "package": package, "commits": commits })
+        }
+        plan::Vary::Bisect { package, good, bad } => {
+            json!({ "kind": "bisect", "package": package, "good": good, "bad": bad })
+        }
+    };
+    json!({
+        "ok": true,
+        "machine": { "gpus": c.machine.gpus, "rocm": c.machine.rocm },
+        "servers": c.servers.iter().map(|s| json!({
+            "name": s.name, "profile": s.base.name, "model": s.model, "gpus": s.gpus, "tp": s.tp,
+            "port": s.port, "overrides": compile::overrides(s),
+        })).collect::<Vec<_>>(),
+        "clients": c.plan.clients.iter().enumerate().map(|(i, cl)| json!({
+            "index": i + 1, "kind": cl.kind(), "server": cl.server(),
+        })).collect::<Vec<_>>(),
+        "stack": c.stack.iter().map(|p| json!({
+            "package": p.name, "tree": p.tree, "commit": p.commit, "clean": p.clean.as_str(),
+        })).collect::<Vec<_>>(),
+        "vary": vary,
+        "warnings": c.warnings,
+    })
 }
 
 fn describe(c: &plan::Checked) {
