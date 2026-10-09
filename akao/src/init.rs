@@ -3,7 +3,7 @@
 //! Every step checks what already exists and reuses it, so re-running init on a
 //! half-initialized worker resumes instead of failing.
 
-use crate::exec::{show, Runner};
+use crate::exec::{q, show, Runner, ESCALATE};
 use crate::state::{self, Host, State};
 use anyhow::{bail, Result};
 use std::path::Path;
@@ -18,10 +18,6 @@ const DOCKER_RUN_SKELETON: &[&str] = &[
 ];
 
 const APT_PACKAGES: &[&str] = &["vim", "less", "tmux", "docker.io"];
-
-/// Shell prelude for writing into the root-owned host home: escalate with
-/// passwordless sudo unless the ssh login is already root. Use as `$S cmd`.
-const ESCALATE: &str = r#"if [ "$(id -u)" -eq 0 ]; then S=; else S="sudo -n"; fi; "#;
 
 /// Excluded from the control-plane deploy.
 const DEPLOY_EXCLUDES: &[&str] = &[".git", "__pycache__", "*.pyc", ".claude"];
@@ -113,10 +109,6 @@ impl Plan {
         args.extend([self.container.as_str(), "bash", "-c", script]);
         self.docker(&args)
     }
-}
-
-fn q(s: &str) -> String {
-    shlex::try_quote(s).map(|c| c.into_owned()).unwrap_or_else(|_| s.to_string())
 }
 
 fn tar_create(dir: &Path, paths: &[String], excludes: &[&str]) -> Vec<String> {

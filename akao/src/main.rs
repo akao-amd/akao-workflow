@@ -1,3 +1,4 @@
+mod cp;
 mod exec;
 mod init;
 mod state;
@@ -18,6 +19,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Copy a path from one box to another (or local <-> remote)
+    ///
+    /// Addresses are `nick:rel-path` (relative to <host_home>/<year>) or a bare
+    /// local path.  The source basename is placed inside the destination directory.
+    /// Files are always overwritten.
+    Cp {
+        /// Source address: `nick:rel-path` or a local path
+        src: String,
+        /// Destination address: `nick:rel-path` or a local path
+        dst: String,
+        /// Print the commands without running them
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Initialize worker container akao_<name> on a remote host
     Init {
         /// Host nick (a row in hosts.tsv, an ssh Host alias)
@@ -95,6 +110,10 @@ fn main() {
 fn run(cli: Cli) -> Result<()> {
     let mut state = State::load()?;
     match cli.cmd {
+        Cmd::Cp { src, dst, dry_run } => {
+            let runner = exec::Runner::new(dry_run)?;
+            cp::run(&state, &runner, &src, &dst)
+        }
         Cmd::Init { nick, name, week, skip_setup, dry_run } => {
             let runner = exec::Runner::new(dry_run)?;
             init::run(&state, &runner, &init::Options { nick, name, week, skip_setup })

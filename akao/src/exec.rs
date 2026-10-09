@@ -2,7 +2,17 @@
 //! mutating commands are only echoed while read-only probes still run.
 
 use anyhow::{bail, Context, Result};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+
+/// Shell prelude: escalate with passwordless sudo if the login is not root.
+/// Prepend to remote scripts; use `$S cmd` afterwards.
+pub const ESCALATE: &str = r#"if [ "$(id -u)" -eq 0 ]; then S=; else S="sudo -n"; fi; "#;
+
+/// Shell-quote a single token. Falls back to the raw string if quoting fails.
+pub fn q(s: &str) -> String {
+    shlex::try_quote(s).map(|c| c.into_owned()).unwrap_or_else(|_| s.to_string())
+}
 
 pub struct Runner {
     pub dry_run: bool,
@@ -22,9 +32,21 @@ fn command(argv: &[String]) -> Command {
 
 impl Runner {
     pub fn new(dry_run: bool) -> Result<Runner> {
+        // If the caller has set AKAO_SSH, use it verbatim (they own the -F too).
+        // Otherwise build "ssh [-F <config>]" from the default, adding -F when
+        // $AKAO_CONFIG_ROOT/.ssh/config exists.
         let ssh = match std::env::var("AKAO_SSH") {
             Ok(s) if !s.trim().is_empty() => shlex::split(&s).context("cannot parse $AKAO_SSH")?,
-            _ => vec!["ssh".into()],
+            _ => {
+                let mut base = vec!["ssh".to_string()];
+                if let Ok(root) = std::env::var("AKAO_CONFIG_ROOT") {
+                    let cfg = PathBuf::from(root).join(".ssh/config");
+                    if cfg.exists() {
+                        base.extend(["-F".to_string(), cfg.to_string_lossy().into_owned()]);
+                    }
+                }
+                base
+            }
         };
         Ok(Runner { dry_run, ssh })
     }
