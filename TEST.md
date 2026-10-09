@@ -53,8 +53,9 @@ then `commits = ["<HEAD>", "<HEAD~1>", "<HEAD>"]`.  Pass (ww42, MI355X): the fir
 tok/s; A-B-A A2/A1 ~1.0; `git -C <tree> status --untracked-files=no` clean; `docker rm -f` afterwards.
 Run oaka from `bash -i` there, so `/etc/bash.bashrc` puts the image's AITER on PYTHONPATH as
 in a real worker.  `--stack aiter` (tree at the image's AITER commit): install ~30 s, first
-server start ~4.5 min (kernels JIT-build into the tree), ~657 tok/s.  `--stack triton`
-(clone triton-lang/triton into /sgl-workspace/triton-custom first): ~4 min build, ~626 tok/s.
+server start ~4.5 min (kernels JIT-build into the tree), ~657 tok/s.  `--stack triton` has a
+recipe only for gfx1250; on gfx950 (after cloning triton-lang/triton into
+/sgl-workspace/triton-custom and keying the recipe "gfx950 gfx1250"): ~4 min build, ~626 tok/s.
 
 ## 3. Environment: `akao doctor`, `oaka doctor` (seconds, read-only)
 

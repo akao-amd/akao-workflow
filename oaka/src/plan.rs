@@ -69,6 +69,8 @@ impl CleanWhen {
 pub struct StackPkg {
     pub name: String,
     pub tree: String,
+    /// The install recipe for the plan's GPU arch.
+    pub install: String,
     /// The fixed revision, or None for "the tree as it is" (and for the varying package).
     pub commit: Option<String>,
     pub clean: CleanWhen,
@@ -193,6 +195,8 @@ pub struct Checked {
     pub servers: Vec<Server>,
     /// The plan's packages, in stacks.toml (= install) order.
     pub stack: Vec<StackPkg>,
+    /// The GPU arch of the plan's GPUs, which picks per-arch recipes (None: unknown/mixed).
+    pub arch: Option<String>,
     pub vary: Vary,
     /// The library's stacks.toml.
     pub stacks: Stacks,
@@ -366,13 +370,24 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: Option<Vec<Str
             }
         }
     }
+    // The arch of the GPUs the plan uses picks per-arch recipes.
+    let arch = machine.as_ref().and_then(|gpus| {
+        let mut used: Vec<&String> = servers
+            .iter()
+            .flat_map(|s| &s.gpus)
+            .map(|g| &gpus[*g as usize])
+            .collect();
+        used.dedup();
+        (used.len() == 1).then(|| used[0].clone())
+    });
     let stacks = stack::load(lib)?;
-    let (stack, vary) = check_stack(&plan, &stacks, &mut warnings)?;
+    let (stack, vary) = check_stack(&plan, &stacks, arch.as_deref(), &mut warnings)?;
     Ok(Checked {
         dir: dir.to_path_buf(),
         plan,
         servers,
         stack,
+        arch,
         vary,
         stacks,
         warnings,
@@ -384,7 +399,12 @@ fn valid_rev(r: &str) -> bool {
     !r.is_empty() && !r.starts_with('-') && !r.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
-fn check_stack(plan: &Plan, stacks: &Stacks, warnings: &mut Vec<String>) -> Result<(Vec<StackPkg>, Vary)> {
+fn check_stack(
+    plan: &Plan,
+    stacks: &Stacks,
+    arch: Option<&str>,
+    warnings: &mut Vec<String>,
+) -> Result<(Vec<StackPkg>, Vary)> {
     for name in plan.stack.keys() {
         if stacks.get(name).is_none() {
             bail!(
@@ -405,6 +425,9 @@ fn check_stack(plan: &Plan, stacks: &Stacks, warnings: &mut Vec<String>) -> Resu
             continue;
         };
         let at = format!("[stack.{name}]");
+        let install = pkg
+            .recipe(arch)
+            .with_context(|| format!("{at}: {name} in {}", stacks.path.display()))?;
         if !s.tree.starts_with('/') || s.tree.contains(['\n', '\t']) {
             bail!("{at}: tree must be an absolute path, e.g. /<year>/nocopy/{name}-<task>");
         }
@@ -474,6 +497,7 @@ fn check_stack(plan: &Plan, stacks: &Stacks, warnings: &mut Vec<String>) -> Resu
         pkgs.push(StackPkg {
             name: name.clone(),
             tree,
+            install: install.to_string(),
             commit: if varying { None } else { s.commit.clone() },
             clean: s.clean.unwrap_or(default_clean),
         });

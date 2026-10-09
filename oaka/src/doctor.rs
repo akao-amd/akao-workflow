@@ -203,13 +203,22 @@ fn check_stacks(r: &mut Report, lib: &Library) {
             .and_then(|s| std::fs::read_to_string(s.join(name).join("installed")).ok())
             .map(|l| format!("; oaka last installed {}", l.trim()))
             .unwrap_or_default();
-        r.ok(
-            &what,
-            format!(
-                "{} imports from {}{installed}",
-                p.module,
-                if origin.is_empty() { "nowhere" } else { &origin }
-            ),
+        let archs = p.archs();
+        let recipes = if archs.is_empty() {
+            "any GPU arch".to_string()
+        } else {
+            archs.join(" ")
+        };
+        let line = format!(
+            "{} imports from {}{installed}; recipes: {recipes}",
+            p.module,
+            if origin.is_empty() { "nowhere" } else { &origin }
         );
+        match sys::arch() {
+            Some(a) if !archs.is_empty() && !archs.contains(&a.as_str()) => {
+                r.warn(&what, format!("{line}; none for this machine's {a}"))
+            }
+            _ => r.ok(&what, line),
+        }
     }
 }

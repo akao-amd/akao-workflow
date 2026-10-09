@@ -290,7 +290,8 @@ fn stack_scripts(env: &Environment, c: &Checked, marker: &str) -> Result<Vec<(St
         let lib = c.stacks.get(&p.name).expect("checked against stacks.toml");
         let file = format!("install_{}.sh", p.name);
         let text = env.get_template("install.sh")?.render(context! {
-            marker, name => p.name, stacks, description => lib.description, install => lib.install.trim_end(),
+            marker, name => p.name, stacks, description => lib.description, install => p.install.trim_end(),
+            arch => if lib.archs().is_empty() { None } else { c.arch.clone() },
             self_path => format!("{SCRIPTS}/{file}"),
         })?;
         files.push((file, text));
@@ -310,7 +311,7 @@ fn stack_scripts(env: &Environment, c: &Checked, marker: &str) -> Result<Vec<(St
     let names: Vec<&str> = c.stack.iter().map(|p| p.name.as_str()).collect();
     let text = env.get_template("stack.sh")?.render(context! {
         marker, self_path => format!("{SCRIPTS}/stack.sh"), stacks, pkgs, names => names.join(", "),
-        gpu_arch => sys::arch().unwrap_or_default(),
+        gpu_arch => c.arch.clone().unwrap_or_default(),
     })?;
     files.push(("stack.sh".into(), text));
     Ok(files)

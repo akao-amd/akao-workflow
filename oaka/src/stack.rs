@@ -10,6 +10,7 @@
 use crate::profile::Library;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use toml::Table;
@@ -32,10 +33,20 @@ pub struct Package {
     /// packages the image also puts on PYTHONPATH (aiter, via /etc/bash.bashrc): such an
     /// entry beats any install, so the tree must come before it.
     pub pythonpath: Option<String>,
-    /// bash, run with `set -euo pipefail` in the tree.
-    pub install: String,
+    /// bash, run with `set -euo pipefail` in the tree: one recipe, or one per GPU arch.
+    pub install: Install,
     #[serde(default)]
     pub clean: Clean,
+}
+
+/// The install recipe: the same for every GPU arch, or a table keyed by arch where the
+/// build differs (`"gfx942 gfx950" = ...`, `gfx1250 = ...`), as rocm.Dockerfile keys its
+/// builds on GPU_ARCH_LIST.  An arch with no key has no recipe.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum Install {
+    Any(String),
+    ByArch(BTreeMap<String, String>),
 }
 
 /// What may be deleted at any time at the cost of a rebuild: caches, never install state.
@@ -104,6 +115,38 @@ pub fn parse(text: &str) -> Result<Stacks> {
 }
 
 impl Package {
+    /// The recipe for `arch` (this machine's GPU arch, None if unknown).
+    pub fn recipe(&self, arch: Option<&str>) -> Result<&str> {
+        let table = match &self.install {
+            Install::Any(r) => return Ok(r),
+            Install::ByArch(t) => t,
+        };
+        let Some(arch) = arch else {
+            bail!(
+                "its recipe depends on the GPU arch ({}), and this machine's is unknown \
+                 (no GPUs, mixed archs, or set OAKA_GPUS)",
+                self.archs().join(" ")
+            );
+        };
+        table
+            .iter()
+            .find(|(k, _)| k.split_whitespace().any(|a| a == arch))
+            .map(|(_, r)| r.as_str())
+            .with_context(|| format!("no recipe for {arch}; it has recipes for: {}", self.archs().join(" ")))
+    }
+
+    /// The archs with a recipe, in crate::sys::ARCHES order; empty = any.
+    pub fn archs(&self) -> Vec<&'static str> {
+        match &self.install {
+            Install::Any(_) => Vec::new(),
+            Install::ByArch(t) => crate::sys::ARCHES
+                .iter()
+                .copied()
+                .filter(|a| t.keys().any(|k| k.split_whitespace().any(|x| x == *a)))
+                .collect(),
+        }
+    }
+
     /// The PYTHONPATH entry for `tree`, if the package has one.
     pub fn pythonpath_in(&self, tree: &str) -> Option<String> {
         self.pythonpath.as_ref().map(|pp| match pp.trim_end_matches('/') {
@@ -139,6 +182,21 @@ fn validate(p: &Package) -> Result<()> {
             .all(|m| !m.is_empty() && m.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
     {
         bail!("module {:?} is not a Python module name", p.module);
+    }
+    if let Install::ByArch(t) = &p.install {
+        if t.is_empty() {
+            bail!("install has no recipe");
+        }
+        let mut seen: Vec<&str> = Vec::new();
+        for a in t.keys().flat_map(|k| k.split_whitespace()) {
+            if !crate::sys::ARCHES.contains(&a) {
+                bail!("install: {a:?} is not one of {}", crate::sys::ARCHES.join(" "));
+            }
+            if seen.contains(&a) {
+                bail!("install: two recipes for {a}");
+            }
+            seen.push(a);
+        }
     }
     for r in &p.restore {
         if r.starts_with('/') || !plain_path(r) || r.contains(['*', '?', '[']) {
@@ -194,7 +252,9 @@ mod tests {
 [zeta]
 repo = "/r/z"
 module = "z"
-install = "true"
+[zeta.install]
+"gfx942 gfx950" = "build for 9xx"
+gfx1250 = "build for 1250"
 
 [alpha]
 description = "a"
@@ -215,6 +275,15 @@ tree = ["**/__pycache__"]
         assert_eq!(s.get("alpha").unwrap().clean.tree, ["**/__pycache__"]);
         assert_eq!(s.get("alpha").unwrap().pythonpath_in("/t").as_deref(), Some("/t"));
         assert_eq!(s.get("zeta").unwrap().pythonpath_in("/t"), None);
+        let (zeta, alpha) = (s.get("zeta").unwrap(), s.get("alpha").unwrap());
+        assert_eq!(zeta.recipe(Some("gfx950")).unwrap(), "build for 9xx");
+        assert_eq!(zeta.recipe(Some("gfx1250")).unwrap(), "build for 1250");
+        assert_eq!(alpha.recipe(None).unwrap(), "pip install -e .");
+        let e = format!("{:#}", zeta.recipe(None).unwrap_err());
+        assert!(e.contains("depends on the GPU arch (gfx942 gfx950 gfx1250)"), "{e}");
+        let only = parse("[t]\nrepo = '/r'\nmodule = 't'\n[t.install]\ngfx1250 = 'x'\n").unwrap();
+        let e = format!("{:#}", only.get("t").unwrap().recipe(Some("gfx950")).unwrap_err());
+        assert!(e.contains("no recipe for gfx950; it has recipes for: gfx1250"), "{e}");
     }
 
     #[test]
@@ -251,8 +320,10 @@ tree = ["**/__pycache__"]
         bad(&OK.replace("python/pyproject.toml", "/etc/x"), "restore");
         bad(&OK.replace("pythonpath = \".\"", "pythonpath = \"/opt\""), "pythonpath");
         bad(
-            &OK.replace("install = \"true\"", "install = \"true\"\nextra = 1"),
+            &OK.replace("module = \"z\"", "module = \"z\"\nextra = 1"),
             "unknown field",
         );
+        bad(&OK.replace("gfx1250 = ", "gfx90a = "), "not one of");
+        bad(&OK.replace("gfx1250 = ", "gfx950 = "), "two recipes for gfx950");
     }
 }

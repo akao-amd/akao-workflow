@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # {{ marker }}
-# Install recipe of {{ name }}, from the library's {{ stacks }}{% if description %}:
+# Install recipe of {{ name }}{% if arch %} for {{ arch }} (it has one per GPU arch){% endif %}, from the
+# library's {{ stacks }}{% if description %}:
 #   {{ description }}{% endif %}
 
 # scripts/stack.sh runs it inside the tree, with checkout, cleaning, restoring the files it

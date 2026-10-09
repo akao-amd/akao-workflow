@@ -260,7 +260,7 @@ oaka:
 2. Unit-test rendering in `compile.rs` (`bash -n` every script); add a runtime case and a
    stand-in to `oaka/tests/run_all.rs`; document the plan fields in `oaka/README.md`.
 3. A new swappable package is a `stacks.toml` entry in the library, not code: the recipe
-   from the user or rocm.Dockerfile (never improvised; deviations as comments), keyed on
-   `$GPU_ARCH` where the build differs, `restore` for the files it edits, `pythonpath` if
+   from the user or rocm.Dockerfile (never improvised; deviations as comments), an
+   `[<pkg>.install]` table with one recipe per GPU arch where the build differs, `restore` for the files it edits, `pythonpath` if
    the image puts the package on PYTHONPATH, caches under `clean`; place it in dependency
    order.

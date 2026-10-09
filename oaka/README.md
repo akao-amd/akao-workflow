@@ -149,9 +149,13 @@ restore = ["python/pyproject.toml"]   # tracked files the recipe edits in place
 # pythonpath = "."                 # put this tree dir first on the servers' PYTHONPATH
 install = '''
 # bash, run with set -euo pipefail in the tree; given TREE, SP (site-packages),
-# STATE (per-package dir for markers), GPU_ARCH (this machine's, e.g. gfx950: the key
-# where the build differs per arch)
+# STATE (per-package dir for markers), GPU_ARCH (of the plan's GPUs, e.g. gfx950)
 '''
+# or, where the build differs per GPU arch, one recipe per arch instead:
+# [sglang.install]
+# "gfx942 gfx950" = ''' ... '''
+# gfx1250 = ''' ... '''
+
 [sglang.clean]            # only what is safe to delete any time: caches, not install state
 paths = ["~/.cache/sglang/jit"]    # absolute or ~/; globs allowed below the first dirs
 tree = ["**/__pycache__"]          # globs in the tree; only paths git ignores, with no
@@ -162,16 +166,22 @@ Install mechanics that must happen on every install (purging stale eggs, moving 
 directory aside) belong in `install`, not in `clean`.  Packages install in file order, which
 is dependency order: `triton`, `aiter` (built against the installed Triton), `sglang`.
 
+A per-arch recipe is picked by the arch of the GPUs the plan uses; `oaka check` fails when
+there is none for it (e.g. `[stack.triton]` on gfx950), and `stack.sh` refuses when the
+image's `GPU_ARCH_LIST` (what it was built for) names another arch.
+
 - `sglang`: AOT `sgl_kernel` (rebuilt only when its sources change) + editable package.
-- `aiter`: submodules borrowed from the image's checkout, `requirements.txt`,
-  `build_ext --inplace` + editable install with the GPU arch's flags (gfx942/gfx950 vs
-  gfx1250, as rocm.Dockerfile); kernels JIT-build on first use into the tree, not
-  prebuilt.  The image puts `/sgl-workspace/aiter` on PYTHONPATH (`/etc/bash.bashrc`),
+- `aiter`: a recipe for gfx942/gfx950 and one for gfx1250, as rocm.Dockerfile: submodules
+  borrowed from the image's checkout, `requirements.txt`, `build_ext --inplace` +
+  editable install; kernels JIT-build on first use into the tree, not prebuilt.  The image puts `/sgl-workspace/aiter` on PYTHONPATH (`/etc/bash.bashrc`),
   which beats any install, hence `pythonpath = "."`.  The image's AITER patches are not
   applied: commit what you need into your tree.
-- `triton`: source build (as the gfx1250 image does; gfx942/gfx950 images ship a wheel and
-  no tree: clone `triton-lang/triton` into `/sgl-workspace/triton-custom` first).  Needs
-  network; the image's version is recorded in the package's state dir.
+- `triton`: gfx1250 only, a source build as its image does (gfx942/gfx950 images ship a
+  wheel and have no tree, hence no recipe).  Needs network; the image's version is recorded
+  in the package's state dir.
+- Caches cleaned before an install (`clean = "before-install"`): sglang `~/.cache`,
+  `~/.tilelang`; aiter `~/.aiter`, `~/.flydsl` and its JIT builds in the tree; triton
+  `~/.triton`, `~/.cache`; and `__pycache__` in every tree.
 
 ## Profiles (`profiles/<model>/<recipe>.toml`)
 

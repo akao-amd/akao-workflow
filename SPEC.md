@@ -128,8 +128,12 @@ Where the how lives: worker reference (commands, plan and profile fields)
   purging an egg without rebuilding breaks the import, so the recipe purges them as part
   of every rebuild.  Tree globs remove only what git ignores and holds no tracked file:
   `git clean -X` with a glob pathspec also deleted an unrelated ignored `build/`.
-- **Recipes come from rocm.Dockerfile, keyed on the GPU arch as it is**, with the differences
-  written into `stacks.toml`: AITER JIT-builds its kernels instead of prebuilding them (an
+- **Recipes come from rocm.Dockerfile, one per GPU arch where it branches** (`install` may be
+  a table keyed by arch, picked by the plan's GPUs at compile time; no key, no recipe:
+  Triton has only gfx1250's, the one source build there).  Why: the Dockerfile's builds
+  differ per arch (AITER's flags, which Triton at all), and a wrong-arch recipe builds the
+  wrong thing silently; `stack.sh` also checks the image's `GPU_ARCH_LIST`.  The
+  differences from the Dockerfile are written into `stacks.toml`: AITER JIT-builds its kernels instead of prebuilding them (an
   hour-scale build per swap would make bisect impractical; the kernels are the same), and
   the image's patches to its pinned AITER are not applied (they target that commit).
   Packages install in dependency order (Triton, AITER, SGLang).

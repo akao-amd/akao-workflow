@@ -42,7 +42,11 @@ exec 9>"$STATE_ROOT/lock"
 if command -v flock >/dev/null && ! flock -n 9; then
     die "another stack.sh is installing into $SP"
 fi
-GPU_ARCH={{ gpu_arch | q }}
+GPU_ARCH={{ gpu_arch | q }}   # of the plan's GPUs, at compile time: it picked per-arch recipes
+# The image says what it was built for; a recipe for another arch would build the wrong thing.
+if [ -n "$GPU_ARCH" ] && [ -n "${GPU_ARCH_LIST:-}" ] && [[ " ${GPU_ARCH_LIST//[,;]/ } " != *" $GPU_ARCH "* ]]; then
+    die "this image was built for GPU_ARCH_LIST=$GPU_ARCH_LIST, but the plan's GPUs are $GPU_ARCH"
+fi
 shopt -s nullglob
 
 # The files a recipe edits in place go back after every install, also on failure/Ctrl-C.

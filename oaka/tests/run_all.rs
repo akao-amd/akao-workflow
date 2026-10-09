@@ -144,6 +144,7 @@ impl Sandbox {
             .env("PATH", path)
             .env("FAKE_STATE", self.root.join("state"))
             .env("OAKA_STACK_STATE", self.root.join("stack-state"))
+            .env_remove("GPU_ARCH_LIST")
             .stdin(Stdio::null());
         c
     }
@@ -466,7 +467,8 @@ fn doctor_reports_missing_prerequisites() {
     sb.fake_repo(&[100], &[]);
     let text = String::from_utf8_lossy(&sb.oaka(&["doctor"]).output().unwrap().stdout).into_owned();
     assert!(
-        text.contains("ok    stacks      ") && text.contains("stack fakepkg fakepkg imports from nowhere"),
+        text.contains("ok    stacks      ")
+            && text.contains("stack fakepkg fakepkg imports from nowhere; recipes: any GPU arch"),
         "{text}"
     );
     fs::write(sb.root.join("lib/stacks.toml"), "[x]\nrepo = 'relative'\n").unwrap();
@@ -705,4 +707,42 @@ fn pythonpath_puts_the_tree_ahead_of_the_images_entries() {
         "{record}"
     );
     sb.assert_no_leftovers();
+}
+
+#[test]
+fn recipes_follow_the_gpu_arch() {
+    let _servers = servers_exclusive();
+    let sb = Sandbox::new("arch");
+    let shas = sb.fake_repo(&[100], &[]);
+    let stacks = sb.root.join("lib/stacks.toml");
+    let text = fs::read_to_string(&stacks).unwrap().replace(
+        "install = '''",
+        "[fakepkg.install]\ngfx1250 = 'echo wrong recipe; exit 1'\n\"gfx942 gfx950\" = '''",
+    );
+    fs::write(&stacks, text).unwrap();
+    let plan = sb.stack_plan("", &format!("commit = '{}'", shas[0]));
+
+    // The plan's GPUs are gfx950 (OAKA_GPUS): that recipe, and only it, is compiled and run.
+    let (code, out) = sb.run(&plan, &[]);
+    assert_eq!(code, 0, "{out}");
+    let script = sb.read("scripts/install_fakepkg.sh");
+    assert!(script.contains("Install recipe of fakepkg for gfx950"), "{script}");
+    assert!(
+        script.contains("ln -sfn") && !script.contains("wrong recipe"),
+        "{script}"
+    );
+    assert!(sb.read("scripts/stack.sh").contains("GPU_ARCH=gfx950 "));
+
+    // An image built for another arch (its GPU_ARCH_LIST) refuses the recipe.
+    let (code, out) = sb.run(&plan, &[("GPU_ARCH_LIST", "gfx942")]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("this image was built for GPU_ARCH_LIST=gfx942"), "{out}");
+
+    // No recipe for the plan's arch: check names what there is.
+    let out = sb.oaka(&["check"]).env("OAKA_GPUS", "gfx90a,gfx90a").output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("no recipe for gfx90a; it has recipes for: gfx942 gfx950 gfx1250"),
+        "{err}"
+    );
 }
