@@ -39,6 +39,7 @@ $AKAO_CONFIG_ROOT/
   config.toml         settings: default_image, deploy_src, deploy_paths
   hosts.tsv           one row per remote box (TSV, 5–6 cols)
   container_home/     home template, copied once per akao_<name>
+    .local/bin/ssh    ssh wrapper adding -F $AKAO_CONFIG_ROOT/.ssh/config (see Design notes)
   .ssh/config         optional; when present, -F is added to every ssh call
 ```
 
@@ -91,9 +92,8 @@ Eight ordered steps, each idempotent (checks before acting):
 2. `mkdir -p` host year dir + `container_home` root
 3. Deploy control plane: `tar | ssh tar` with `sudo -n`, `root:root`, no delete
 4. Copy home template (skipped if container home already exists)
-5. Check `docker -H ssh://<user>@<nick> version`, then create docker context `ssh://<user>@<nick>`
-   (updates it if it points elsewhere).  `<user>` comes from `ssh -G` because docker's ssh
-   helper ignores our `-F` config.
+5. Check `docker -H ssh://<nick> version`, then create docker context `ssh://<nick>`
+   (updates it if it points elsewhere).  Relies on the `ssh` wrapper (see Design notes).
 6. `docker run` the container (reuses if running; starts if stopped; fails on other states)
 7. Install apt packages + gh + claude agent (each skipped if already present)
 8. Start tmux session with window `controller` running `claude` (skipped if tmux already runs)
@@ -133,6 +133,14 @@ in the container).
 - **Escalation**: remote `/2026` and `container_home` are root-owned (written by root
   containers).  A non-root ssh login (e.g. `akao`) uses `sudo -n` — passwordless or it
   fails loudly.  Boxes where the login is already root skip sudo automatically.
+- **docker sees ssh only through PATH**: docker's `ssh://` contexts run plain `ssh` from
+  PATH and cannot be given `-F`, so with a custom config directory docker would silently
+  use `~/.ssh/config` (wrong login user, unknown hosts).  The fix is a wrapper named `ssh`
+  in `~/.local/bin` (ahead of `/usr/bin` on PATH) that execs `/usr/bin/ssh -F
+  $AKAO_CONFIG_ROOT/.ssh/config "$@"`, falling back to plain ssh when that file is absent.
+  It ships in `container_home/.local/bin/ssh` and must also exist wherever akao itself
+  runs, with `AKAO_CONFIG_ROOT` exported.  Shell aliases do not work: docker never sees them.
+  Init step 5 checks `docker -H ssh://<nick> version` so a missing wrapper fails loudly.
 - **Idempotent init**: every step checks what exists and reuses it, so re-running init
   on a half-done worker resumes instead of failing.
 - **oaka**: not yet designed.  The binary exists so the workspace builds, and it exits 2
