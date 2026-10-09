@@ -93,7 +93,26 @@ Host-side writes use `sudo -n` when the ssh login is not root.
 Flags: `--dry-run` (probes run, changes are only printed), `--skip-setup` (skip steps 3 and 7),
 `--week wwNN`.
 
-Attach afterwards with `docker --context <nick> exec -it akao_<name> tmux attach`.
+Attach afterwards with `docker --context <nick> exec -it akao_<name> tmux attach`.  An agent
+driving workers (the controller) opens the worker's `claude` in a window of its own tmux
+instead, and keeps a record of what it ran: `/2026/skills/controller/SKILL.md`.
+
+## `akao cp <src> <dst>`
+
+Copies a path between boxes, or between a box and this machine, e.g. one worker's results
+for another to refer to:
+
+```bash
+akao cp m15-21:ww42/dsv4_exp/0003_baseline f19-11:ww42/dsv4_b   # -> f19-11:ww42/dsv4_b/0003_baseline
+akao cp n10-17:ww42/hello/0001_probe /tmp/                      # -> /tmp/0001_probe on this machine
+```
+
+- An address is `nick:rel-path`, relative to that box's `<host_home>/<year>`, or a bare path
+  (no colon) on this machine.
+- Like `cp -a`: the source's basename lands *inside* the destination directory, which is
+  created if missing.  Files are overwritten; nothing is deleted (merge, never mirror).
+- `tar | ssh tar`; written files are owned root:root, through `sudo -n` on a box whose ssh
+  login is not root.  `--dry-run` prints the commands only.
 
 `$AKAO_SSH` overrides the ssh command akao uses (e.g. `ssh -F ~/.ssh/other_config`); docker's
 own ssh transport for the context still uses plain `ssh`.

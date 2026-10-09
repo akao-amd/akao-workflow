@@ -2,6 +2,8 @@
 
 Installed by the akao-workflow post-commit hook as `/<year>/oaka/README.md`, next to
 `bin/oaka`; `akao init` ships the library to every box and links `oaka` onto PATH.
+This file says what oaka does; the rules an agent follows when using it (what never to
+hand-write, when to stop and ask) are in `/2026/skills/worker/SKILL.md`.
 
 ```
 /<year>/oaka/
