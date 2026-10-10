@@ -30,8 +30,10 @@ oaka profile ls | show <p> | diff <a> <b> | save <server> --as <model>/<recipe>
   under `/model`).  One server gets all `--gpus`; several take their pinned `tp` (or 1) each,
   in order.  Each `--client` is added for every server; each `--stack` adds a
   `[stack.<package>]` block.
+- Work in a numbered task dir under the worker's artifact root (`$AKAO_ARTIFACT_ROOT`, pinned
+  by `akao init`): `check` warns when the Work Directory is outside it, or is the root itself.
 - `check --json` prints `{"ok": true, "machine", "servers", "clients", "stack", "vary",
-  "warnings"}`, or `{"ok": false, "error"}` (exit 1); `doctor --json` prints
+  "warnings"}` (each server with its `engine`), or `{"ok": false, "error"}` (exit 1); `doctor --json` prints
   `{"ok", "checks": [{"status": ok|warn|fail, "check", "detail"}]}`.  Same exit codes as
   without `--json`.
 - `compile` writes into `scripts/`, and removes scripts an earlier compile wrote that the
@@ -42,7 +44,7 @@ oaka profile ls | show <p> | diff <a> <b> | save <server> --as <model>/<recipe>
   |---|---|
   | `server_<name>.sh` | one server, in the foreground |
   | `client_<NN>_<kind>_<server>.sh` | one client against its running server |
-  | `step.sh [<label>]` | one measurement: start every server, wait for sglang's ready line (a crash marker, exit or 30 min timeout fails it), the clients in plan order, stop the servers (also on failure and Ctrl-C) |
+  | `step.sh [<label>]` | one measurement: start every server, wait until it is ready (SGLang: its ready line; vllm, ATOM: `GET /health` answers 200; a crash marker, exit or 30 min timeout fails it), the clients in plan order, stop the servers (also on failure and Ctrl-C) |
   | `run_all.sh` | the whole plan; what `oaka run` executes |
   | `stack.sh`, `install_<package>.sh` | plans with `[stack]`: install and verify the stack |
   | `bisect_step.sh`, `metrics.py` | plans whose stack varies: one bisect step; the numbers of a step |
@@ -101,8 +103,8 @@ The client policy is fixed; the plan only picks what is meant to vary:
 
 The stack is the source of the Python packages the servers import.  The container has one
 venv, so the stack is plan-wide and changing it changes it for every process in the
-container; `stack.sh` refuses while an sglang server is running.  Packages the plan does not
-name keep what the container has.
+container; `stack.sh` refuses while a server (SGLang, vllm, ATOM) is running.  Packages the
+plan does not name keep what the container has.
 
 ```toml
 [stack.sglang]
@@ -201,7 +203,8 @@ image's `GPU_ARCH_LIST` (what it was built for) names another arch.
 This library is the only home of server recipes (the former sglang-dev skill's profiles were
 converted into it); change recipes here, through `oaka profile save` or by hand.
 
-Named `<model>/<recipe>`; `<model>` alone means `<model>/base`.  `<model>` is the model
+Named `<model>/<recipe>`; `<model>` alone means `<model>/base`.  A recipe imported from an
+InferenceX entry by a mirror worker is `<model>/infx-<entry>[-<variant>]`.  `<model>` is the model
 family as you call it (`gpt-oss-120b`), and the `model` field holds the actual path.
 
 **A profile is self-contained.**  The library travels to every box without the console's
@@ -215,6 +218,7 @@ there.  An `origin` field is rejected for this reason.
 description = "one line: what this recipe is"
 arch = ["gfx950"]          # what it is for: GPU arch, or [arch, ROCm version]; absent = any
 extends = "<model>/<recipe>"   # optional; [env]/[args] below overlay the parent
+engine = "vllm"            # optional: sglang (default), vllm or atom; inherited through extends
 model = "/model/<dir>"
 tp = 1                     # optional pin
 
@@ -226,8 +230,24 @@ flag = true                # --flag; false drops an inherited flag
 key = 1                    # --key 1; a list gives --key v1 v2
 ```
 
-`--model-path`, `--tp`, `--port` and `HIP_VISIBLE_DEVICES` come from the plan and are
-rejected in profiles and plans.  `arch` and `description` are not inherited.
+The model, tp and port flags and `HIP_VISIBLE_DEVICES` come from the plan and are rejected
+in profiles and plans (in every engine's spelling: `model-path`, `model`, `tp`, `tp-size`,
+`tensor-parallel-size`, `port`, `server-port`).  `arch` and `description` are not inherited.
+
+**Engines.**  `engine` picks the server; the rest of the profile works the same for each:
+
+| `engine` | command | oaka adds | ready when |
+|---|---|---|---|
+| `sglang` (default) | `python3 -m sglang.launch_server` | `--model-path M --tp N --port P` | its log says "The server is fired up and ready" |
+| `vllm` | `vllm serve` | `M --tensor-parallel-size N --port P` | `GET /health` answers 200 |
+| `atom` | `python3 -m atom.entrypoints.openai_server` | `--model M -tp N --server-port P` | `GET /health` answers 200 |
+
+`[args]` keys are written as long flags (`key = v` → `--key v`), so write a recipe's flags in
+their long form: ATOM's `--kv_cache_dtype fp8` as `kv_cache_dtype = "fp8"`, vllm's
+`-cc.pass_config.fuse_rope_kvcache=True` as one JSON value,
+`compilation-config = '{"pass_config": {"fuse_rope_kvcache": true}}'`.  Clients speak the
+OpenAI API and do not care which engine serves.  `stacks.toml` has recipes for SGLang, AITER
+and Triton only.
 `profile save` writes a server's plan overrides as a new profile that `extends` the one
 it started from, with `arch` copied unless `--arch` (`gfx950`, or `gfx950:10.1` with a ROCm
 version), and a dated history comment naming the task; add the evidence to it by hand.
@@ -252,7 +272,10 @@ that are.
 
 ## Environment
 
-`OAKA_LIB` (library root, default `/<year>/oaka`), `OAKA_INFX` (InferenceX tree, default
+`AKAO_ARTIFACT_ROOT` (this worker's artifact root, set by `akao init`; `doctor` shows it,
+`check` warns when the Work Directory is not a task dir under it; its year is the `<year>`
+below, the only one the container mounts, else today's ISO year), `OAKA_LIB` (library root,
+default `/<year>/oaka`), `OAKA_INFX` (InferenceX tree, default
 `/<year>/nocopy/InferenceX/inferencex-e2e`), `OAKA_GPUS` (comma-separated archs; overrides
 GPU detection where the KFD topology is not visible), `OAKA_ROCM` (overrides the ROCm
 version; `OAKA_GPUS` and `OAKA_ROCM` are honoured by `server_<name>.sh`'s check too),

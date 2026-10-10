@@ -2,7 +2,7 @@
 //! is `ok`, `warn` or `FAIL` with the fix; any FAIL makes the command fail.
 
 use crate::compile::infx_root;
-use crate::profile::Library;
+use crate::profile::{Engine, Library};
 use crate::stack;
 use crate::sys;
 use anyhow::{bail, Result};
@@ -130,10 +130,27 @@ pub fn run(lib: &Library, json: bool) -> Result<()> {
         r.ok("inferencex", format!("{infx} at {head}"));
     }
 
-    let find = "import importlib.util as u; s = u.find_spec('sglang'); print(s.origin if s else '')";
-    match output(&["python3", "-c", find], &[]) {
-        Some(origin) if !origin.is_empty() => r.ok("sglang", origin),
-        _ => r.fail("sglang", "python3 cannot find the sglang package"),
+    check_engines(&mut r, lib);
+
+    match std::env::var("AKAO_ARTIFACT_ROOT") {
+        Err(_) => r.warn(
+            "artifacts",
+            "AKAO_ARTIFACT_ROOT is not set: this container predates it, so its root is its working \
+             directory (where `docker exec` starts; the controller names it), not a path derived from \
+             today's week.  To pin one: on the console, docker --context <nick> rm -f akao_<name>, then \
+             akao init (/root and /<year> are bind mounts and survive; installs into the image do not)",
+        ),
+        Ok(v) => match sys::artifact_root() {
+            Some(root) if root.is_dir() => r.ok("artifacts", root.display().to_string()),
+            Some(root) => r.warn(
+                "artifacts",
+                format!("AKAO_ARTIFACT_ROOT={} does not exist", root.display()),
+            ),
+            None => r.warn(
+                "artifacts",
+                format!("AKAO_ARTIFACT_ROOT={v} is not an absolute path; ignored"),
+            ),
+        },
     }
 
     match which("sgl-eval") {
@@ -159,6 +176,70 @@ pub fn run(lib: &Library, json: bool) -> Result<()> {
         bail!("{} check(s) failed", r.failed);
     }
     Ok(())
+}
+
+/// Where python3 finds an engine's package (without importing it), or None.
+fn engine_origin(engine: Engine) -> Option<String> {
+    let find = format!(
+        "import importlib.util as u; s = u.find_spec({:?}); print(s.origin if s and s.origin else '')",
+        engine.module()
+    );
+    let origin = output(&["python3", "-c", &find], &[]).filter(|o| !o.is_empty())?;
+    match engine {
+        // `atom` is a common name: it must be the one with ATOM's OpenAI server.
+        Engine::Atom => Path::new(&origin)
+            .with_file_name("entrypoints/openai_server.py")
+            .is_file()
+            .then_some(origin),
+        _ => Some(origin),
+    }
+}
+
+/// The serving engines python3 finds here.  One is enough; an engine that a profile for
+/// this machine uses but that is missing is worth a warning.
+fn check_engines(r: &mut Report, lib: &Library) {
+    let (arch, rocm) = (sys::arch(), sys::rocm().map(|(v, _)| v));
+    let wanted: Vec<(String, Engine)> = lib
+        .list()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|n| lib.resolve(n).ok())
+        .filter(|p| p.fits(arch.as_deref(), rocm.as_deref()))
+        .map(|p| (p.name, p.engine))
+        .collect();
+    let mut found = 0;
+    for engine in Engine::ALL {
+        let users: Vec<&str> = wanted
+            .iter()
+            .filter(|(_, e)| *e == engine)
+            .map(|(n, _)| n.as_str())
+            .collect();
+        match engine_origin(engine) {
+            Some(origin) if engine == Engine::Vllm && which("vllm").is_none() => {
+                found += 1;
+                r.warn("vllm", format!("{origin}, but no `vllm` on PATH to serve with"));
+            }
+            Some(origin) => {
+                found += 1;
+                r.ok(engine.as_str(), origin);
+            }
+            None if !users.is_empty() => r.warn(
+                engine.as_str(),
+                format!(
+                    "python3 cannot find {}; profiles {} use it",
+                    engine.module(),
+                    users.join(" ")
+                ),
+            ),
+            None => {}
+        }
+    }
+    if found == 0 {
+        r.fail(
+            "engines",
+            "python3 finds none of sglang, vllm, atom: no server can start in this container",
+        );
+    }
 }
 
 fn check_library(r: &mut Report, lib: &Library) {

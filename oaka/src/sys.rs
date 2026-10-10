@@ -11,9 +11,27 @@ pub const ARCHES: &[&str] = &["gfx942", "gfx950", "gfx1250"];
 pub const PORT_RANGE: std::ops::RangeInclusive<u16> = 29900..=30100;
 pub const PORT_AVOID: u16 = 30000;
 
-/// ISO year of today, e.g. "2026" (same rule as akao).
+/// The work year: that of this worker's artifact root ($AKAO_ARTIFACT_ROOT=/2026/...), the
+/// only /<year> its container mounts; else the ISO year of today (akao's rule).
 pub fn work_year() -> String {
-    chrono::Local::now().iso_week().year().to_string()
+    artifact_root()
+        .and_then(|r| root_year(&r))
+        .unwrap_or_else(|| chrono::Local::now().iso_week().year().to_string())
+}
+
+/// "2026" from /2026/ww42/x.
+fn root_year(root: &std::path::Path) -> Option<String> {
+    let first = root.to_str()?.split('/').nth(1)?;
+    (first.len() == 4 && first.chars().all(|c| c.is_ascii_digit())).then(|| first.to_string())
+}
+
+/// This worker's artifact root, the directory holding its numbered task dirs:
+/// $AKAO_ARTIFACT_ROOT, which `akao init` pins into the container.  None when unset (a
+/// container from before it) or not absolute.
+pub fn artifact_root() -> Option<std::path::PathBuf> {
+    let r = std::env::var("AKAO_ARTIFACT_ROOT").ok()?;
+    let r = r.trim_end_matches('/');
+    r.starts_with('/').then(|| std::path::PathBuf::from(r))
 }
 
 /// "0.1.0 (<git sha>)", stamped into every compiled script.
@@ -168,6 +186,15 @@ mod tests {
         assert_eq!(leading_version("7.2.0-43\n").as_deref(), Some("7.2.0"));
         assert_eq!(leading_version("10.0.0\n").as_deref(), Some("10.0.0"));
         assert_eq!(leading_version("unknown"), None);
+    }
+
+    #[test]
+    fn the_year_comes_from_the_artifact_root() {
+        use std::path::Path;
+        assert_eq!(root_year(Path::new("/2026/ww42/exp")).as_deref(), Some("2026"));
+        assert_eq!(root_year(Path::new("/2026")).as_deref(), Some("2026"));
+        assert_eq!(root_year(Path::new("/work/exp")), None);
+        assert_eq!(root_year(Path::new("/20261/x")), None);
     }
 
     #[test]

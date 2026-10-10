@@ -29,7 +29,8 @@ for a in "$@"; do
 done
 
 # Swapping the venv under a live server changes the code it lazily imports and JIT-builds.
-SERVERS='^[^ ]*python[0-9.]* -m sglang[.]launch_server( |$)|^[^ ]*sglang serve( |$)'
+SERVERS='^[^ ]*python[0-9.]* -m (sglang[.]launch_server|atom[.]entrypoints[.]openai_server)( |$)'
+SERVERS+='|^([^ ]*python[0-9.]* )?[^ ]*(sglang|vllm) serve( |$)'
 if pgrep -f "$SERVERS" >/dev/null; then
     say "a server runs in this container; stop it before changing the stack:"
     pgrep -af "$SERVERS" | sed 's/^/    /'

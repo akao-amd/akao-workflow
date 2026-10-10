@@ -2,7 +2,7 @@
 # {{ marker }}
 # Install recipe of {{ name }}{% if arch %} for {{ arch }} (it has one per GPU arch){% endif %}, from the
 # library's {{ stacks }}{% if description %}:
-#   {{ description }}{% endif %}
+#   {{ description | comment }}{% endif %}
 
 # scripts/stack.sh runs it inside the tree, with checkout, cleaning, restoring the files it
 # edits and verifying the result around it; by hand that is all yours:

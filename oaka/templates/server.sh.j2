@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # {{ marker }}
-# Server {{ name }}: profile {{ profile }}
+# Server {{ name }}: profile {{ profile }} ({{ engine }})
 {% if description %}
-#   {{ description }}
+#   {{ description | comment }}
 {% endif %}
 {% for line in overrides %}
-#   plan override: {{ line }}
+#   plan override: {{ line | comment }}
 {% endfor %}
 #
 # Runs in the foreground; scripts/run_all.sh starts it in the background with its log in logs/.
@@ -88,9 +88,9 @@ export {{ kv[0] }}={{ kv[1] | q }}
 {% endfor %}
 
 ARGS=(
-    --model-path {{ model | q }}
-    --tp {{ tp }}
-    --port "$PORT"
+{% for line in fixed %}
+    {{ line }}
+{% endfor %}
 {% for line in args %}
     {{ line }}
 {% endfor %}
@@ -98,10 +98,11 @@ ARGS=(
 
 # Provenance: what is about to run, and on which stack.
 say "$(date -Is) $(realpath "$0")"
-say "profile {{ profile }}  model {{ model }}  tp {{ tp }}  gpus $HIP_VISIBLE_DEVICES  port $PORT"
+MODEL={{ model | q }}
+say "profile {{ profile }}  model $MODEL  tp {{ tp }}  gpus $HIP_VISIBLE_DEVICES  port $PORT"
 python3 -m pip show {{ packages }} 2>/dev/null \
     | grep -E '^(Name|Version|Location|Editable project location):' | sed 's/^/[server {{ name }}] pip /' || true
-env | grep -E '^(HIP|HSA|ROCM|AITER|SGLANG|TRITON|ENABLE_CK|NCCL|RCCL|TORCH|PYTORCH)' | sort | sed 's/^/[server {{ name }}] env /'
-say "cmd python3 -m sglang.launch_server ${ARGS[*]}"
+env | grep -E '^(HIP|HSA|ROCM|AITER|SGLANG|VLLM|ATOM|TRITON|ENABLE_CK|NCCL|RCCL|TORCH|PYTORCH)' | sort | sed 's/^/[server {{ name }}] env /'
+say "cmd {{ command }} ${ARGS[*]}"
 
-exec python3 -m sglang.launch_server "${ARGS[@]}"
+exec {{ command }} "${ARGS[@]}"

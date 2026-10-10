@@ -1,7 +1,7 @@
 //! Server profiles: `<lib>/profiles/<model>/<recipe>.toml`.
 //!
-//! A profile is a launch recipe for `python3 -m sglang.launch_server`: the model, env vars
-//! and flags.  `extends` makes a profile an overlay of another, which is how experiments
+//! A profile is a launch recipe for a serving engine (`engine`: SGLang unless it says
+//! vllm or ATOM): the model, env vars and flags.  `extends` makes a profile an overlay of another, which is how experiments
 //! are consolidated (`oaka profile save` writes only the delta).
 //!
 //! A profile is self-contained: it travels to every box with the library, where nothing
@@ -14,9 +14,82 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml::{Table, Value};
 
-/// Flags and env vars that oaka sets itself from the plan.
-pub const RESERVED_ARGS: &[&str] = &["model-path", "tp", "tp-size", "tensor-parallel-size", "port"];
+/// Flags and env vars that oaka sets itself from the plan: the model, tp and port flags of
+/// every engine, whichever engine the profile names.
+pub const RESERVED_ARGS: &[&str] = &[
+    "model-path",
+    "model",
+    "tp",
+    "tp-size",
+    "tensor-parallel-size",
+    "port",
+    "server-port",
+];
 pub const RESERVED_ENV: &[&str] = &["HIP_VISIBLE_DEVICES"];
+
+/// The server a profile launches.  Each takes oaka's model, tp and port in its own
+/// spelling, and says differently when it is ready.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Engine {
+    #[default]
+    Sglang,
+    Vllm,
+    Atom,
+}
+
+impl Engine {
+    pub const ALL: [Engine; 3] = [Engine::Sglang, Engine::Vllm, Engine::Atom];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Engine::Sglang => "sglang",
+            Engine::Vllm => "vllm",
+            Engine::Atom => "atom",
+        }
+    }
+
+    /// The command that starts a server, before its flags.
+    pub fn command(self) -> &'static str {
+        match self {
+            Engine::Sglang => "python3 -m sglang.launch_server",
+            Engine::Vllm => "vllm serve",
+            Engine::Atom => "python3 -m atom.entrypoints.openai_server",
+        }
+    }
+
+    /// The Python package that has to be importable for `command`.
+    pub fn module(self) -> &'static str {
+        match self {
+            Engine::Sglang => "sglang",
+            Engine::Vllm => "vllm",
+            Engine::Atom => "atom",
+        }
+    }
+
+    /// oaka's own flags, one argument group per line: the model, tp and port (`port` is
+    /// written as given, e.g. "\"$PORT\"").  ATOM's spelling is InferenceX's ATOM scripts'.
+    pub fn fixed_args(self, model: &str, tp: &str, port: &str) -> Vec<Vec<String>> {
+        let s = |v: &[&str]| v.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        match self {
+            Engine::Sglang => vec![s(&["--model-path", model]), s(&["--tp", tp]), s(&["--port", port])],
+            Engine::Vllm => vec![s(&[model]), s(&["--tensor-parallel-size", tp]), s(&["--port", port])],
+            Engine::Atom => vec![s(&["--model", model]), s(&["-tp", tp]), s(&["--server-port", port])],
+        }
+    }
+
+    /// SGLang says it is ready in its log once its warmup request went through; the others
+    /// are ready when `GET /health` answers 200, as InferenceX's own scripts wait.
+    pub fn ready_by_log(self) -> bool {
+        self == Engine::Sglang
+    }
+}
+
+impl std::fmt::Display for Engine {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// One profile file, as written on disk.
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -29,6 +102,9 @@ pub struct ProfileFile {
     pub arch: Vec<Target>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extends: Option<String>,
+    /// The server it launches; inherited through `extends`, SGLang when no profile says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine: Option<Engine>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -119,7 +195,7 @@ pub fn targets_text(arch: &[Target]) -> String {
     arch.iter().map(Target::to_string).collect::<Vec<_>>().join(" ")
 }
 
-/// A `launch_server` flag value.
+/// A server flag value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Arg {
     /// `--flag`
@@ -136,6 +212,7 @@ pub struct Profile {
     pub name: String,
     pub description: Option<String>,
     pub arch: Vec<Target>,
+    pub engine: Engine,
     pub model: Option<String>,
     pub tp: Option<u32>,
     pub env: Vec<(String, String)>,
@@ -343,12 +420,14 @@ impl Library {
             name: name.to_string(),
             description: top.description.clone(),
             arch: top.arch.clone(),
+            engine: Engine::default(),
             model: None,
             tp: None,
             env: Vec::new(),
             args: Vec::new(),
         };
         for (n, f) in chain.iter().rev() {
+            p.engine = f.engine.unwrap_or(p.engine);
             p.model = f.model.clone().or(p.model);
             p.tp = f.tp.or(p.tp);
             p.overlay(&f.env, &f.args).with_context(|| format!("profile {n}"))?;
@@ -411,6 +490,7 @@ mod tests {
             name: "m/r".into(),
             description: None,
             arch: vec![],
+            engine: Engine::Sglang,
             model: None,
             tp: None,
             env: vec![],
@@ -429,6 +509,10 @@ mod tests {
     #[test]
     fn reserved_and_dashes_rejected() {
         assert!(overlay_args(&mut vec![], &table("port = 1")).is_err());
+        assert!(
+            overlay_args(&mut vec![], &table("server-port = 1")).is_err(),
+            "ATOM's port flag"
+        );
         assert!(overlay_args(&mut vec![], &table("'--page-size' = 1")).is_err());
         assert!(overlay_env(&mut vec![], &table("HIP_VISIBLE_DEVICES = '0'")).is_err());
         assert!(overlay_env(&mut vec![], &table("A = true")).is_err());
@@ -487,11 +571,24 @@ mod tests {
         )
         .unwrap();
         let p = lib.resolve("m/var").unwrap();
+        assert_eq!(p.engine, Engine::Sglang, "no profile says: SGLang");
         assert_eq!(p.model.as_deref(), Some("/model/m"));
         assert_eq!(p.tp, Some(2));
         assert_eq!(targets_text(&p.arch), "gfx942 gfx950:10.1");
         fs::write(lib.profile_path("m/child"), "extends = 'm/var'\n").unwrap();
         assert!(lib.resolve("m/child").unwrap().arch.is_empty(), "arch is not inherited");
+        fs::write(lib.profile_path("m/vllm"), "extends = 'm/var'\nengine = 'vllm'\n").unwrap();
+        fs::write(lib.profile_path("m/vllm2"), "extends = 'm/vllm'\n").unwrap();
+        assert_eq!(
+            lib.resolve("m/vllm2").unwrap().engine,
+            Engine::Vllm,
+            "the engine is inherited"
+        );
+        fs::write(lib.profile_path("m/bad"), "engine = 'trt'\n").unwrap();
+        assert!(lib.resolve("m/bad").is_err());
+        for f in ["m/vllm", "m/vllm2", "m/bad"] {
+            fs::remove_file(lib.profile_path(f)).unwrap();
+        }
         fs::write(lib.profile_path("m/badrocm"), "arch = [['gfx950', '>=10.1']]\n").unwrap();
         let e = format!("{:#}", lib.resolve("m/badrocm").unwrap_err());
         assert!(e.contains("ROCm version \">=10.1\" must be dotted numbers or *"), "{e}");

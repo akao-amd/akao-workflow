@@ -389,6 +389,9 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: &Machine) -> R
         used.dedup();
         (used.len() == 1).then(|| used[0].clone())
     });
+    if let Some(w) = artifacts_warning(dir, sys::artifact_root().as_deref()) {
+        warnings.push(w);
+    }
     let stacks = stack::load(lib)?;
     let (stack, vary) = check_stack(&plan, &stacks, arch.as_deref(), &mut warnings)?;
     Ok(Checked {
@@ -405,6 +408,27 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: &Machine) -> R
             rocm: machine.rocm.clone(),
         },
     })
+}
+
+/// A Work Directory belongs in a numbered task dir under the worker's artifact root, so
+/// that its scripts and results are kept with the task.
+fn artifacts_warning(dir: &Path, root: Option<&Path>) -> Option<String> {
+    let root = root?;
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if dir == root {
+        Some(format!(
+            "the Work Directory is the artifact root {} itself; work in a numbered task dir under it",
+            root.display()
+        ))
+    } else if !dir.starts_with(&root) {
+        Some(format!(
+            "the Work Directory is outside the artifact root {} (AKAO_ARTIFACT_ROOT); its results will not \
+             be kept with this worker's tasks",
+            root.display()
+        ))
+    } else {
+        None
+    }
 }
 
 /// The profile's `arch` targets against this container: for every GPU of the server, one

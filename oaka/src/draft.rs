@@ -5,7 +5,7 @@
 //! the choices, and `oaka check` names each field that still needs a value.
 
 use crate::plan::{valid_server_name, PLAN};
-use crate::profile::Library;
+use crate::profile::{Engine, Library};
 use crate::stack;
 use crate::sys;
 use anyhow::{bail, Result};
@@ -97,7 +97,10 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
     for name in &all {
         let p = lib.resolve(name)?;
         if p.fits(arch.as_deref(), rocm.as_deref()) {
-            fitting.push(name.clone());
+            fitting.push(match p.engine {
+                Engine::Sglang => name.clone(),
+                e => format!("{name} ({e})"),
+            });
         }
     }
 
@@ -193,7 +196,7 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
         out += "# port = 29911            # default: a free port in 29900-30100, kept in plan.lock.toml\n";
         out += "# model = \"/model/...\"    # default: the profile's model\n";
         out += "[server.env]               # overrides on top of the profile; NAME = false unsets\n";
-        out += "[server.args]              # launch_server flags without --; true = bare flag, false = drop\n";
+        out += "[server.args]              # server flags without --; true = bare flag, false = drop\n";
         names.push(name);
     }
 

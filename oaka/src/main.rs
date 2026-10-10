@@ -194,7 +194,8 @@ fn checked_json(c: &plan::Checked) -> serde_json::Value {
         "ok": true,
         "machine": { "gpus": c.machine.gpus, "rocm": c.machine.rocm },
         "servers": c.servers.iter().map(|s| json!({
-            "name": s.name, "profile": s.base.name, "model": s.model, "gpus": s.gpus, "tp": s.tp,
+            "name": s.name, "profile": s.base.name, "engine": s.effective.engine.as_str(), "model": s.model,
+            "gpus": s.gpus, "tp": s.tp,
             "port": s.port, "overrides": compile::overrides(s),
         })).collect::<Vec<_>>(),
         "clients": c.plan.clients.iter().enumerate().map(|(i, cl)| json!({
@@ -212,8 +213,8 @@ fn describe(c: &plan::Checked) {
     println!("machine: {}", machine_text(&c.machine));
     for s in &c.servers {
         println!(
-            "server {}: profile {}, model {}, gpus {:?}, tp {}",
-            s.name, s.base.name, s.model, s.gpus, s.tp
+            "server {}: profile {} ({}), model {}, gpus {:?}, tp {}",
+            s.name, s.base.name, s.effective.engine, s.model, s.gpus, s.tp
         );
         for o in compile::overrides(s) {
             println!("  override {o}");
@@ -275,8 +276,9 @@ fn profile_cmd(dir: &Path, lib: &Library, cmd: ProfileCmd) -> Result<()> {
                 let archs = targets_text(&p.arch);
                 let fits = p.fits(arch.as_deref(), rocm.as_deref());
                 println!(
-                    "{}{name:<48} {archs:<16} {}",
+                    "{}{name:<48} {:<7}{archs:<16} {}",
                     if fits { " " } else { "!" },
+                    p.engine.as_str(),
                     p.description.as_deref().unwrap_or("")
                 );
             }
@@ -354,17 +356,22 @@ fn show(lib: &Library, name: &str) -> Result<()> {
     for (k, v) in &p.env {
         println!("{k}={}", sys::q(v));
     }
-    println!("python3 -m sglang.launch_server \\");
-    println!("    --model-path {} \\", p.model.as_deref().unwrap_or("<plan model>"));
-    println!(
-        "    --tp {} \\",
-        p.tp.map(|t| t.to_string()).unwrap_or_else(|| "<number of gpus>".into())
+    println!("{} \\", p.engine.command());
+    let model = p.model.as_deref().map(sys::q).unwrap_or_else(|| "<plan model>".into());
+    let tp = p.tp.map(|t| t.to_string()).unwrap_or_else(|| "<number of gpus>".into());
+    let mut lines: Vec<String> = p
+        .engine
+        .fixed_args(&model, &tp, "<plan port>")
+        .iter()
+        .map(|w| w.join(" "))
+        .collect();
+    lines.extend(
+        p.launch_args()
+            .iter()
+            .map(|w| w.iter().map(|x| sys::q(x)).collect::<Vec<_>>().join(" ")),
     );
-    println!("    --port <plan port> \\");
-    let lines = p.launch_args();
-    for (i, w) in lines.iter().enumerate() {
-        let w: Vec<String> = w.iter().map(|x| sys::q(x)).collect();
-        println!("    {}{}", w.join(" "), if i + 1 < lines.len() { " \\" } else { "" });
+    for (i, line) in lines.iter().enumerate() {
+        println!("    {line}{}", if i + 1 < lines.len() { " \\" } else { "" });
     }
     Ok(())
 }
@@ -420,6 +427,7 @@ fn diff(a: &Profile, b: &Profile) -> Vec<String> {
             }
         }
     };
+    field("engine", Some(a.engine.to_string()), Some(b.engine.to_string()));
     field("model", a.model.clone(), b.model.clone());
     field("tp", a.tp.map(|t| t.to_string()), b.tp.map(|t| t.to_string()));
     field("arch", Some(targets_text(&a.arch)), Some(targets_text(&b.arch)));

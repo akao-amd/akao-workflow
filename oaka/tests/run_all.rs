@@ -58,6 +58,35 @@ while True:
     except socket.timeout: pass
 "#;
 
+/// `vllm serve <model> ...` and `python3 -m atom.entrypoints.openai_server ...`: listen on
+/// --port (vllm) or --server-port (ATOM) and answer GET /health with 503 until
+/// FAKE_READY_DELAY has passed, then 200; never print SGLang's ready line.  `--crash`
+/// exits like an argparse error.
+const FAKE_OPENAI_SERVER: &str = r#"
+import http.server, json, os, signal, sys, time
+args = sys.argv[1:]
+if "--crash" in args:
+    print("error: unrecognized arguments: --crash", flush=True)
+    sys.exit(2)
+flag = "--server-port" if "--server-port" in args else "--port"
+port = int(args[args.index(flag) + 1])
+state = os.environ["FAKE_STATE"]
+with open(os.path.join(state, "pids"), "a") as f:
+    f.write(f"{os.getpid()}\n")
+json.dump({"argv": sys.argv, "gpus": os.environ.get("HIP_VISIBLE_DEVICES"), "env": dict(os.environ)},
+          open(os.path.join(state, f"server_{port}.json"), "w"))
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+ready_at = time.time() + float(os.environ.get("FAKE_READY_DELAY", "0"))
+class Health(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200 if self.path == "/health" and time.time() >= ready_at else 503)
+        self.end_headers()
+    def log_message(self, *a):
+        pass
+print("INFO:     Started server process", flush=True)
+http.server.HTTPServer(("127.0.0.1", port), Health).serve_forever()
+"#;
+
 /// `python3 -m infx.bench fixed-seq point --k v ...`: writes a result JSON that echoes argv.
 /// Output tok/s is conc times the installed stand-in package's SPEED (100 without one).
 const FAKE_INFX: &str = r#"
@@ -100,6 +129,11 @@ impl Sandbox {
         };
         write("py/sglang/__init__.py", "");
         write("py/sglang/launch_server.py", FAKE_SGLANG);
+        write("py/vllm/__init__.py", "");
+        write("bin/vllm", &format!("#!/usr/bin/env python3\n{FAKE_OPENAI_SERVER}"));
+        write("py/atom/__init__.py", "");
+        write("py/atom/entrypoints/__init__.py", "");
+        write("py/atom/entrypoints/openai_server.py", FAKE_OPENAI_SERVER);
         write("infx/infx/__init__.py", "");
         write("infx/infx/bench/__init__.py", "");
         write("infx/infx/bench/__main__.py", FAKE_INFX);
@@ -108,6 +142,7 @@ impl Sandbox {
         Command::new("chmod")
             .arg("+x")
             .arg(root.join("bin/sgl-eval"))
+            .arg(root.join("bin/vllm"))
             .status()
             .unwrap();
         let model = root.join("model");
@@ -118,6 +153,16 @@ impl Sandbox {
                 "model = '{}'\n[env]\nSGLANG_X = '1'\n[args]\ntrust-remote-code = true\n",
                 model.display()
             ),
+        );
+        // The same model on the other engines, the way a mirror worker would write them.
+        write(
+            "lib/profiles/m/vllm.toml",
+            "extends = 'm/base'\nengine = 'vllm'\n[args]\ntrust-remote-code = false\nmax-model-len = 10240\n",
+        );
+        write(
+            "lib/profiles/m/atom.toml",
+            "extends = 'm/base'\nengine = 'atom'\n[env]\nATOM_GPT_OSS_MODEL = '1'\n\
+             [args]\ntrust-remote-code = false\nkv_cache_dtype = 'fp8'\n",
         );
         fs::create_dir_all(root.join("work")).unwrap();
         fs::create_dir_all(root.join("state")).unwrap();
@@ -151,6 +196,7 @@ impl Sandbox {
             .env("FAKE_STATE", self.root.join("state"))
             .env("OAKA_STACK_STATE", self.root.join("stack-state"))
             .env_remove("GPU_ARCH_LIST")
+            .env_remove("AKAO_ARTIFACT_ROOT")
             .env("OAKA_ROCM", "10.0.0")
             .stdin(Stdio::null());
         c
@@ -842,5 +888,174 @@ fn profiles_for_another_rocm_are_refused() {
     );
     let (code, out) = run("10.1.0");
     assert_eq!(code, Some(0), "{out}");
+    sb.assert_no_leftovers();
+}
+
+/// A server of profile `profile` on GPU `gpu`, on an ephemeral port.
+fn server_of(name: &str, profile: &str, gpu: u32, extra: &str) -> (String, u16) {
+    let port = ephemeral_port();
+    (
+        format!("[[server]]\nname = '{name}'\nprofile = '{profile}'\ngpus = [{gpu}]\nport = {port}\n{extra}\n"),
+        port,
+    )
+}
+
+#[test]
+fn vllm_and_atom_servers_start_by_health_and_stop() {
+    let _servers = servers_shared();
+    let sb = Sandbox::new("engines");
+    let (a, port_a) = server_of("a", "m/vllm", 0, "");
+    let (b, port_b) = server_of("b", "m/atom", 1, "");
+    let fixed =
+        |s: &str| format!("[[client]]\nkind = 'fixed-seq'\nserver = '{s}'\nisl_osl = [[128, 32]]\nconc = [2]\n");
+    let plan = format!("{a}{b}{}{}", fixed("a"), fixed("b"));
+    // Not ready for the first second: /health answers 503, and no SGLang line ever comes.
+    let (code, out) = sb.run(&plan, &[("FAKE_READY_DELAY", "1")]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("server a ready (GET /health)"), "{out}");
+    assert!(out.contains("server b ready (GET /health)"), "{out}");
+    let record = |port: u16| {
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(sb.root.join(format!("state/server_{port}.json"))).unwrap())
+                .unwrap();
+        v["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w.as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let model = sb.root.join("model").display().to_string();
+    let vllm = record(port_a);
+    assert!(
+        vllm.contains(&format!(
+            "vllm serve {model} --tensor-parallel-size 1 --port {port_a} --max-model-len 10240"
+        )),
+        "{vllm}"
+    );
+    assert!(!vllm.contains("trust-remote-code"), "{vllm}");
+    let atom = record(port_b);
+    assert!(
+        atom.contains(&format!(
+            "openai_server.py --model {model} -tp 1 --server-port {port_b} --kv_cache_dtype fp8"
+        )),
+        "{atom}"
+    );
+    assert!(sb
+        .read("logs/server_b.log")
+        .contains("[server b] cmd python3 -m atom.entrypoints.openai_server"));
+    assert!(sb
+        .read("logs/server_b.log")
+        .contains("[server b] env ATOM_GPT_OSS_MODEL=1"));
+    assert_eq!(sb.read("results/02_fixed-seq_b/summary.csv").lines().count(), 2);
+    sb.assert_no_leftovers();
+
+    // A vllm server that dies at startup is caught although it never prints anything.
+    let (a, _) = server_of("a", "m/vllm", 0, "[server.args]\ncrash = true");
+    let (code, out) = sb.run(&format!("{a}{}", fixed("a")), &[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("server a died during startup"), "{out}");
+
+    // Agents see the engine; a profile may not set the port in any engine's spelling.
+    let out = sb.oaka(&["check", "--json"]).output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["servers"][0]["engine"], "vllm", "{v}");
+    let (a, _) = server_of("a", "m/atom", 0, "[server.args]\nserver-port = 1");
+    fs::write(sb.work().join("plan.toml"), a).unwrap();
+    let out = sb.oaka(&["check"]).output().unwrap();
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("--server-port is set by oaka from the plan"),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn doctor_reports_engines() {
+    let sb = Sandbox::new("doctor-engines");
+    let out = sb.oaka(&["doctor"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    for (engine, file) in [("vllm", "py/vllm/__init__.py"), ("atom", "py/atom/__init__.py")] {
+        let want = format!("{engine:<11} {}", sb.root.join(file).display());
+        assert!(text.contains(&format!("ok    {want}")), "{want:?} not in {text}");
+    }
+    // Without ATOM (unless this machine has a real one), its profile is the reason to warn.
+    fs::remove_dir_all(sb.root.join("py/atom")).unwrap();
+    let text = String::from_utf8_lossy(&sb.oaka(&["doctor"]).output().unwrap().stdout).into_owned();
+    if !text.contains("ok    atom") {
+        assert!(
+            text.contains("warn  atom        python3 cannot find atom; profiles m/atom use it"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn artifact_root_is_reported_and_checked() {
+    let sb = Sandbox::new("artifacts");
+    let out = sb.oaka(&["doctor"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        text.contains("warn  artifacts   AKAO_ARTIFACT_ROOT is not set"),
+        "{text}"
+    );
+    // The fallback the skills give, and the real way to pin one.
+    assert!(text.contains("its root is its working directory"), "{text}");
+    assert!(
+        text.contains("docker --context <nick> rm -f akao_<name>, then akao init"),
+        "{text}"
+    );
+    let root = sb.root.display().to_string();
+    let out = sb.oaka(&["doctor"]).env("AKAO_ARTIFACT_ROOT", &root).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(text.contains(&format!("ok    artifacts   {root}")), "{text}");
+
+    fs::write(sb.work().join("plan.toml"), server("a", 0, "") + GSM8K).unwrap();
+    let warnings = |root: &str| {
+        let out = sb
+            .oaka(&["check", "--json"])
+            .env("AKAO_ARTIFACT_ROOT", root)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["warnings"].to_string()
+    };
+    // The work dir is a task dir under the root: nothing to say.
+    assert!(!warnings(&root).contains("artifact root"), "{}", warnings(&root));
+    let work = sb.work().display().to_string();
+    assert!(warnings(&work).contains("is the artifact root"), "{}", warnings(&work));
+    assert!(
+        warnings("/nonexistent/elsewhere").contains("is outside the artifact root"),
+        "{}",
+        warnings("/nonexistent/elsewhere")
+    );
+}
+
+#[test]
+fn a_model_path_is_never_shell_code() {
+    let _servers = servers_shared();
+    let sb = Sandbox::new("quoting");
+    let model = sb.root.join("m $USD 'q' $(touch PWNED) `touch PWNED2`");
+    fs::create_dir_all(&model).unwrap();
+    let toml_model = model.display().to_string().replace('\\', "\\\\").replace('"', "\\\"");
+    let plan = server("a", 0, &format!("model = \"{toml_model}\"")) + GSM8K;
+    let (code, out) = sb.run(&plan, &[("USD", "100")]);
+    assert_eq!(code, 0, "{out}");
+    let log = sb.read("logs/server_a.log");
+    assert!(log.contains(&format!("model {}  tp 1", model.display())), "{log}");
+    let records = sb.server_record().join("\n");
+    let argv_model = serde_json::to_string(&model.display().to_string()).unwrap();
+    assert!(
+        records.contains(&format!("\"--model-path\", {argv_model}")),
+        "{records}"
+    );
+    for f in ["PWNED", "PWNED2"] {
+        assert!(
+            !sb.work().join(f).exists() && !sb.root.join(f).exists(),
+            "{f} was created"
+        );
+    }
     sb.assert_no_leftovers();
 }
