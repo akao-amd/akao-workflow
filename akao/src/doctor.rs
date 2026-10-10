@@ -1,7 +1,7 @@
 //! `akao doctor`: read-only checks of what akao needs on this machine.  Each line is
 //! `ok`, `warn` or `FAIL` with the fix; any FAIL makes the command fail.
 
-use crate::state::State;
+use crate::state::{self, State};
 use anyhow::{bail, Result};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -76,10 +76,44 @@ pub fn run() -> Result<()> {
         Some(v) => r.ok("docker", v.trim()),
         None => r.fail("docker", "docker CLI not found; init drives workers through it"),
     }
+    check_controller(&mut r, &state);
     if r.failed > 0 {
         bail!("{} check(s) failed", r.failed);
     }
     Ok(())
+}
+
+/// What a controller agent on this console uses besides akao itself: never fatal, akao
+/// runs without them.
+fn check_controller(r: &mut Report, state: &State) {
+    match state::artifact_root() {
+        Ok((root, from)) if Path::new(&root).is_dir() => r.ok("artifact root", format!("{root} ({from})")),
+        Ok((root, from)) => r.warn(
+            "artifact root",
+            format!("{root} ({from}) does not exist yet; the controller creates it for its record"),
+        ),
+        Err(e) => r.fail("artifact root", format!("{e:#}")),
+    }
+    for (tool, why) in [
+        ("tmux", "the controller opens worker agents in tmux windows"),
+        (
+            "claude",
+            "the controller agent itself; /<year>/utils/agent.sh installs it",
+        ),
+    ] {
+        match which(tool) {
+            Some(p) => r.ok(tool, p.display().to_string()),
+            None => r.warn(tool, format!("not on PATH; {why}")),
+        }
+    }
+    let infx = state.get("infx_local").ok().flatten().unwrap_or_default();
+    match output(&["git", "-C", &infx, "log", "-1", "--format=%h %cs"]) {
+        Some(head) => r.ok("inferencex", format!("{infx} at {}", head.trim())),
+        None => r.warn(
+            "inferencex",
+            format!("{infx} is not a git checkout; akao mirror reads InferenceX configs from it (config infx_local)"),
+        ),
+    }
 }
 
 fn check_config(r: &mut Report, state: &State) {

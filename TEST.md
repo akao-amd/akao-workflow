@@ -16,12 +16,23 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
   stand-ins for sglang (PYTHONPATH), InferenceX (`OAKA_INFX`) and sgl-eval (PATH); GPUs are
   faked with `OAKA_GPUS`.  It covers a two-server plan, a server crashing at startup, a
   failed GSM8K gate, double Ctrl-C during startup, and no process outliving any of them.
+  vllm (`bin/vllm`) and ATOM (`atom.entrypoints.openai_server` on PYTHONPATH) stand-ins answer
+  `GET /health` with 503 until `FAKE_READY_DELAY`, then 200: their servers' flags, readiness,
+  a crash at startup, and `doctor`'s engine lines; the artifact root's `doctor` line and
+  `check` warnings run with `AKAO_ARTIFACT_ROOT` set per case (removed from the sandbox
+  otherwise).
   The stand-ins are short Python strings at the top of that file; extend them there.
 - The stack cases use a stand-in package `fakepkg` in a scratch git repo (one commit per
   `SPEED`, which the fake InferenceX reports as tok/s; a `BROKEN` file makes its recipe
   fail): install + verify + clean + dirty-tree refusal, a failing recipe and a running
   server stopping `stack.sh`, A-B-A's `compare.csv`, and a bisect that skips a broken
   commit and finds the planted regression.
+- `akao/tests/mirror.rs` runs `akao mirror --dry-run` against a scratch InferenceX repo with
+  stand-in ssh (`AKAO_SSH`; `FAKE_GFX` is the box's KFD) and docker (`FAKE_EXISTING` is a
+  container that already exists): the commands a bring-up would run, and the refusals
+  (another GPU arch, another image) before any host command.  `mirror.rs`'s unit tests cover
+  both InferenceX layouts (configs at the root; under `inferencex-e2e/` with
+  `configs/deprecated/`), the launcher's script lookup and the brief.
 - A profile for another ROCm version: `oaka check` aborts, and scripts compiled for 10.1
   refuse to start servers when rerun by hand with `OAKA_ROCM=10.0.0`.  The sandbox pins
   `OAKA_ROCM` and removes `GPU_ARCH_LIST`, so the host's ROCm does not leak in.  They fail if a real sglang server runs in the
@@ -69,10 +80,12 @@ binary but no repo, so these are subcommands, not cargo tests).  Each prints
 - `akao doctor` (console): `AKAO_CONFIG_ROOT` exported, `default_image`, `hosts.tsv`, the
   `ssh` first on PATH honours `$AKAO_CONFIG_ROOT/.ssh/config` (compared with
   `ssh -F <config> -G` for every host, so docker contexts get the same config), home
-  template, deploy sources incl. a runnable `oaka/bin/oaka`, docker CLI.
+  template, deploy sources incl. a runnable `oaka/bin/oaka`, docker CLI; for a controller
+  (warn only): its artifact root, `tmux`, `claude`, the InferenceX clone mirror reads.
 - `oaka doctor` (worker; `akao init` runs it as its last step): ROCm version, library
-  profiles resolve, GPUs visible, InferenceX checked out and
-  importable, sglang findable, `sgl-eval` and `oaka` on PATH (warn only).
+  profiles resolve, GPUs visible, InferenceX checked out and importable, the serving engines
+  python finds (SGLang, vllm, ATOM; FAIL only when none), the artifact root, `sgl-eval` and
+  `oaka` on PATH (warn only).
 
 Run them after `akao init`, and first when a run fails for environmental reasons.
 `cargo test` proves each doctor catches what it claims (`akao/tests/doctor.rs`,

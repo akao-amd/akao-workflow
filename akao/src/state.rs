@@ -35,6 +35,11 @@ pub const KEYS: &[(&str, Option<&str>, &str)] = &[
         Some("https://github.com/SemiAnalysisAI/InferenceX.git"),
         "InferenceX repository init clones into /<year>/nocopy/InferenceX (oaka's benchmark client)",
     ),
+    (
+        "infx_local",
+        Some("/{year}/nocopy/InferenceX"),
+        "this machine's InferenceX clone, which `akao mirror` reads its configs from",
+    ),
 ];
 
 pub struct State {
@@ -140,6 +145,24 @@ pub fn work_week() -> String {
     format!("ww{:02}", chrono::Local::now().iso_week().week())
 }
 
+/// Names an agent's artifact root: the directory holding its numbered dirs.  `akao init`
+/// pins a worker's into its container; on the console it is the controller's own.
+pub const ARTIFACT_ROOT_ENV: &str = "AKAO_ARTIFACT_ROOT";
+
+/// The console agent's artifact root and where it came from: `$AKAO_ARTIFACT_ROOT` when
+/// set (then the year and week play no part), else `/<year>/<week>/controller`.
+pub fn artifact_root() -> Result<(String, &'static str)> {
+    match std::env::var(ARTIFACT_ROOT_ENV) {
+        Ok(r) if !r.is_empty() => {
+            if !r.starts_with('/') {
+                bail!("{ARTIFACT_ROOT_ENV}={r} must be an absolute path");
+            }
+            Ok((r.trim_end_matches('/').to_string(), ARTIFACT_ROOT_ENV))
+        }
+        _ => Ok((format!("/{}/{}/controller", work_year(), work_week()), "derived")),
+    }
+}
+
 /// One row of hosts.tsv. Optional columns are written as `-`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Host {
@@ -160,6 +183,11 @@ pub struct Host {
 pub const HOSTS_HEADER: &str = "# nick\timage\tmodel_path\tdocker_sock\thost_home\trest";
 
 impl Host {
+    /// host_home without a trailing slash ("" for "/"), to join paths onto.
+    pub fn home(&self) -> &str {
+        self.host_home.trim_end_matches('/')
+    }
+
     pub fn docker_sock(&self) -> &str {
         self.docker_sock.as_deref().unwrap_or(DEFAULT_DOCKER_SOCK)
     }
@@ -178,6 +206,17 @@ impl Host {
         for (what, v) in [("model_path", &self.model_path), ("host_home", &self.host_home)] {
             if !v.starts_with('/') {
                 bail!("host '{}': {what} must be an absolute path: {v}", self.nick);
+            }
+            // Docker reports mount sources normalized; ours must compare equal to them.
+            if v.trim_end_matches('/')
+                .split('/')
+                .skip(1)
+                .any(|c| matches!(c, "" | "." | ".."))
+            {
+                bail!(
+                    "host '{}': {what} must be a plain path (no //, . or ..): {v}",
+                    self.nick
+                );
             }
         }
         if let Some(s) = &self.docker_sock {
@@ -291,6 +330,21 @@ mod tests {
         assert_eq!(h[0].image, None);
         assert_eq!(h[0].docker_sock(), DEFAULT_DOCKER_SOCK);
         assert_eq!(h[0].rest, None);
+    }
+
+    #[test]
+    fn host_paths_join_cleanly() {
+        let mut h = sample();
+        h.host_home = "/root/akao/".into();
+        assert!(h.validate().is_ok());
+        assert_eq!(h.home(), "/root/akao");
+        h.host_home = "/".into();
+        assert!(h.validate().is_ok());
+        assert_eq!(format!("{}/2026", h.home()), "/2026");
+        for bad in ["/a//b", "/a/./b", "/a/../b"] {
+            h.host_home = bad.into();
+            assert!(h.validate().is_err(), "{bad}");
+        }
     }
 
     #[test]

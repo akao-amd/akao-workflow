@@ -8,5 +8,7 @@ edition.workspace = true
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_yaml = "0.9"
 shlex = "1"
 toml = "0.8"

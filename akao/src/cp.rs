@@ -45,7 +45,7 @@ impl Addr {
                 let host = state.host(nick)?;
                 let year = state::work_year();
                 let rel = self.rel.trim_start_matches('/');
-                Ok(format!("{}/{}/{}", host.host_home, year, rel))
+                Ok(format!("{}/{}/{}", host.home(), year, rel))
             }
         }
     }

@@ -67,7 +67,8 @@ impl Sandbox {
     fn doctor(&self, bin_dir: &str, config_root: Option<&Path>) -> (i32, String) {
         let mut c = Command::new(env!("CARGO_BIN_EXE_akao"));
         c.arg("doctor")
-            .env("PATH", format!("{}:/usr/bin:/bin", self.root.join(bin_dir).display()));
+            .env("PATH", format!("{}:/usr/bin:/bin", self.root.join(bin_dir).display()))
+            .env_remove("AKAO_ARTIFACT_ROOT");
         match config_root {
             Some(r) => c.env("AKAO_CONFIG_ROOT", r),
             None => c.env_remove("AKAO_CONFIG_ROOT"),
@@ -144,4 +145,44 @@ fn missing_pieces_are_named() {
     assert!(out.contains("FAIL  deploy         missing under"), "{out}");
     assert!(out.contains("FAIL  oaka"), "{out}");
     assert!(out.contains("FAIL  home template"), "{out}");
+}
+
+#[test]
+fn controller_prerequisites_are_reported() {
+    let sb = Sandbox::new("controller");
+    let (code, out) = sb.doctor("bin", Some(&sb.state()));
+    assert_eq!(code, 0, "{out}");
+    // Not on the sandbox's PATH (system dirs aside): warned, never fatal.
+    assert!(out.contains("artifact root  /"), "{out}");
+    assert!(out.contains("(derived)"), "{out}");
+    assert!(out.contains(" inferencex "), "{out}");
+    // A relative AKAO_ARTIFACT_ROOT is an error everywhere akao reads it.
+    let out = Command::new(env!("CARGO_BIN_EXE_akao"))
+        .arg("doctor")
+        .env("PATH", format!("{}:/usr/bin:/bin", sb.root.join("bin").display()))
+        .env("AKAO_CONFIG_ROOT", sb.state())
+        .env("AKAO_ARTIFACT_ROOT", "relative/dir")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("FAIL  artifact root  AKAO_ARTIFACT_ROOT=relative/dir must be an absolute path"),
+        "{text}"
+    );
+    let ok = Command::new(env!("CARGO_BIN_EXE_akao"))
+        .arg("doctor")
+        .env("PATH", format!("{}:/usr/bin:/bin", sb.root.join("bin").display()))
+        .env("AKAO_CONFIG_ROOT", sb.state())
+        .env("AKAO_ARTIFACT_ROOT", &sb.root)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&ok.stdout);
+    assert!(
+        text.contains(&format!(
+            "ok    artifact root  {} (AKAO_ARTIFACT_ROOT)",
+            sb.root.display()
+        )),
+        "{text}"
+    );
 }

@@ -5,7 +5,7 @@
 
 use crate::exec::{q, show, Runner, ESCALATE};
 use crate::state::{self, Host, State};
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::path::Path;
 
 /// The fixed part of every `docker run`; per-host mounts and rest args follow it.
@@ -45,6 +45,10 @@ pub struct Options {
     pub nick: String,
     pub name: String,
     pub week: Option<String>,
+    /// The worker's artifact root, instead of /<year>/<week>/<name>.
+    pub artifact_root: Option<String>,
+    /// Image instead of the host's or the default (`akao mirror`: the entry's).
+    pub image: Option<String>,
     pub skip_setup: bool,
 }
 
@@ -57,8 +61,9 @@ pub struct Plan {
     pub container: String,
     pub image: String,
     pub year: String,
-    /// Container working directory, /<year>/<week>/<name>; same path under <host_home> on the host.
-    pub workdir: String,
+    /// The worker's artifact root, /<year>/<week>/<name> unless given: its working directory
+    /// and $AKAO_ARTIFACT_ROOT in the container; the same path under <host_home> on the host.
+    pub artifact_root: String,
     /// <host_home>/container_home/akao_<name>
     pub host_container_home: String,
 }
@@ -70,23 +75,30 @@ impl Plan {
         }
         let name = opts.name.strip_prefix("akao_").unwrap_or(&opts.name);
         let host = state.host(&opts.nick)?;
-        let image = match &host.image {
-            Some(i) => i.clone(),
-            None => state.require("default_image")?,
+        let image = match (&opts.image, &host.image) {
+            (Some(i), _) | (None, Some(i)) => i.clone(),
+            (None, None) => state.require("default_image")?,
         };
-        let week = match &opts.week {
-            Some(w) => w.clone(),
-            None => state::work_week(),
-        };
-        if !(week.len() == 4 && week.starts_with("ww") && week[2..].bytes().all(|b| b.is_ascii_digit())) {
-            bail!("week must look like ww41, got '{week}'");
-        }
         let year = state::work_year();
+        let artifact_root = match (&opts.artifact_root, &opts.week) {
+            (Some(_), Some(_)) => bail!("give --week or --artifact-root, not both"),
+            (Some(root), None) => {
+                check_artifact_root(root, &year)?;
+                root.trim_end_matches('/').to_string()
+            }
+            (None, week) => {
+                let week = week.clone().unwrap_or_else(state::work_week);
+                if !(week.len() == 4 && week.starts_with("ww") && week[2..].bytes().all(|b| b.is_ascii_digit())) {
+                    bail!("week must look like ww41, got '{week}'");
+                }
+                format!("/{year}/{week}/{name}")
+            }
+        };
         let container = format!("akao_{name}");
         Ok(Plan {
             context: host.nick.clone(),
-            workdir: format!("/{year}/{week}/{name}"),
-            host_container_home: format!("{}/container_home/{container}", host.host_home),
+            artifact_root,
+            host_container_home: format!("{}/container_home/{container}", host.home()),
             container,
             image,
             year,
@@ -95,7 +107,7 @@ impl Plan {
     }
 
     fn host_year_dir(&self) -> String {
-        format!("{}/{}", self.host.host_home, self.year)
+        format!("{}/{}", self.host.home(), self.year)
     }
 
     pub fn docker(&self, args: &[&str]) -> Vec<String> {
@@ -116,7 +128,11 @@ impl Plan {
         ] {
             argv.extend(["-v".into(), format!("{src}:{dst}")]);
         }
-        argv.extend(["-w".into(), self.workdir.clone()]);
+        argv.extend([
+            "-e".into(),
+            format!("{}={}", state::ARTIFACT_ROOT_ENV, self.artifact_root),
+        ]);
+        argv.extend(["-w".into(), self.artifact_root.clone()]);
         argv.extend(h.rest_args()?);
         argv.extend([self.image.clone(), "sleep".into(), "infinity".into()]);
         Ok(argv)
@@ -152,29 +168,203 @@ impl Steps {
     }
 }
 
-pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
-    let p = Plan::new(state, opts)?;
-    let nick = &p.host.nick;
+/// A worker's artifact root given by hand: absolute, under /<year> (the only directory a
+/// worker keeps: containers run --rm), no `..`.
+fn check_artifact_root(root: &str, year: &str) -> Result<()> {
+    let ok = root.starts_with(&format!("/{year}/"))
+        && root.trim_end_matches('/').len() > year.len() + 1
+        && !root.split('/').any(|c| c == "..")
+        && !root.contains(['\n', '\t', '\r']);
+    if !ok {
+        bail!("--artifact-root must be a directory under /{year}/ (its only persistent mount), got '{root}'");
+    }
+    Ok(())
+}
+
+/// `docker container inspect --format` for [`Existing`]: the id, the image, the working
+/// directory, then `mount <destination> <source>` and `env <NAME=value>` lines.
+const EXISTING_FORMAT: &str = "{{.Id}}{{println}}{{.Config.Image}}{{println}}{{.Config.WorkingDir}}\
+     {{range .Mounts}}{{println}}mount {{.Destination}} {{.Source}}{{end}}\
+     {{range .Config.Env}}{{println}}env {{.}}{{end}}";
+
+/// What an existing akao_<name> was created with; init adapts to it rather than to today.
+#[derive(Debug, PartialEq)]
+pub struct Existing {
+    /// What step 6 checks it is still the same container by.
+    pub id: String,
+    pub image: String,
+    /// Its $AKAO_ARTIFACT_ROOT, else (a container from before it) its working directory,
+    /// where every `docker exec` starts.
+    pub root: String,
+    /// Whether the root is pinned ($AKAO_ARTIFACT_ROOT) rather than the working directory.
+    pub pinned: bool,
+    /// (destination, host source) of its bind mounts.
+    pub mounts: Vec<(String, String)>,
+}
+
+impl Existing {
+    fn parse(inspect: &str) -> Option<Existing> {
+        let mut lines = inspect.lines().map(str::trim);
+        let id = lines.next().filter(|i| !i.is_empty())?.to_string();
+        let image = lines.next().filter(|i| !i.is_empty())?.to_string();
+        let workdir = lines.next()?.to_string();
+        let prefix = format!("env {}=", state::ARTIFACT_ROOT_ENV);
+        let (mut pinned, mut mounts) = (None, Vec::new());
+        for l in lines {
+            if let Some(root) = l.strip_prefix(&prefix) {
+                pinned = Some(root.to_string());
+            } else if let Some((dst, src)) = l.strip_prefix("mount ").and_then(|m| m.split_once(' ')) {
+                mounts.push((dst.to_string(), src.to_string()));
+            }
+        }
+        Some(Existing {
+            id,
+            image,
+            pinned: pinned.is_some(),
+            root: pinned.unwrap_or(workdir),
+            mounts,
+        })
+    }
+
+    fn mount(&self, dst: &str) -> Option<&str> {
+        self.mounts.iter().find(|(d, _)| d == dst).map(|(_, s)| s.as_str())
+    }
+}
+
+/// Make the plan agree with an existing container: its image and artifact root stay what
+/// they were.  An explicit request it cannot satisfy fails before anything changes.
+fn adopt(p: &mut Plan, e: &Existing, opts: &Options) -> Result<()> {
+    println!("  {} exists: image {}, artifact root {}", p.container, e.image, e.root);
+    let remove = format!("docker --context {} rm -f {}", p.context, p.container);
+    if e.image != p.image {
+        if opts.image.is_some() {
+            bail!(
+                "{} runs {}, not the requested {}; pick another name, or remove it first ({remove})",
+                p.container,
+                e.image,
+                p.image
+            );
+        }
+        println!(
+            "  it keeps its image; {} applies to a new container only ({remove})",
+            p.image
+        );
+        p.image = e.image.clone();
+    }
+    let year = e.root.split('/').nth(1).unwrap_or_default();
+    if year != p.year {
+        bail!(
+            "{} works in {} and mounts /{year}, not this year's /{}; give the new year's worker a new name",
+            p.container,
+            e.root,
+            p.year
+        );
+    }
+    // Init writes the control plane, the home and mirror's brief where hosts.tsv says; the
+    // container must read them from there.
+    for (dst, src) in [
+        (format!("/{}", p.year), p.host_year_dir()),
+        ("/root".to_string(), p.host_container_home.clone()),
+    ] {
+        match e.mount(&dst) {
+            Some(have) if have.trim_end_matches('/') == src => {}
+            have => bail!(
+                "{} mounts {} at {dst}, but hosts.tsv now puts it at {src}; pick another name, or remove it first ({remove})",
+                p.container,
+                have.unwrap_or("nothing")
+            ),
+        }
+    }
+    // The brief and the task dirs are written under the /<year> mount; another mount at or
+    // above the root would hide them from the container.
+    if let Some((dst, src)) = e
+        .mounts
+        .iter()
+        .find(|(d, _)| *d != format!("/{}", p.year) && (e.root == *d || e.root.starts_with(&format!("{d}/"))))
+    {
+        bail!(
+            "{}'s artifact root {} lies under its own mount {dst} (from {src}), not under /{}; \
+             akao cannot write into it",
+            p.container,
+            e.root,
+            p.year
+        );
+    }
+    if e.root != p.artifact_root {
+        if opts.artifact_root.is_some() || opts.week.is_some() {
+            bail!(
+                "{} works in {}, not the requested {}; pick another name, or remove it first ({remove})",
+                p.container,
+                e.root,
+                p.artifact_root
+            );
+        }
+        if !e.pinned {
+            println!(
+                "  it predates {}: its working directory is its artifact root \
+                 (to pin one: {remove}, then akao init; /root and /{} are bind mounts and survive)",
+                state::ARTIFACT_ROOT_ENV,
+                p.year
+            );
+        }
+        p.artifact_root = e.root.clone();
+    }
+    Ok(())
+}
+
+/// Brings the worker up; returns the plan with the artifact root the container really has.
+pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
+    let mut p = Plan::new(state, opts)?;
+    let nick = &p.host.nick.clone();
     println!(
-        "akao init: {} on {nick}{}\n  image {}\n  host home {}, workdir {}",
+        "akao init: {} on {nick}{}\n  image {}\n  host home {}, artifact root {}",
         p.container,
         if r.dry_run { " [dry run]" } else { "" },
         p.image,
         p.host.host_home,
-        p.workdir
+        p.artifact_root
     );
     let mut s = Steps { n: 0, total: 10 };
 
-    s.next("resolve host");
+    s.next("resolve host and container");
     let cfg = r.query(&r.ssh_config_argv(nick))?;
     let hostname = cfg.lines().find_map(|l| l.strip_prefix("hostname ")).unwrap_or(nick);
     println!("  {nick} -> {hostname}");
+    // Before anything changes on the host: docker must answer (through the endpoint: no
+    // context yet), and an existing container decides the image and the artifact root.
+    let endpoint = format!("ssh://{nick}");
+    let docker_h = |args: &[&str]| -> Vec<String> {
+        ["docker", "-H", &endpoint]
+            .iter()
+            .chain(args)
+            .map(|s| s.to_string())
+            .collect()
+    };
+    let version = r.query(&docker_h(&["version", "--format", "{{.Server.Version}}"]))?;
+    println!("  docker {} reachable", version.trim());
+    let filter = format!("name=^/?{}$", p.container);
+    let names = r.query(&docker_h(&["ps", "-a", "--filter", &filter, "--format", "{{.Names}}"]))?;
+    let existing = if names.lines().any(|n| n.trim() == p.container) {
+        let text = r.query(&docker_h(&[
+            "container",
+            "inspect",
+            "--format",
+            EXISTING_FORMAT,
+            &p.container,
+        ]))?;
+        let e = Existing::parse(&text)
+            .with_context(|| format!("cannot read what {} was created with: {text:?}", p.container))?;
+        adopt(&mut p, &e, opts)?;
+        Some(e)
+    } else {
+        None
+    };
 
     s.next("prepare host directories");
     let script = format!(
         "{ESCALATE}$S mkdir -p {} {}/container_home",
-        q(&format!("{}{}", p.host.host_home, p.workdir)),
-        q(&p.host.host_home)
+        q(&format!("{}{}", p.host.home(), p.artifact_root)),
+        q(p.host.home())
     );
     r.run(&r.ssh_argv(nick, &script))?;
 
@@ -215,13 +405,8 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
 
     s.next("docker context");
     // docker runs plain `ssh` found through PATH and cannot take our -F; it relies on
-    // the ~/.local/bin/ssh wrapper from the home template to read our ssh config.
-    // Check reachability here, or a failure surfaces later as a silently failed
-    // probe (e.g. "container does not exist").
-    let endpoint = format!("ssh://{nick}");
-    let version =
-        r.query(&["docker", "-H", &endpoint, "version", "--format", "{{.Server.Version}}"].map(String::from))?;
-    println!("  docker {} reachable", version.trim());
+    // the ~/.local/bin/ssh wrapper from the home template to read our ssh config (step 1
+    // proved it reaches the box).
     let inspect: Vec<String> = [
         "docker",
         "context",
@@ -244,8 +429,25 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
     r.run(&["docker", "context", "use", &p.context].map(String::from))?;
 
     s.next("container");
-    let status = r.probe(&p.docker(&["container", "inspect", "--format", "{{.State.Status}}", &p.container]))?;
-    match status.as_deref().map(str::trim) {
+    // Still the container step 1 judged (another controller may have replaced it since).
+    let now = r.probe(&p.docker(&[
+        "container",
+        "inspect",
+        "--format",
+        "{{.Id}} {{.State.Status}}",
+        &p.container,
+    ]))?;
+    let (id, status) = match now.as_deref().map(str::trim).and_then(|s| s.split_once(' ')) {
+        Some((id, status)) => (Some(id), Some(status)),
+        None => (None, None),
+    };
+    if id != existing.as_ref().map(|e| e.id.as_str()) {
+        bail!(
+            "{} changed since step 1 (removed, created or replaced); run init again",
+            p.container
+        );
+    }
+    match status {
         Some("running") => println!("  reusing running {}", p.container),
         Some("created" | "exited") => r.run(&p.docker(&["start", &p.container]))?,
         Some(other) => bail!("{} exists but is {other}; resolve it by hand", p.container),
@@ -274,7 +476,13 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
         ))?;
         // oaka's gsm8k client.  From PyPI on its own: never sglang[test], which pulls
         // PyPI sglang over the image's.  Its deps are pure Python (no torch/triton/sglang).
-        r.run(&p.exec(&[], "command -v sgl-eval >/dev/null || python3 -m pip install sgl-eval"))?;
+        // Not fatal: an image whose pip refuses (e.g. a mirrored vllm/ATOM one) still gets
+        // its tmux and agent; oaka doctor then warns that gsm8k clients cannot run.
+        r.run(&p.exec(
+            &[],
+            "command -v sgl-eval >/dev/null || python3 -m pip install sgl-eval \
+             || echo 'warning: pip install sgl-eval failed; gsm8k clients will not run here'",
+        ))?;
         // oaka ships in the control plane (step 3); put it on PATH for the worker agent.
         let oaka = format!("/{}/oaka/bin/oaka", p.year);
         r.run(&p.exec(
@@ -306,7 +514,10 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
     if r.probe(&p.exec(&[], "tmux has-session"))?.is_some() {
         println!("  tmux already running in {}; left as is", p.container);
     } else {
-        r.run(&p.exec(&[], &format!("tmux new-session -d -n controller -c {}", q(&p.workdir))))?;
+        r.run(&p.exec(
+            &[],
+            &format!("tmux new-session -d -n controller -c {}", q(&p.artifact_root)),
+        ))?;
         r.run(&p.exec(&[], "tmux send-keys -t :controller claude Enter"))?;
     }
 
@@ -327,7 +538,7 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
 
     let attach = p.docker(&["exec", "-it", &p.container, "tmux", "attach"]);
     println!("done. attach with:\n  {}", show(&attach));
-    Ok(())
+    Ok(p)
 }
 
 #[cfg(test)]
@@ -348,7 +559,7 @@ mod tests {
             container: "akao_exp".into(),
             image: "img:tag".into(),
             year: "2026".into(),
-            workdir: "/2026/ww41/exp".into(),
+            artifact_root: "/2026/ww41/exp".into(),
             host_container_home: "/root/akao/container_home/akao_exp".into(),
         }
     }
@@ -367,6 +578,113 @@ mod tests {
         // rest args come after the skeleton but before the image.
         assert!(argv.ends_with(&["--shm-size=64g", "-e", "FOO=a b", "img:tag", "sleep", "infinity"].map(String::from)));
         assert!(argv.contains(&"PYTHONPATH=".to_string()));
+    }
+
+    fn opts() -> Options {
+        Options {
+            nick: "f19-11".into(),
+            name: "exp".into(),
+            week: None,
+            artifact_root: None,
+            image: None,
+            skip_setup: false,
+        }
+    }
+
+    #[test]
+    fn artifact_root_is_pinned_and_checked() {
+        let argv = plan().docker_run_argv().unwrap();
+        let s = argv.join(" ");
+        assert!(
+            s.contains("-e AKAO_ARTIFACT_ROOT=/2026/ww41/exp -w /2026/ww41/exp"),
+            "{s}"
+        );
+        assert!(check_artifact_root("/2026/nocopy/exp", "2026").is_ok());
+        for bad in ["/2026/", "/2026", "2026/x", "/2027/ww01/x", "/2026/../etc", "/tmp/x"] {
+            assert!(check_artifact_root(bad, "2026").is_err(), "{bad}");
+        }
+    }
+
+    /// `docker container inspect` output for a container plan() would reuse.
+    fn inspect(image: &str, workdir: &str, root: Option<&str>) -> String {
+        let mut t = format!(
+            "0123abcd\n{image}\n{workdir}\nmount /model /mnt/raid/models\nmount /2026 /root/akao/2026\n\
+             mount /root /root/akao/container_home/akao_exp\nenv PATH=/usr/bin\n"
+        );
+        if let Some(r) = root {
+            t += &format!("env AKAO_ARTIFACT_ROOT={r}\n");
+        }
+        t
+    }
+
+    #[test]
+    fn an_existing_container_keeps_its_image_and_root() {
+        let e = Existing::parse(&inspect("img:old", "/2026/ww41/exp", Some("/2026/ww41/exp"))).unwrap();
+        assert_eq!(
+            (e.image.as_str(), e.root.as_str(), e.pinned),
+            ("img:old", "/2026/ww41/exp", true)
+        );
+        assert_eq!(e.mount("/2026"), Some("/root/akao/2026"));
+        let legacy = Existing::parse(&inspect("img:tag", "/2026/ww40/exp", None)).unwrap();
+        assert_eq!((legacy.root.as_str(), legacy.pinned), ("/2026/ww40/exp", false));
+        assert_eq!(e.id, "0123abcd");
+        assert_eq!(Existing::parse(""), None);
+        assert_eq!(
+            Existing::parse("0123abcd\nimg:tag"),
+            None,
+            "truncated output is not a container"
+        );
+
+        // Derived root and host image: the container's win.
+        let mut p = plan();
+        adopt(&mut p, &legacy, &opts()).unwrap();
+        assert_eq!(
+            (p.image.as_str(), p.artifact_root.as_str()),
+            ("img:tag", "/2026/ww40/exp")
+        );
+        let mut p = plan();
+        adopt(&mut p, &e, &opts()).unwrap();
+        assert_eq!(p.image, "img:old");
+        // Explicit requests it cannot satisfy fail.
+        let mirror = Options {
+            image: Some("img:tag".into()),
+            ..opts()
+        };
+        let err = adopt(&mut plan(), &e, &mirror).unwrap_err().to_string();
+        assert!(err.contains("runs img:old, not the requested img:tag"), "{err}");
+        let week = Options {
+            week: Some("ww40".into()),
+            ..opts()
+        };
+        let err = adopt(&mut plan(), &legacy, &week).unwrap_err().to_string();
+        assert!(
+            err.contains("works in /2026/ww40/exp, not the requested /2026/ww41/exp"),
+            "{err}"
+        );
+        // Another year's container mounts another /<year>.
+        let old = Existing::parse(
+            &inspect("img:tag", "/2025/ww52/exp", None)
+                .replace("mount /2026 /root/akao/2026", "mount /2025 /root/akao/2025"),
+        )
+        .unwrap();
+        let err = adopt(&mut plan(), &old, &opts()).unwrap_err().to_string();
+        assert!(err.contains("mounts /2025, not this year's /2026"), "{err}");
+        // hosts.tsv moved the host home since the container was made.
+        let moved = Existing::parse(&inspect("img:tag", "/2026/ww41/exp", None).replace("/root/akao/2026", "/h1/2026"))
+            .unwrap();
+        let err = adopt(&mut plan(), &moved, &opts()).unwrap_err().to_string();
+        assert!(
+            err.contains("mounts /h1/2026 at /2026, but hosts.tsv now puts it at /root/akao/2026"),
+            "{err}"
+        );
+        // A mount of its own over the root: what akao writes under /<year> would be hidden.
+        let nested =
+            Existing::parse(&(inspect("img:tag", "/2026/ww41/exp", None) + "mount /2026/ww41 /other\n")).unwrap();
+        let err = adopt(&mut plan(), &nested, &opts()).unwrap_err().to_string();
+        assert!(
+            err.contains("lies under its own mount /2026/ww41 (from /other)"),
+            "{err}"
+        );
     }
 
     #[test]

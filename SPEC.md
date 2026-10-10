@@ -75,6 +75,10 @@ Where the how lives: worker reference (commands, plan and profile fields)
   `stacks.toml`, `commits` and `bisect` plans, `draft --stack`, `doctor` checks.  Built in
   ww42 with hermetic tests (a stand-in package in a scratch git repo); only sglang has a
   recipe so far (AITER/Triton recipes wait for the user).
+- Mirror and engines (ww42 weekend): `akao mirror`, profiles for vllm and ATOM, pinned
+  artifact roots.  Hermetic tests only (stand-in vllm/ATOM servers, a scratch InferenceX
+  repo, stand-in ssh/docker); the dry run against real boxes resolved hosts, GPUs and
+  commands; no mirrored image has been started yet.
 
 ### Decisions
 
@@ -165,3 +169,45 @@ Where the how lives: worker reference (commands, plan and profile fields)
   step regressed), and a commit whose numbers cannot be recorded stops the bisect.  The bad end is installed before bisecting (proves the recipe), and the
   tree is reinstalled as it is after `git bisect reset`, so the editable Python and the
   built kernels agree again.
+
+### Decisions on artifact roots, engines and mirror (ww42)
+
+- **One artifact root per agent, pinned where the agent lives.**  A worker's root is chosen
+  at `akao init` and pinned into its container (`$AKAO_ARTIFACT_ROOT`, working directory);
+  the console's variable is the controller's own and never feeds a worker's.  Why: the root
+  was re-derived from *today's* week everywhere, so a worker used across a week boundary had
+  two candidate roots, and the derived ISO week did not even match the user's own week label
+  (ww41 vs ww42 on 2026-10-09).  An existing container's root wins over a derived one; one
+  from another year is refused (it mounts only its own `/<year>`).
+- **Init decides about an existing container before it touches the host.**  Why: adopting
+  its root after the host step had already created directories for a root that would not be
+  used, and a mirror re-run must not deliver a brief for image B into a container of image A.
+- **oaka serves with SGLang, vllm or ATOM; the profile says which (`engine`).**  Only the
+  command, the spelling of oaka's model/tp/port flags and the readiness signal differ;
+  overlays, targets, plans, clients and teardown stay engine-neutral.  Readiness for vllm and
+  ATOM is `GET /health`, as InferenceX waits; SGLang keeps its log line (after warmup).
+  Why: a mirrored InferenceX image may have no SGLang at all, and its recipe is the thing
+  being studied.
+- **A mirror is a worker plus a brief, not an automatic translation.**  `akao mirror` reads
+  one InferenceX entry at a git revision (retired entries stay reachable), refuses what one
+  container cannot hold (multinode, non-AMD runners, frameworks without an engine, a box with
+  another GPU arch, a same-named container with another image) before touching the box, and
+  ships the entry and its recipe files with a MIRROR.md that labels what oaka cannot
+  reproduce (chat-templated prompts, client flags, data parallelism, per-point overrides,
+  setup scripts).  The worker agent writes the profile.  Why: InferenceX recipes come in two
+  eras (bash scripts, srt YAML with zip overrides and setup scripts); translating them is
+  judgment, and a number oaka's client cannot measure the same way must be labelled, not
+  silently compared with the dashboard.
+
+## Open designs
+
+- **Where `oaka profile save` goes, and how it gets back.**  Today a saved profile stays in
+  the library of the box it was saved on: `akao init` ships the console's library to boxes
+  (merge, never delete), nothing ships back, and the console's library is not in git (so a
+  same-named profile from the console silently replaces it on the next init).  Proposal:
+  the library's source moves into this repo (`oaka/library/`), installed into `/<year>/oaka/`
+  by the post-commit hook with the binary; `akao lib pull <nick> [<profile>...]` copies a
+  box's new or changed profiles, with their whole `extends` closure, into the working tree
+  for review and commit; init warns before overwriting a box profile that differs from the
+  deployed baseline.  Until then: `akao cp <nick>:oaka/profiles/<model>/<recipe>.toml
+  /<year>/oaka/profiles/<model>/` on the console.

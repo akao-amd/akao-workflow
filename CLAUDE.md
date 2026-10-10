@@ -46,10 +46,13 @@ akao/
     main.rs           CLI entry point, subcommand dispatch
     exec.rs           Runner: subprocess execution, ssh helpers
     state.rs          State: config.toml + hosts.tsv + home template
-    init.rs           `akao init` — 9-step container bring-up
+    init.rs           `akao init` — 10-step container bring-up
+    mirror.rs         `akao mirror` — InferenceX entry (git, serde_yaml) -> init + brief
     cp.rs             `akao cp`  — cross-host path copy via tar | ssh
-    doctor.rs         `akao doctor` — console prerequisites (ssh wrapper, state, deploy)
+    doctor.rs         `akao doctor` — console prerequisites (ssh wrapper, state, deploy,
+                      controller: artifact root, tmux, claude, InferenceX clone)
   tests/doctor.rs     akao doctor against a scratch AKAO_CONFIG_ROOT
+  tests/mirror.rs     akao mirror --dry-run vs. a scratch InferenceX repo, stand-in ssh/docker
 oaka/
   Cargo.toml
   README.md           worker reference; the hook installs it as /<year>/oaka/README.md
@@ -57,14 +60,14 @@ oaka/
   templates/*.sh.j2   script templates (minijinja), embedded with include_str!
   src/
     main.rs           CLI: draft, check, compile, run, profile ls|show|save|diff
-    sys.rs            work year, GPU archs from KFD topology, free ports, q()
-    profile.rs        Library ($OAKA_LIB or /<year>/oaka), profiles, extends, overlays
+    sys.rs            work year, artifact root, GPU archs from KFD topology, free ports, q()
+    profile.rs        Library ($OAKA_LIB or /<year>/oaka), profiles, extends, overlays, Engine
     plan.rs           plan.toml schema + validation (check), plan.lock.toml
     stack.rs          the library's stacks.toml: swappable packages, recipes, clean paths
     compile.rs        plan + library + templates -> scripts/
     draft.rs          plan.toml starter from hints + machine
-    doctor.rs         `oaka doctor` — worker prerequisites (library, GPUs, InferenceX, sglang)
-  tests/run_all.rs    real binary + compiled bash vs. stand-ins for sglang/InferenceX/sgl-eval
+    doctor.rs         `oaka doctor` — worker prerequisites (library, GPUs, InferenceX, engines)
+  tests/run_all.rs    real binary + compiled bash vs. stand-ins for sglang/vllm/ATOM/InferenceX/sgl-eval
                       and a stand-in package in a scratch git repo (stack, A-B-A, bisect)
 ```
 
@@ -75,7 +78,7 @@ The variable is **required**; every subcommand fails clearly if unset.
 
 ```
 $AKAO_CONFIG_ROOT/
-  config.toml         settings: default_image, deploy_src, deploy_paths, infx_repo
+  config.toml         settings: default_image, deploy_src, deploy_paths, infx_repo, infx_local
   hosts.tsv           one row per remote box (TSV, 5–6 cols)
   container_home/     home template, copied once per akao_<name>
     .local/bin/ssh    ssh wrapper adding -F $AKAO_CONFIG_ROOT/.ssh/config (see Design notes)
@@ -84,6 +87,14 @@ $AKAO_CONFIG_ROOT/
 
 Work year and week are always today's ISO values (`state::work_year()`, `state::work_week()`).
 Never stored in config to avoid staleness.
+
+**Artifact roots** (`AKAO_ARTIFACT_ROOT`): one per agent, the directory holding its numbered
+dirs.  On the console it is the controller's (`state::artifact_root()`: the variable, else
+`/<year>/<week>/controller`); it never feeds a worker's.  A worker's is chosen by init
+(`--artifact-root`, else `/<year>/<week>/<name>`) and pinned into its container (`-e`, `-w`);
+oaka reads it (`sys::artifact_root()`) and takes its work year from it (the container
+mounts only that `/<year>`; `/<year>/oaka` and the InferenceX path follow).  An existing container's root always wins over a
+derived one.
 
 ## Key modules
 
@@ -114,8 +125,9 @@ impl Runner {
 
 ### state.rs — `State` and `Host`
 
-Loads and saves config and hosts.  `Host.validate()` enforces absolute paths, no tabs, and
-valid shlex for `rest`.  `state::parse_hosts` / `format_hosts` are the TSV codec.
+Loads and saves config and hosts.  `Host.validate()` enforces absolute, plain paths (no
+`//`, `.`, `..`: init compares them with docker's normalized mount sources), no tabs, and
+valid shlex for `rest`; join paths onto `Host::home()` (no trailing slash).  `state::parse_hosts` / `format_hosts` are the TSV codec.
 
 Hosts TSV columns: `nick  image  model_path  docker_sock  host_home  rest`
 (`-` in any column means "use the default").
@@ -127,14 +139,22 @@ they are appended after the fixed skeleton but before the image in `init`.
 
 Ten ordered steps, each idempotent (checks before acting):
 
-1. Resolve nick via `ssh -G` (verifies ssh connectivity)
-2. `mkdir -p` host year dir + `container_home` root
+1. Resolve nick via `ssh -G` (verifies ssh connectivity); `docker -H ssh://<nick> version`
+   (fails loudly: the `ssh` wrapper, see Design notes); `ps -a` tells a missing container
+   from an unreadable one; an existing `akao_<name>` is inspected (`Existing`: id, image,
+   workdir, mounts, env): it keeps its image and artifact root (`adopt`), and anything it
+   contradicts (mirror's image, `--week`, `--artifact-root`, another year, `/<year>` or
+   `/root` mounted from elsewhere than hosts.tsv says, a mount of its own over the root)
+   fails here, before the host is touched
+2. `mkdir -p` the artifact root under `<host_home>` + `container_home` root
 3. Deploy control plane: `tar | ssh tar` with `sudo -n`, `root:root`, no delete
 4. Copy home template (skipped if container home already exists)
-5. Check `docker -H ssh://<nick> version`, then create docker context `ssh://<nick>`
-   (updates it if it points elsewhere).  Relies on the `ssh` wrapper (see Design notes).
-6. `docker run` the container (reuses if running; starts if stopped; fails on other states)
-7. Install apt packages + gh + claude agent + sgl-eval (each skipped if already present); link
+5. Create docker context `ssh://<nick>` (updates it if it points elsewhere).  Relies on the
+   `ssh` wrapper (see Design notes).
+6. `docker run` the container (reuses if running; starts if stopped; fails on other states,
+   and when its id is not the one step 1 judged: created, removed or replaced meanwhile)
+7. Install apt packages + gh + claude agent + sgl-eval (each skipped if already present;
+   sgl-eval failing only warns: mirrored images may refuse pip); link
    `/<year>/oaka/bin/oaka` to `/usr/local/bin/oaka`
 8. Clone `infx_repo` into `/<year>/nocopy/InferenceX` unless a checkout exists (never pulled;
    not skipped by `--skip-setup`: oaka's benchmark client needs it)
@@ -152,7 +172,26 @@ Host's `rest` field appends after this, before the image.
 
 Mounts: `model_path:/model`, `docker_sock:/var/run/docker.sock`,
 `host_home/<year>:/<year>`, `host_home/container_home/akao_<name>:/root`.
-Workdir: `/<year>/<week>/<name>`.
+Workdir and `-e AKAO_ARTIFACT_ROOT`: the artifact root (`/<year>/<week>/<name>` or
+`--artifact-root`, which must lie under `/<year>/`: the only persistent mount).
+`init::run` returns the `Plan` with the root the container really has (mirror uses it).
+
+### mirror.rs — `akao mirror [<nick> [<name>]] --conf <terms>`
+
+Reads InferenceX through git at `--rev` in `infx_local` (`Repo`: `rev-parse`, `ls-tree`,
+`show`; never the working tree), parses every `*master.yaml` under a `configs/` dir with
+serde_yaml (`entries`), and picks one (`select`: prefix terms over name parts, runner,
+framework, model prefix, precision, model basename; fewest name parts wins).  `Entry::problems`
+refuses what one container + oaka cannot serve; the host's KFD arch must match the runner's
+(known in `Entry::arch`; values are marked `OAKA_GFX=` so a login banner cannot pass for one);
+then `init::run` with `Options.image` = the entry's image, and the brief
+(`mirror/<entry>@<sha12>/`: MIRROR.md, entry.yaml, recipes/) goes into the artifact root by
+`tar | ssh tar`.  `recipe_files` mirrors the runner launchers' script lookup per scenario
+(`legacy_script`: the framework's script, then the GPU's default, in the scenario's dir incl.
+`deprecated/`, else outside every scenario dir; never another scenario's) and ships the setup
+scripts srt recipes name.  `recipe_facts` lists what oaka cannot reproduce; labelled, not refused:
+the worker agent studies the recipe.  Git reads run directly (not `Runner`): local, read-only,
+many.  Without a nick it prints the listing or the brief and changes nothing.
 
 ### cp.rs — `akao cp <src> <dst>`
 
@@ -184,7 +223,7 @@ in the container).
   $AKAO_CONFIG_ROOT/.ssh/config "$@"`, falling back to plain ssh when that file is absent.
   It ships in `container_home/.local/bin/ssh` and must also exist wherever akao itself
   runs, with `AKAO_CONFIG_ROOT` exported.  Shell aliases do not work: docker never sees them.
-  Init step 5 checks `docker -H ssh://<nick> version` so a missing wrapper fails loudly;
+  Init step 1 checks `docker -H ssh://<nick> version` so a missing wrapper fails loudly;
   `akao doctor` checks the wrapper without touching the network.
 - **Idempotent init**: every step checks what exists and reuses it, so re-running init
   on a half-done worker resumes instead of failing.
@@ -200,8 +239,15 @@ reference is `oaka/README.md`.  The invariants that code changes must keep:
 - **Client policy is not a plan knob.**  `fixed-seq` delegates to InferenceX's own
   `python3 -m infx.bench fixed-seq point`; the plan exposes only isl/osl, conc, range ratio
   and repeats.  Anything else goes through `off_spec` and marks results `OFFSPEC`.
-- **oaka owns** `--model-path`, `--tp`, `--port` and `HIP_VISIBLE_DEVICES`; profiles and
-  plans may not set them.  `--tp` = profile `tp` if pinned, else the number of plan GPUs.
+- **oaka owns** the model, tp and port flags and `HIP_VISIBLE_DEVICES`; profiles and
+  plans may not set them in any engine's spelling (`profile::RESERVED_ARGS` is the union).
+  `--tp` = profile `tp` if pinned, else the number of plan GPUs.
+- **Engines** (`profile::Engine`: sglang, vllm, atom; a profile's `engine`, inherited):
+  each has its command, its spelling of oaka's three flags (`Engine::fixed_args`) and its
+  readiness (SGLang's log line; the others `GET /health` = 200, as InferenceX waits).
+  Everything else (overlays, targets, clients, ports, teardown) is engine-neutral; keep it
+  so.  A new engine = an `Engine` variant, a stand-in in `oaka/tests/run_all.rs`, the
+  stack guard's pattern in `stack.sh.j2`, and its row in `oaka/README.md`.
 - **Overlays**: `[env]`/`[args]` in a child profile or a plan overlay the parent, in order;
   `false` removes an inherited entry.  `profile save` writes exactly that delta.
 - **Library files are self-contained**: a profile may reference only another profile
@@ -226,8 +272,8 @@ reference is `oaka/README.md`.  The invariants that code changes must keep:
   bisect_step.sh`).  Exit codes are a contract: 0 ok, 3 a gate failed, 2 the stack did not
   install, 1 anything else, 130 Ctrl-C; `bisect_step.sh` maps them to git's 0/1/125
   and aborts the bisect (128) when it cannot record a commit's numbers.
-- **The stack** (`stack.sh`) mutates the container's venv: it refuses while an sglang
-  server runs, never resets a tree's files before an install (a modified tracked file
+- **The stack** (`stack.sh`) mutates the container's venv: it refuses while a server
+  (SGLang, vllm, ATOM) runs, never resets a tree's files before an install (a modified tracked file
   blocks a checkout), restores only the recipe's `restore` files (also on exit), never
   fetches, and verifies import path + git HEAD.  `clean.paths` are `rm -rf`'d unquoted
   for globbing, so `stack::clean_path` bounds them; tree globs delete only paths git
@@ -236,7 +282,8 @@ reference is `oaka/README.md`.  The invariants that code changes must keep:
   exclusively (stack.sh would see the other tests' stand-in servers); `OAKA_STACK_STATE`
   keeps the stack's lock and markers out of the real venv.
 - Templates: `{#` opens a Jinja comment, so write `${PIDS[*]}`-style bash, not `${#...}`.
-- Environment knobs: `OAKA_LIB`, `OAKA_INFX`, `OAKA_GPUS`, `OAKA_STACK_STATE` (see `oaka/README.md`).
+- Environment knobs: `OAKA_LIB`, `OAKA_INFX`, `OAKA_GPUS`, `OAKA_STACK_STATE`, and
+  `AKAO_ARTIFACT_ROOT` from akao (see `oaka/README.md`); tests remove it from the sandbox.
 
 ### Lessons from building it (ww41)
 

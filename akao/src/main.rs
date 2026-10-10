@@ -2,6 +2,7 @@ mod cp;
 mod doctor;
 mod exec;
 mod init;
+mod mirror;
 mod state;
 
 use anyhow::{bail, Result};
@@ -40,15 +41,31 @@ enum Cmd {
         nick: String,
         /// Container name, without the akao_ prefix
         name: String,
-        /// Work week to place the workdir under [default: ISO week of today]
-        #[arg(long)]
-        week: Option<String>,
-        /// Skip the control-plane deploy and the package/agent installation
-        #[arg(long)]
-        skip_setup: bool,
-        /// Print the commands that would change anything instead of running them
-        #[arg(long)]
-        dry_run: bool,
+        #[command(flatten)]
+        flags: InitFlags,
+    },
+    /// A worker for one InferenceX benchmark config (init with its image, plus a brief)
+    ///
+    /// Reads the entries of InferenceX's *master.yaml from this machine's clone (config
+    /// infx_local) at --rev.  Without a host, lists the matches or previews the brief.
+    #[command(
+        after_help = "Examples:\n  akao mirror --conf gptoss,mi355 --rev 4699ab81a^     # list\n  \
+                            akao mirror h21-17 --conf gptoss,mi355,atom --rev 4699ab81a^"
+    )]
+    Mirror {
+        /// Host nick to bring the worker up on; omit to list or preview
+        nick: Option<String>,
+        /// Container name, without the akao_ prefix [default: the entry's name]
+        name: Option<String>,
+        /// Comma-separated terms that name one entry (parts of its name, runner, framework,
+        /// model), or the entry's full name
+        #[arg(long, value_name = "TERMS")]
+        conf: String,
+        /// InferenceX revision to read the configs at
+        #[arg(long, default_value = "HEAD")]
+        rev: String,
+        #[command(flatten)]
+        flags: InitFlags,
     },
     /// Manage the remote host table (hosts.tsv)
     #[command(subcommand)]
@@ -58,6 +75,24 @@ enum Cmd {
     Config(ConfigCmd),
     /// Check this machine's prerequisites for akao (read-only)
     Doctor,
+}
+
+/// What `init` and `mirror` share.
+#[derive(clap::Args)]
+struct InitFlags {
+    /// Work week of the artifact root /<year>/<week>/<name> [default: ISO week of today]
+    #[arg(long, conflicts_with = "artifact_root")]
+    week: Option<String>,
+    /// The worker's artifact root, under /<year>/ [default: /<year>/<week>/<name>];
+    /// pinned into the container as $AKAO_ARTIFACT_ROOT and its working directory
+    #[arg(long, value_name = "DIR")]
+    artifact_root: Option<String>,
+    /// Skip the control-plane deploy and the package/agent installation
+    #[arg(long)]
+    skip_setup: bool,
+    /// Print the commands that would change anything instead of running them
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Subcommand)]
@@ -120,28 +155,52 @@ fn run(cli: Cli) -> Result<()> {
             let runner = exec::Runner::new(dry_run)?;
             cp::run(&state, &runner, &src, &dst)
         }
-        Cmd::Init {
+        Cmd::Init { nick, name, flags } => {
+            let runner = exec::Runner::new(flags.dry_run)?;
+            init::run(&state, &runner, &flags.options(nick, name, None))?;
+            Ok(())
+        }
+        Cmd::Mirror {
             nick,
             name,
-            week,
-            skip_setup,
-            dry_run,
+            conf,
+            rev,
+            flags,
         } => {
-            let runner = exec::Runner::new(dry_run)?;
-            init::run(
+            if nick.is_none() && (flags.week.is_some() || flags.artifact_root.is_some() || flags.skip_setup) {
+                bail!("--week, --artifact-root and --skip-setup apply when bringing a worker up: give a <nick>");
+            }
+            let runner = exec::Runner::new(flags.dry_run)?;
+            mirror::run(
                 &state,
                 &runner,
-                &init::Options {
+                &mirror::Options {
+                    conf,
+                    rev: Some(rev),
                     nick,
                     name,
-                    week,
-                    skip_setup,
+                    week: flags.week,
+                    artifact_root: flags.artifact_root,
+                    skip_setup: flags.skip_setup,
                 },
             )
         }
         Cmd::Host(cmd) => host_cmd(&state, cmd),
         Cmd::Config(cmd) => config_cmd(&mut state, cmd),
         Cmd::Doctor => unreachable!(),
+    }
+}
+
+impl InitFlags {
+    fn options(self, nick: String, name: String, image: Option<String>) -> init::Options {
+        init::Options {
+            nick,
+            name,
+            week: self.week,
+            artifact_root: self.artifact_root,
+            image,
+            skip_setup: self.skip_setup,
+        }
     }
 }
 
@@ -197,6 +256,8 @@ fn config_cmd(state: &mut State, cmd: ConfigCmd) -> Result<()> {
                 state::work_year(),
                 state::work_week()
             );
+            let (root, from) = state::artifact_root()?;
+            println!("# artifact root {root} ({from})");
             for (key, _, desc) in state::KEYS {
                 let v = state.get(key)?;
                 let origin = if state.is_explicit(key) { "" } else { "  (default)" };
