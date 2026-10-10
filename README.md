@@ -33,7 +33,7 @@ checks it).
 |---|---|---|
 | `akao`, release | `target/release/akao` | you, through the symlink above |
 | `oaka`, static musl | `oaka/bin/oaka` in this checkout (git-ignored) | workers, at their next `akao init` (step 8 puts it into the worker's clone, step 9 links it onto PATH) |
-| skills, `utils/`, `year/CLAUDE.md`, oaka's library (`oaka/profiles`, `oaka/stacks.toml`) | nowhere: read in place from this checkout (`$AKAO_REPO_ROOT`); `/<year>/CLAUDE.md`, `AGENTS.md`, `utils` link to it | workers, at their next `akao init` (step 3 copies `year/` files to the box's `/<year>`, step 8 updates the worker's own clone) |
+| skills, `utils/`, `year/CLAUDE.md`, oaka's library (`oaka/profiles`, `oaka/stacks.toml`) | nowhere: read in place from this checkout (`$AKAO_REPO_ROOT`); `/<year>/utils` links to it | workers, at their next `akao init` (step 3 copies `year/` files to the box's `/<year>`, step 8 updates the worker's own clone) |
 
 So a worker gets a new `oaka` only when `akao init` runs again for it; re-running init on an
 existing container is safe (every step reuses what exists) as long as `--skip-setup` is
@@ -55,8 +55,7 @@ The work year and week are not stored: they are today's ISO year and week (`2026
 
 **The repo.**  `$AKAO_REPO_ROOT` (default `/root/akao-workflow`) is the checkout of this
 repo akao ships: the role skills (`skills/`) are read from it in place, and its
-`year/CLAUDE.md` is the orientation every agent under `/<year>` loads.  On the console,
-`/<year>/CLAUDE.md` and `/<year>/AGENTS.md` are symlinks to it; every worker gets its own
+`year/CLAUDE.md` is the orientation every agent under `/<year>` loads; every worker gets its own
 clone (init step 8).  Only committed work travels.
 
 **Artifact roots.**  Each agent keeps its numbered dirs under one directory, its *artifact
@@ -198,11 +197,9 @@ controller) is needed.
 
 **2. The control plane.**  From this repo: the skills, `utils/` and the orientation file,
 read in place (`export AKAO_REPO_ROOT=<checkout>` unless it is `/root/akao-workflow`), with
-links under `/<year>` so old paths and auto-loading keep working:
+a link under `/<year>` so old paths keep working:
 
 ```bash
-ln -sfn "$AKAO_REPO_ROOT/year/CLAUDE.md" /<year>/CLAUDE.md
-ln -sfn "$AKAO_REPO_ROOT/year/CLAUDE.md" /<year>/AGENTS.md
 ln -sfn "$AKAO_REPO_ROOT/utils" /<year>/utils
 ```
 

@@ -48,8 +48,6 @@ impl Sandbox {
             .status()
             .unwrap();
         assert!(git.success());
-        std::os::unix::fs::symlink(sb.root.join("repo/year/CLAUDE.md"), deploy.join("CLAUDE.md")).unwrap();
-        std::os::unix::fs::symlink(sb.root.join("repo/year/CLAUDE.md"), deploy.join("AGENTS.md")).unwrap();
         sb.exe("bin/ssh", SSH_WRAPPER);
         sb.exe("bin/docker", "#!/bin/sh\necho 'Docker version 0.0 (fake)'\n");
         sb.exe("bin-nowrap/docker", "#!/bin/sh\necho 'Docker version 0.0 (fake)'\n");
@@ -121,8 +119,6 @@ fn sound_setup_passes() {
         "ok    oaka",
         "ok    docker",
         "ok    repo",
-        "ok    CLAUDE.md",
-        "ok    AGENTS.md",
     ] {
         assert!(out.contains(want), "{want:?} not in {out}");
     }
@@ -167,12 +163,6 @@ fn controller_prerequisites_are_reported() {
     let sb = Sandbox::new("controller");
     let (code, out) = sb.doctor("bin", Some(&sb.state()));
     assert_eq!(code, 0, "{out}");
-    // /<year>/CLAUDE.md as a stale copy instead of the repo's: agents would load the copy.
-    fs::remove_file(sb.root.join("deploy/CLAUDE.md")).unwrap();
-    fs::write(sb.root.join("deploy/CLAUDE.md"), "old\n").unwrap();
-    let (code, out) = sb.doctor("bin", Some(&sb.state()));
-    assert_eq!(code, 0, "{out}");
-    assert!(out.contains("warn  CLAUDE.md") && out.contains("ln -sfn"), "{out}");
     // Not on the sandbox's PATH (system dirs aside): warned, never fatal.
     assert!(out.contains("artifact root  /"), "{out}");
     assert!(out.contains("(derived)"), "{out}");

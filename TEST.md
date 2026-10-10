@@ -84,8 +84,8 @@ binary but no repo, so these are subcommands, not cargo tests).  Each prints
   `ssh` first on PATH honours `$AKAO_CONFIG_ROOT/.ssh/config` (compared with
   `ssh -F <config> -G` for every host, so docker contexts get the same config), home
   template, deploy sources incl. a runnable `oaka/bin/oaka`, docker CLI, the repo checkout
-  init ships (`$AKAO_REPO_ROOT`: FAIL if missing, warn if dirty) and `/<year>/CLAUDE.md`,
-  `AGENTS.md` linking to its `year/CLAUDE.md`; for a controller (warn only): its artifact
+  init ships (`$AKAO_REPO_ROOT`: FAIL if missing, warn if dirty); for a controller (warn
+  only): its artifact
   root, `tmux`, `claude`, the InferenceX clone mirror reads.
 - `oaka doctor` (worker; `akao init` runs it as its last step): ROCm version, library
   profiles resolve, GPUs visible, InferenceX checked out and importable, the serving engines

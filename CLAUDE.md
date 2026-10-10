@@ -56,7 +56,7 @@ Cargo.toml            workspace root
 rustfmt.toml          max_width = 120
 AGENTS.md             -> CLAUDE.md
 year/CLAUDE.md        orientation for every agent under /<year>; AGENTS.md -> CLAUDE.md beside it.
-                      The console's /<year>/CLAUDE.md and AGENTS.md link here; init ships copies
+                      init ships copies to each box's /<year>
 skills/<name>/        role manuals (controller, worker) and bring-codex-back; read in place
                       from $AKAO_REPO_ROOT, which init clones into every worker
 utils/                agent.sh (claude + codex via the AMD gateway), install_gh.sh (init step 9
@@ -119,8 +119,7 @@ Never stored in config to avoid staleness.
 
 **The repo** (`AKAO_REPO_ROOT`, `state::repo_root()`): the console's checkout of this repo,
 default `/root/akao-workflow`; init ships its committed branches (step 8) and its `year/`
-files (step 3); `akao doctor` checks it and that `/<year>/CLAUDE.md`, `AGENTS.md` link to
-`year/CLAUDE.md`.  oaka's doctor checks the worker's clone.
+files (step 3); `akao doctor` checks it.  oaka's doctor checks the worker's clone.
 
 **Artifact roots** (`AKAO_ARTIFACT_ROOT`): one per agent, the directory holding its numbered
 dirs.  On the console it is the controller's (`state::artifact_root()`: the variable, else

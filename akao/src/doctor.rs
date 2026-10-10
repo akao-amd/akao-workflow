@@ -72,7 +72,7 @@ pub fn run() -> Result<()> {
     check_ssh(&mut r, &state, &nicks);
     check_template(&mut r, &state);
     check_deploy(&mut r, &state);
-    check_repo(&mut r, &state);
+    check_repo(&mut r);
     match output(&["docker", "--version"]) {
         Some(v) => r.ok("docker", v.trim()),
         None => r.fail("docker", "docker CLI not found; init drives workers through it"),
@@ -84,9 +84,8 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-/// The repo checkout init ships (skills, /<year>/CLAUDE.md), and the console's own
-/// /<year>/CLAUDE.md and AGENTS.md: links to the repo's year/CLAUDE.md.
-fn check_repo(r: &mut Report, state: &State) {
+/// The repo checkout init ships (skills, /<year>/CLAUDE.md, oaka).
+fn check_repo(r: &mut Report) {
     let repo = match state::repo_root() {
         Ok((repo, _)) => repo,
         Err(e) => return r.fail("repo", format!("{e:#}")),
@@ -122,25 +121,6 @@ fn check_repo(r: &mut Report, state: &State) {
             ),
         ),
         _ => r.ok("repo", format!("{repo} at {}", head.trim())),
-    }
-    let want = Path::new(&repo).join("year/CLAUDE.md");
-    let Ok(src) = state.require("deploy_src") else { return };
-    for name in ["CLAUDE.md", "AGENTS.md"] {
-        let have = Path::new(&src).join(name);
-        let same = have.canonicalize().ok() == want.canonicalize().ok();
-        if same {
-            r.ok(name, format!("{} -> {}", have.display(), want.display()));
-        } else {
-            r.warn(
-                name,
-                format!(
-                    "{} is not the repo's; agents under {src} load it: ln -sfn {} {}",
-                    have.display(),
-                    want.display(),
-                    have.display()
-                ),
-            );
-        }
     }
 }
 
