@@ -103,10 +103,10 @@ impl Sandbox {
         put("deploy/x", "", false);
         put("state/hosts.tsv", "fakebox\t-\t/m\t-\t/h\n", false);
         put("state/container_home/.bashrc", "", false);
-        // The repo init ships (AKAO_REPO_ROOT): year/CLAUDE.md with AGENTS.md a link to it.
-        put("repo/year/CLAUDE.md", "# Working under /<year>\n", false);
+        // The repo init ships (AKAO_REPO_ROOT): CLAUDE.md with AGENTS.md a link to it.
+        put("repo/CLAUDE.md", "# akao-workflow\n", false);
         put("repo/oaka/bin/oaka", "#!/bin/sh\n", true);
-        std::os::unix::fs::symlink("CLAUDE.md", root.join("repo/year/AGENTS.md")).unwrap();
+        std::os::unix::fs::symlink("CLAUDE.md", root.join("repo/AGENTS.md")).unwrap();
         let out = Command::new("git")
             .args([
                 "-c",
@@ -176,8 +176,7 @@ fn mirror_brings_up_the_entrys_image_with_a_brief() {
         "fakebox: 2 x gfx950 as mi355x needs".to_string(),
         "image rocm/atom:1".to_string(),
         format!("-e 'AKAO_ARTIFACT_ROOT={root}' -e 'AKAO_REPO_ROOT=/root/akao-workflow' -w {root}"),
-        // The orientation file from the repo, dereferenced, into the box's /<year>.
-        "year -h '--owner=0' '--group=0' -czf - CLAUDE.md AGENTS.md | [fakebox]".to_string(),
+        "[3/12] deploy extra paths".to_string(),
         "[7/12] install packages".to_string(),
         "[9/12] install tools and agents".to_string(),
         "bash /root/akao-workflow/utils/install_gh.sh".to_string(),
@@ -196,6 +195,8 @@ fn mirror_brings_up_the_entrys_image_with_a_brief() {
     ] {
         assert!(out.contains(&want), "{want:?} not in {out}");
     }
+    // The repo reaches the worker only as its clone: nothing of it under the box's /<year>.
+    assert!(!out.contains("CLAUDE.md"), "{out}");
 }
 
 /// FAKE_EXISTING for akao_m1-fp4-mi355x-atom as akao made it on fakebox (home /h).

@@ -84,7 +84,7 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-/// The repo checkout init ships (skills, /<year>/CLAUDE.md, oaka).
+/// The repo checkout init ships (CLAUDE.md, skills, oaka).
 fn check_repo(r: &mut Report) {
     let repo = match state::repo_root() {
         Ok((repo, _)) => repo,
@@ -101,11 +101,11 @@ fn check_repo(r: &mut Report) {
             ),
         ),
     }
-    if !Path::new(&repo).join(".git").exists() || !Path::new(&repo).join("year/CLAUDE.md").is_file() {
+    if !Path::new(&repo).join(".git").exists() || !Path::new(&repo).join("CLAUDE.md").is_file() {
         return r.fail(
             "repo",
             format!(
-                "{repo} is not a checkout of akao-workflow with year/CLAUDE.md (init ships it to every \
+                "{repo} is not a checkout of akao-workflow with CLAUDE.md (init ships it to every \
                  worker); export {}=<your checkout>",
                 state::REPO_ROOT_ENV
             ),

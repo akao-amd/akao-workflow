@@ -14,7 +14,7 @@ compatibility:
 # worker
 
 You run in a worker container `akao_<name>`, brought up by `akao init`; your working
-directory is the task dir the controller named (`/2026/CLAUDE.md`, "Where you are"): a
+directory is the task dir the controller named (`$AKAO_REPO_ROOT/CLAUDE.md`, "Where you are"): a
 numbered dir under your **artifact root**, `$AKAO_ARTIFACT_ROOT` (or, in a container from
 before it, the working directory your shell starts in). `oaka check` warns when a plan's
 directory is not such a task dir.
@@ -87,7 +87,7 @@ revision (`recipes/`). The image may have no SGLang at all.
 
 ## Fixing the tools — your clone of the repo
 
-`/2026/CLAUDE.md`, "Fixing the tools", says when. Your clone is `$AKAO_REPO_ROOT`
+`$AKAO_REPO_ROOT/CLAUDE.md`, "Fixing the tools", says when. Your clone is `$AKAO_REPO_ROOT`
 (`/root/akao-workflow`, yours alone; `akao init` keeps it fed from the console as
 `console/main`). Change it per its `CLAUDE.md`, commit on `main`, then put the patch where
 the task's artifacts are and name it in your report:

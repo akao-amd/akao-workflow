@@ -370,7 +370,7 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
         p.host.host_home,
         p.artifact_root
     );
-    // What step 3 and the repo step ship; checked before anything changes.
+    // What the repo step ships; checked before anything changes.
     let repo = if opts.skip_setup {
         None
     } else {
@@ -420,7 +420,7 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
     );
     r.run(&r.ssh_argv(nick, &script))?;
 
-    s.next("deploy control plane");
+    s.next("deploy extra paths");
     if opts.skip_setup {
         println!("  skipped (--skip-setup)");
     } else {
@@ -435,20 +435,17 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
                 bail!("deploy path missing locally: {src}/{path}");
             }
         }
-        let extract = format!("{ESCALATE}$S tar -xzf - -C {}", q(&p.host_year_dir()));
-        // Anything beyond the repo the user ships to every box (none by default).
-        if !paths.is_empty() {
+        // Anything beyond the repo the user ships to every box (none by default); the repo
+        // itself goes only into the worker's clone (step 8), nothing of it under /<year>.
+        if paths.is_empty() {
+            println!("  nothing to deploy (deploy_paths is empty)");
+        } else {
+            let extract = format!("{ESCALATE}$S tar -xzf - -C {}", q(&p.host_year_dir()));
             r.pipe(
                 &tar_create(Path::new(&src), &paths, DEPLOY_EXCLUDES, true),
                 &r.ssh_argv(nick, &extract),
             )?;
         }
-        // The orientation every agent under /<year> loads, from the repo.
-        let year = Path::new(repo.as_deref().unwrap()).join("year");
-        r.pipe(
-            &tar_create(&year, &["CLAUDE.md".into(), "AGENTS.md".into()], &[], true),
-            &r.ssh_argv(nick, &extract),
-        )?;
     }
 
     s.next("container home");

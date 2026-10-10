@@ -33,7 +33,7 @@ checks it).
 |---|---|---|
 | `akao`, release | `target/release/akao` | you, through the symlink above |
 | `oaka`, static musl | `oaka/bin/oaka` in this checkout (git-ignored) | workers, at their next `akao init` (step 8 puts it into the worker's clone, step 9 links it onto PATH) |
-| skills, `utils/`, `year/CLAUDE.md`, oaka's library (`oaka/profiles`, `oaka/stacks.toml`) | nowhere: read in place from this checkout (`$AKAO_REPO_ROOT`); `/<year>/utils` links to it | workers, at their next `akao init` (step 3 copies `year/` files to the box's `/<year>`, step 8 updates the worker's own clone) |
+| `CLAUDE.md`, skills, `utils/`, oaka's library (`oaka/profiles`, `oaka/stacks.toml`) | nowhere: read in place from this checkout (`$AKAO_REPO_ROOT`) | workers, at their next `akao init` (step 8 updates the worker's own clone) |
 
 So a worker gets a new `oaka` only when `akao init` runs again for it; re-running init on an
 existing container is safe (every step reuses what exists) as long as `--skip-setup` is
@@ -47,16 +47,16 @@ Everything lives in `$AKAO_CONFIG_ROOT` (e.g. `/2026/nocopy/akao-workflow-state`
 
 | File | Content |
 |---|---|
-| `config.toml` | `default_image`, `deploy_src` (default `/<year>`), `deploy_paths` (extra paths under `deploy_src` to ship to every box; none by default: the skills, `utils/`, oaka and `/<year>/CLAUDE.md` come from the repo), `infx_repo`, `infx_local` (this machine's InferenceX clone, for `akao mirror`; default `/<year>/nocopy/InferenceX`) |
+| `config.toml` | `default_image`, `deploy_src` (default `/<year>`), `deploy_paths` (extra paths under `deploy_src` to ship to every box; none by default: `CLAUDE.md`, the skills, `utils/` and oaka come from the repo), `infx_repo`, `infx_local` (this machine's InferenceX clone, for `akao mirror`; default `/<year>/nocopy/InferenceX`) |
 | `hosts.tsv` | one row per box: `nick image model_path docker_sock host_home rest`; `-` = default |
 | `container_home/` | home template, copied once per container to `<host_home>/container_home/akao_<name>` |
 
 The work year and week are not stored: they are today's ISO year and week (`2026`, `ww41`).
 
 **The repo.**  `$AKAO_REPO_ROOT` (default `/root/akao-workflow`) is the checkout of this
-repo akao ships: the role skills (`skills/`) are read from it in place, and its
-`year/CLAUDE.md` is the orientation every agent under `/<year>` loads; every worker gets its own
-clone (init step 8).  Only committed work travels.
+repo akao ships: its `CLAUDE.md` (the orientation every agent reads first) and the role
+skills (`skills/`) are read from it in place; every worker gets its own clone under `/root`
+(init step 8), and nothing of it is copied under `/<year>`.  Only committed work travels.
 
 **Artifact roots.**  Each agent keeps its numbered dirs under one directory, its *artifact
 root*: a worker's is `/<year>/<week>/<name>`, the controllers' `/<year>/<week>/controller`.
@@ -85,9 +85,9 @@ Brings up `akao_<name>` on `<nick>`:
    exists, it keeps its image and artifact root, and must mount `/<year>` and `/root` from
    where hosts.tsv says (a request it cannot satisfy fails here, before the host is touched)
 2. create the artifact root under `<host_home>` and `<host_home>/container_home` on the host
-3. deploy the control plane: `tar` of `deploy_paths` and of the repo's `year/CLAUDE.md`,
-   `AGENTS.md` → `<host_home>/<year>`, owned root:root, symlinks followed (merge, never
-   delete; `.git`, `.claude`, `__pycache__`, `*.pyc` excluded)
+3. deploy extra paths: `tar` of `deploy_paths` (none by default) → `<host_home>/<year>`,
+   owned root:root, symlinks followed (merge, never delete; `.git`, `.claude`,
+   `__pycache__`, `*.pyc` excluded)
 4. copy the home template, unless that container's home already exists
 5. create docker context `<nick>` (`host=ssh://<nick>`) if missing, then `docker context use` it
 6. `docker run` the container, unless it already runs
@@ -195,19 +195,14 @@ image with these tools except Rust and claude.  TODO(user): how the console cont
 started from it, and whether `gh` (for the worker skill's `safe_push.sh`, which runs on the
 controller) is needed.
 
-**2. The control plane.**  From this repo: the skills, `utils/` and the orientation file,
-read in place (`export AKAO_REPO_ROOT=<checkout>` unless it is `/root/akao-workflow`), with
-a link under `/<year>` so old paths keep working:
-
-```bash
-ln -sfn "$AKAO_REPO_ROOT/utils" /<year>/utils
-```
-
-Nothing else under `/<year>` is needed: oaka's library is the repo's `oaka/`, and the
+**2. The control plane.**  From this repo: `CLAUDE.md`, the skills and `utils/`, read in
+place (`export AKAO_REPO_ROOT=<checkout>` unless it is `/root/akao-workflow`).
+Nothing under `/<year>` is needed: oaka's library is the repo's `oaka/`, and the
 post-commit hook builds `oaka/bin/oaka` there.  Boxes initialized before 2026-10-10 still
-hold old `/<year>/skills/`, `/<year>/utils/` and `/<year>/oaka/` copies; workers re-initialized
-since read their clone instead (oaka falls back to `/<year>/oaka` only without one), so
-remove them at leisure, after bringing back any profile saved there (`akao cp`).
+hold old control-plane copies under `/<year>` (skills, utils, oaka, the markdown files, which
+agents there still auto-load); workers re-initialized since read their clone instead (oaka
+falls back to `/<year>/oaka` only without one), so remove them, after bringing back any
+profile saved there (`akao cp`).
 
 **3. State.**  `export AKAO_CONFIG_ROOT=<dir>` in the shell profile, then in it:
 `config.toml` (`akao config set default_image ...`), `hosts.tsv` (`akao host add ...`), the
@@ -244,7 +239,7 @@ mkdir -p "$root" && cd "$root"
 claude                               # first message: "You are a controller. Load the controller skill."
 ```
 
-The first message decides the role (`/<year>/CLAUDE.md`, "Identify yourself").  Worker
+The first message decides the role (`$AKAO_REPO_ROOT/CLAUDE.md`, "Identify yourself").  Worker
 agents then open in windows of this tmux session (controller skill, "The worker's agent").
 
 ## `oaka` (inside a worker)

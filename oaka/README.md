@@ -205,7 +205,7 @@ image's `GPU_ARCH_LIST` (what it was built for) names another arch.
 This library is the only home of server recipes (the former sglang-dev skill's profiles were
 converted into it); change recipes here, through `oaka profile save` or by hand.  It is
 tracked in git: a saved or edited profile is a change in your clone, kept by committing it
-(how a worker's commit reaches the console: `/<year>/CLAUDE.md`, "Fixing the tools").
+(how a worker's commit reaches the console: `$AKAO_REPO_ROOT/CLAUDE.md`, "Fixing the tools").
 
 Named `<model>/<recipe>`; `<model>` alone means `<model>/base`.  A recipe imported from an
 InferenceX entry by a mirror worker is `<model>/infx-<entry>[-<variant>]`.  `<model>` is the model

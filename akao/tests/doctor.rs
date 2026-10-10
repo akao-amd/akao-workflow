@@ -41,7 +41,7 @@ impl Sandbox {
         sb.exe("state/container_home/.local/bin/ssh", SSH_WRAPPER);
         sb.write("deploy/x", "");
         sb.exe("repo/oaka/bin/oaka", "#!/bin/sh\necho 'oaka 0.0.0 (test)'\n");
-        sb.write("repo/year/CLAUDE.md", "# Working under /<year>\n");
+        sb.write("repo/CLAUDE.md", "# akao-workflow\n");
         let git = Command::new("git")
             .args(["init", "-q"])
             .current_dir(sb.root.join("repo"))
@@ -149,7 +149,7 @@ fn missing_pieces_are_named() {
     fs::remove_file(sb.root.join("repo/oaka/bin/oaka")).unwrap();
     fs::remove_file(sb.root.join("deploy/x")).unwrap();
     fs::remove_dir_all(sb.state().join("container_home")).unwrap();
-    fs::remove_file(sb.root.join("repo/year/CLAUDE.md")).unwrap();
+    fs::remove_file(sb.root.join("repo/CLAUDE.md")).unwrap();
     let (code, out) = sb.doctor("bin", Some(&sb.state()));
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("FAIL  deploy         missing under"), "{out}");

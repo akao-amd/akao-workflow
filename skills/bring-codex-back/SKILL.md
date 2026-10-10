@@ -106,7 +106,7 @@ and *refuses to start* while `config.toml` still has a `[profiles.X]` table or a
 `profile = "X"` key. Move each legacy table into its own file and delete it.
 `wire_api = "chat"` anywhere makes the whole `config.toml` fail to load; use `"responses"`.
 
-The setup scripts write all of this: `utils/agent.sh` in the akao-workflow repo (`$AKAO_REPO_ROOT`; the console's `/2026/utils` links there) and
+The setup scripts write all of this: `utils/agent.sh` in the akao-workflow repo (`$AKAO_REPO_ROOT`) and
 https://github.com/akao-amd/codex `setup-codex-cli.sh` (checkout `/2026/nocopy/codex`),
 both updated 2026-10-10; tested with `-p` default, `gpt5`, `o3`.
 

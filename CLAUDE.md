@@ -3,22 +3,99 @@
 Rust workspace with two CLI tools: `akao` (local driver) and `oaka` (worker-side plan
 generator and script compiler).  Target: `x86_64-unknown-linux-gnu`; `oaka` is also built
 static for `x86_64-unknown-linux-musl` so it runs in any worker image.  The repo also holds
-what agents read: the role skills (`skills/`) and the orientation every agent under
-`/<year>` loads (`year/CLAUDE.md`).  `AGENTS.md` here and in `year/` are symlinks to the
-`CLAUDE.md` beside them, so codex and claude read the same text.
+what agents read: this file and the role skills (`skills/`).  `AGENTS.md` is a symlink to
+this file, so codex and claude read the same text.
 
-This file is the developer's guide.  Controllers and workers are developers too: when they
-hit a bug in these tools they fix it here, in their checkout `$AKAO_REPO_ROOT` (a worker's
-own clone; how a fix travels: `year/CLAUDE.md`, "Fixing the tools").
+Every agent, controller or worker, orients from this file at `$AKAO_REPO_ROOT/CLAUDE.md`
+(a worker's working directory is outside the repo, so it is told to read it), then works
+through the skill for its role.  The first part is the orientation; from "Build & test" on
+it is the developer's guide: controllers and workers are developers too (below, "Fixing
+the tools").
+
+## The two roles
+
+| Role | Runs on | Does | Manual |
+|---|---|---|---|
+| **Controller** | the console, where `akao` runs | brings up and briefs worker containers on remote boxes, hands artifacts between them | `$AKAO_REPO_ROOT/skills/controller/SKILL.md` |
+| **Worker** | a worker container `akao_<name>` | does the jobs — sorted requests from the controller, sometimes ad hoc from the user | `$AKAO_REPO_ROOT/skills/worker/SKILL.md` |
+
+**Identify yourself from the signal you were given** — check in order, stop at the first match:
+
+1. The user told you directly — "you are a controller" / "you are a worker" (the former
+   "syncer" is the controller). An explicit declaration always wins.
+2. You were asked to load the `controller` skill → **controller**.
+3. Your opening message came from a controller and names your container (`akao_<name>`) →
+   **worker**.
+4. None matched and you cannot tell → **ask the user before doing anything.**
+
+Then read your role's skill before the first task.
+
+## Where you are
+
+`/<year>` (e.g. `/2026`) is the work year's tree. Each box has its own (`<host home>/<year>`),
+mounted as `/<year>` in its workers, so workers on different boxes do not see each other's
+files.
+
+```
+/<year>/<work_week>/<container_name>/<NNNN>_<brief_description>/   a worker's task dirs
+          ww40/        dsv4_exp/        0001_baseline/
+/<year>/<work_week>/controller/<NNN>_<desc>.sh                      the controllers' record
+```
+
+The directory holding an agent's numbered dirs is its **artifact root**. When
+`$AKAO_ARTIFACT_ROOT` is set, that is it, whatever today's week is (`akao init` pins each
+worker's into its container; a controller may be given its own). Unset: a worker's is its
+container's working directory, a controller's `/<year>/<work_week>/controller/`.
+
+**Worker:** your working directory is the task dir `<NNNN>_<desc>`, *not* the container
+dir above it. Everything you produce goes there. Sibling containers' dirs are visible —
+never write into them; hand work off with a report file and let the controller pass the
+path along.
+
+The tools: `akao` (controller, on the console; `README.md`) brings workers up and moves
+files between boxes; `oaka` (worker; `oaka/README.md`) launches servers, benchmarks them
+(SGLang, vllm or ATOM servers), and swaps and bisects SGLang/AITER/Triton revisions.
+`akao mirror` brings up a worker for one InferenceX benchmark config.
+
+## The repo: `$AKAO_REPO_ROOT`
+
+akao, oaka, the skills, `utils/` (agent.sh, install_gh.sh) and this file are one git repo
+(akao-amd/akao-workflow), checked out at `$AKAO_REPO_ROOT` (default `/root/akao-workflow`).
+On the console it is the checkout every commit is delivered from; in a worker it is the
+worker's **own clone** under `/root`, which `akao init` ships from the console and
+fast-forwards to the console's `main` (fetched as `console/main`) while the clone is on
+`main`, clean and behind.  Nothing of it is copied under `/<year>`.
+
+## Fixing the tools (every role)
+
+When akao, oaka, a skill or this file is wrong or missing something you need — a bug, a
+misleading message, a step a skill gets wrong — fix it in `$AKAO_REPO_ROOT` rather than
+working around it, following the developer's guide below (how to change the code, the
+tests to run before every commit). One focused commit per fix, on `main`, with its test.
+
+- **Controller** (the console's checkout): commit; the post-commit hook delivers akao and
+  oaka. Push only when the user asks.
+- **Worker** (your clone): commit, then `git format-patch -1` (or `console/main..`) into
+  your task dir and say so in your report; the controller reviews it and applies it with
+  `git am` on the console. After the next `akao init`, `git rebase console/main` drops
+  what was applied. Never push from a worker.
+- **A recipe worth keeping** (`oaka profile save`): the library is the repo's `oaka/`, so a
+  saved or edited profile is a change in your checkout; commit it like any other fix.
+- Small and unrelated to the task? Note it in your report instead, and go on with the task.
 
 ## Credentials
 
 Never write a token (`GH_TOKEN`, `AMD_LLM_API_KEY`, any key or password) into a file, a
-script, a commit, a test, a record, or a command line that gets saved: Claude Code stores
-approved commands verbatim in `.claude/settings.local.json`, which is how a GitHub token
-once ended up there in plain text.  Read it from the environment at the moment of use
-(`"$GH_TOKEN"`), mask it in kept output (`sed "s|$GH_TOKEN|<token>|g"`), and ask the user
-when it is not set.  `.claude/` is git-ignored.
+script, a commit, a test, a record, a report, or a command line that gets saved: Claude
+Code stores approved commands verbatim in `.claude/settings.local.json`, which is how a
+GitHub token once ended up there in plain text.  Read it from the environment at the
+moment of use (`"$GH_TOKEN"`), and mask it in output you keep (`sed "s|$GH_TOKEN|<token>|g"`).
+If it is not in the environment, ask the user; do not search the disk for one.  `.claude/`
+is git-ignored.
+
+## Hand-off between agents
+
+A report file written into your task dir, its path passed along by the controller.
 
 ## Build & test
 
@@ -37,9 +114,9 @@ model; it is usually on the box already).
 
 **Docs, one home each**: SPEC.md = intent, decisions with reasons, open designs (no
 how-to); `oaka/README.md` = oaka user reference; README.md = akao usage; CLAUDE.md = how
-to change the code; TEST.md = how to test; `year/CLAUDE.md` = orientation for agents under
-`/<year>` (roles, where things are, fixing the tools, credentials); `skills/<role>/SKILL.md`
-= how a role uses the tools.  When something ships, move its how-to out of
+to change the code, and first the orientation for every agent (roles, where things are,
+fixing the tools, credentials); TEST.md = how to test; `skills/<role>/SKILL.md` = how a
+role uses the tools.  When something ships, move its how-to out of
 SPEC.md and leave the decision behind.
 
 **Post-commit hook** (`.githooks/post-commit`, enable with `git config core.hooksPath
@@ -54,14 +131,12 @@ Needs `rustup target add x86_64-unknown-linux-musl`.
 ```
 Cargo.toml            workspace root
 rustfmt.toml          max_width = 120
+CLAUDE.md             orientation for every agent, then the developer's guide
 AGENTS.md             -> CLAUDE.md
-year/CLAUDE.md        orientation for every agent under /<year>; AGENTS.md -> CLAUDE.md beside it.
-                      init ships copies to each box's /<year>
 skills/<name>/        role manuals (controller, worker) and bring-codex-back; read in place
                       from $AKAO_REPO_ROOT, which init clones into every worker
 utils/                agent.sh (claude + codex via the AMD gateway), install_gh.sh (init step 9
-                      runs both from the worker's clone), controller/Dockerfile (console image);
-                      the console's /<year>/utils links here
+                      runs both from the worker's clone), controller/Dockerfile (console image)
 TEST.md               test layers: cargo test, real GPU smoke, environment doctors
 .githooks/post-commit builds akao (release) and a static oaka into oaka/bin
 akao/
@@ -118,8 +193,8 @@ Work year and week are always today's ISO values (`state::work_year()`, `state::
 Never stored in config to avoid staleness.
 
 **The repo** (`AKAO_REPO_ROOT`, `state::repo_root()`): the console's checkout of this repo,
-default `/root/akao-workflow`; init ships its committed branches (step 8) and its `year/`
-files (step 3); `akao doctor` checks it.  oaka's doctor checks the worker's clone.
+default `/root/akao-workflow`; init ships its committed branches (step 8); `akao doctor`
+checks it.  oaka's doctor checks the worker's clone.
 
 **Artifact roots** (`AKAO_ARTIFACT_ROOT`): one per agent, the directory holding its numbered
 dirs.  On the console it is the controller's (`state::artifact_root()`: the variable, else
@@ -181,9 +256,9 @@ repo checkout (`$AKAO_REPO_ROOT`, `state::shippable_repo`) is checked before ste
    `/root` mounted from elsewhere than hosts.tsv says, a mount of its own over the root)
    fails here, before the host is touched
 2. `mkdir -p` the artifact root under `<host_home>` + `container_home` root
-3. Deploy control plane: `tar -h | ssh tar` with `sudo -n`, `root:root`, no delete:
-   `deploy_paths` from `deploy_src` (none by default), then the repo's `year/CLAUDE.md` + `AGENTS.md`
-   (dereferenced: a link into the console's tree would dangle on the box)
+3. Deploy extra paths: `tar -h | ssh tar` with `sudo -n`, `root:root`, no delete:
+   `deploy_paths` from `deploy_src` into `<host_home>/<year>` (none by default; nothing of
+   the repo goes there)
 4. Copy home template (skipped if container home already exists)
 5. Create docker context `ssh://<nick>` (updates it if it points elsewhere).  Relies on the
    `ssh` wrapper (see Design notes).

@@ -17,7 +17,8 @@ You run on the console, where `akao` runs. akao reaches each box's Docker over s
 drive worker containers directly; no agent sits on the box in between. akao's reference
 is `README.md` in its repo (`$AKAO_REPO_ROOT`, default `/root/akao-workflow`; this skill
 lives there too); `akao <cmd> --help` for
-flags, `akao doctor` when akao itself misbehaves.
+flags, `akao doctor` when akao itself misbehaves. Read the repo's `CLAUDE.md` first if you
+have not: it is every agent's orientation.
 
 ## Your record — your artifact root
 
@@ -43,7 +44,7 @@ Which workers exist this week: `grep -hE "akao (init|mirror)" <root>/*.sh`, and
 | Need | How |
 |---|---|
 | a box akao does not know | ask the user its host home and model dir (never guess or probe), then `akao host add <nick> --home <dir> --model <dir>`; `akao host ls` |
-| a new worker, or refresh one | `akao init <nick> <name>` (`--dry-run` first on an unfamiliar box). It gives the box `/<year>/CLAUDE.md` from the repo, makes the home, runs `akao_<name>` with its **artifact root** (`/<year>/<week>/<name>`, or `--artifact-root`) as working directory and `$AKAO_ARTIFACT_ROOT`, ships the worker its own clone of the repo (skills, utils, oaka and its library), installs tools, and ends with the worker's `oaka doctor` report — read it. Init prints the root; an existing container keeps the one it was created with |
+| a new worker, or refresh one | `akao init <nick> <name>` (`--dry-run` first on an unfamiliar box). It makes the home, runs `akao_<name>` with its **artifact root** (`/<year>/<week>/<name>`, or `--artifact-root`) as working directory and `$AKAO_ARTIFACT_ROOT`, ships the worker its own clone of the repo (skills, utils, oaka and its library), installs tools, and ends with the worker's `oaka doctor` report — read it. Init prints the root; an existing container keeps the one it was created with |
 | a worker that reproduces an InferenceX config (another engine than SGLang, e.g. the dashboard's vllm or ATOM entry) | `akao mirror --conf <terms> [--rev <sha>]` to list and preview (gpt-oss entries were retired: the error names the commits to `--rev` before), then `akao mirror <nick> --conf <terms> ...` — the box must have the runner's GPUs. It is `akao init` with the entry's image, plus a brief `mirror/<entry>@<sha>/MIRROR.md` in the worker's root; hand that path to the worker (below) |
 | one worker's results for another to refer to | `akao cp <nick>:ww42/<a>/<NNNN>_<desc> <nick2>:ww42/<b>` (lands inside the destination; merge, never delete) |
 
@@ -77,9 +78,9 @@ Capture after every send, a few seconds later, to see that it took.
 1. **The trust dialog.** A new `claude` first asks whether to trust the folder, with "No,
    exit" selected: you opened it, so answer it (`Down`, then `C-m`).
 2. **Handshake.** The first message is what tells the agent it is a worker
-   (`/2026/CLAUDE.md`, "Identify yourself"): *"You are a worker agent in container
+   (`$AKAO_REPO_ROOT/CLAUDE.md`, "Identify yourself"): *"You are a worker agent in container
    akao_<name>. I am the controller; the requests I send are pre-sorted. Your working
-   directory for each task is a numbered dir under <root>/. Follow /2026/CLAUDE.md."* —
+   directory for each task is a numbered dir under <root>/. Follow $AKAO_REPO_ROOT/CLAUDE.md."* —
    `<root>` being the artifact root init printed (in the container: `$AKAO_ARTIFACT_ROOT`,
    or for a container from before it, its working directory). For a mirror worker, add:
    *"You are a mirror worker: read <root>/mirror/<entry>@<sha>/MIRROR.md first."*
@@ -108,7 +109,7 @@ is mid-decision, and your keystroke would choose for them.
 
 ## You are also the tools' developer
 
-`/2026/CLAUDE.md`, "Fixing the tools", says when and how. Yours is the console's checkout
+`$AKAO_REPO_ROOT/CLAUDE.md`, "Fixing the tools", says when and how. Yours is the console's checkout
 (`$AKAO_REPO_ROOT`), the one every commit is delivered from, so:
 
 - A fix of your own: a commit on `main` per the repo's `CLAUDE.md` (its tests first); the
