@@ -1,0 +1,20 @@
+# Converted 2026-10-09 from the sglang-dev skill's (retired in ww42) profile gpt-oss-120b/legacy_before_1008 (comments verbatim).
+#
+# gpt-oss-120b, AMD Quark W4A8 checkpoint (MXFP4 weights, FP8 activations), one GPU.
+# Recipe from akao, ww41.
+
+description = "gpt-oss-120b, AMD Quark W4A8 checkpoint (MXFP4 weights, FP8 activations), one GPU."
+model = "/model/gpt-oss-120b-w-mxfp4-a-fp8"
+tp = 1
+
+[env]
+TRITON_HIP_USE_EXPERT_SCHEDULING = "0"
+HIP_FORCE_DEV_KERNARG = "0"
+ENABLE_CK = "0"
+
+[args]
+trust-remote-code = true
+max-running-requests = 512
+mem-fraction-static = 0.9
+attention-backend = "triton"
+disable-radix-cache = true

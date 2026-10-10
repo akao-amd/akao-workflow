@@ -1,0 +1,33 @@
+# Converted 2026-10-09 from the sglang-dev skill's (retired in ww42) profile dsv4-flash (comments verbatim).
+#
+# DeepSeek-V4-Flash, one GPU. The recipe server.sh hard-coded before profiles existed.
+
+description = "DeepSeek-V4-Flash, one GPU. The recipe server.sh hard-coded before profiles existed."
+model = "/model/DeepSeek-V4-Flash/"
+tp = 1
+
+[env]
+HIP_FORCE_DEV_KERNARG = "0"
+SGLANG_DEFAULT_THINKING = "1"
+SGLANG_DSV4_REASONING_EFFORT = "max"
+SGLANG_USE_ROCM700A = "0"
+SGLANG_HACK_FLASHMLA_BACKEND = "unified_kv_triton"
+AITER_BF16_FP8_MOE_BOUND = "0"
+AITER_FORCE_A8W4 = "1"
+SGLANG_OPT_FUSE_MHC_POST_PRE = "0"
+ENABLE_CK = "0"
+SGLANG_USE_AITER = "1"
+
+[args]
+trust-remote-code = true
+attention-backend = "dsv4"
+page-size = 256
+mem-fraction-static = 0.8
+swa-full-tokens-ratio = 0.15
+tool-call-parser = "deepseekv4"
+reasoning-parser = "deepseek-v4"
+chunked-prefill-size = 2048
+max-prefill-tokens = 2048
+cuda-graph-max-bs-decode = 256
+max-running-requests = 256
+kv-cache-dtype = "fp8_e4m3"

@@ -1,0 +1,12 @@
+# gpt-oss-20b bf16, one GPU, triton attention.  The model of the TEST.md smoke run:
+# small enough to load in about a minute.  Measured on one MI355X (gfx950), ww41:
+# ISL 1024 / OSL 128, concurrency 4 -> ~680 output tok/s.  Not tuned; for checking that
+# oaka's launch/benchmark/teardown work end to end, not for performance claims.
+
+description = "gpt-oss-20b bf16, triton attention; the TEST.md smoke model"
+model = "/model/gpt-oss-20b-bf16"
+
+[args]
+trust-remote-code = true
+attention-backend = "triton"
+mem-fraction-static = 0.85

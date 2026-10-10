@@ -1,0 +1,102 @@
+# Converted 2026-10-09 from the sglang-dev skill's (retired in ww42) profile gpt-oss-120b (comments verbatim).
+#
+# gpt-oss-120b, default recipe (tuned): aiter unified attention + paged KV + small prefill chunks.
+#
+# The default for throughput work on gfx1250. The STOCK recipe now lives at
+# `gpt-oss-120b/legacy_before_1008` (byte-identical to the pre-1008 base) -- that is the arm
+# to measure against; do not "improve" it, several results depend on it being the shipped
+# configuration.
+#
+# Measured on GPU 3 (gfx1250), one GPU, AMD Quark W4A8 checkpoint, sglang ba94488b42.
+# Evidence: ww41 0003_continue_opt (discovery), 0004_sweep (8k/1k three-recipe sweep),
+# 0005_benchmark_2_sets (full ladders at both shape extremes + kernel traces).
+#
+# ---------------------------------------------------------------------------------------
+# What it is worth, stated at its operating point
+#
+#   ISL 70000 / OSL 300, vs stock, concurrency 4 ............ 5.40x  (16.7 -> 90.2 tok/s)
+#       reproduced in 0005 on a separate server instance at 89.4 tok/s (5.35x).
+#   ISL  8192 / OSL 1024, vs stock, concurrency 4 -> 64 ..... 1.61x -> 2.54x
+#
+# The 5.40x is a CONCURRENCY-4 NUMBER and must not be quoted bare. 0005 measured the full
+# 70k ladder and it is essentially flat -- the machine is prefill-bound there, so extra
+# concurrency buys queueing, not throughput:
+#
+#   70000/300   conc   4     8     16    32    64      (tuned, isolated, 2 warm samples/pt)
+#               tok/s  89.4  93.4  96.5  78.9  98.6    -> 1.10x across 16x concurrency
+#
+# conc=32 is the one soft point (two samples 14.8% apart); treat it as 73-85, not as a dip.
+#
+# Short context is a real strength, not a weakness:
+#
+#   1024/1024   conc   4      8       16      32      64   (4 warm samples/pt, <=3.2% spread)
+#               tok/s  871.7  1204.7  1715.5  2601.2  3775.6  -> 4.33x, still climbing at 64
+#
+# TREAT THE 1024/1024 ROW AS A LOWER BOUND. 0006 re-ran conc=8 on a later server instance,
+# same flags, and measured 1428.6-1433.3 tok/s -- +18.6% on byte-identical work (same 80
+# requests, same 73,743 input / 73,303 generated tokens; only duration differed, 60.5s vs
+# 51.3s). Cause NOT established. Ruled out: GPU thermal/clock state, and the GSM8K gate
+# having run first. Leading hypothesis is JIT/autotune cache state -- 0005's short arm was
+# the first workload after a container restart. Consistent with that, the 70k row above
+# reproduced across two containers to 0.2%, and 70k is memory-movement-bound where kernel
+# autotuning barely matters. Not retested at other concurrencies; see 0006_ref_recipe.
+#
+# That retires 0002_implement's "aiter is worse at short context" claim, which was true of
+# aiter at page 1 only -- not of this recipe.
+#
+# Accuracy: GSM8K 0.9583-0.9651 across every arm ever measured here, tuned included
+# (0.9606 / 0.9628 / 0.9651). No configuration trades accuracy for throughput.
+# CAVEAT: every gate is GSM8K at ~147-token prompts. It cannot see a 70k-context
+# regression. "Accuracy-neutral" means "no regression detected", not "verified long".
+#
+# ---------------------------------------------------------------------------------------
+# Why each flag is here
+#
+#   --attention-backend aiter
+#       unified_attention. Worth 2.34x -- but ONLY with a real page size. At page 1 aiter
+#       is ~5x WORSE than triton (0002_implement), so this flag and --page-size are a pair:
+#       never set this one alone.
+#
+#   --page-size 64
+#       The kernel is paged; page 1 hands it a block table with one entry per token. 64 is
+#       the peak of a 16/32/64/128/256 sweep (inverted-U), re-confirmed at chunk 3072.
+#
+#   --chunked-prefill-size 3072
+#   --max-prefill-tokens 3072
+#       The shipped default 16384 is far past the knee at long context. Set BOTH together
+#       (max-prefill-tokens otherwise caps independently). 2048-4096 is a broad plateau.
+#       Worth ~2.6x at 70k/conc16, MEASURED with a same-shape control that changed only
+#       this flag (96.5 vs 37.2 tok/s, 0005). An earlier 2.31x figure was inferred from a
+#       curve's shape; the control supersedes it.
+#       Mechanism, from kernel traces (0005): a large chunk makes the forward step ~81%
+#       memory movement vs ~58% at 3072, costing 3.2x more GPU time per prefill token.
+#       Attention's share of GPU time rises 3.5% (8k) -> 14.8% (70k), so this matters at
+#       long context and is inert at short -- at ISL 1024 the chunk exceeds the prompt and
+#       chunking never engages. TTFT improves alongside throughput, so it is not a trade.
+#
+# Deliberately NOT set:
+#   --kv-cache-dtype   `auto` already IS bf16 here. Both fp8 modes cost ~8%, exactly as the
+#                      Gluon `q_dtype == kv_cache_dtype` gate predicts (0003). No upside.
+#
+# Known open lead: `Memcpy HtoD` is the single largest line in both 70k traces (35.8% here,
+# 47.6% at chunk 16384) at a per-call time not credible as pure DMA. Unexplained as of ww41.
+
+description = "gpt-oss-120b, default recipe (tuned): aiter unified attention + paged KV + small prefill chunks."
+arch = ["gfx1250"]
+model = "/model/gpt-oss-120b-w-mxfp4-a-fp8"
+tp = 1
+
+[env]
+TRITON_HIP_USE_EXPERT_SCHEDULING = "0"
+HIP_FORCE_DEV_KERNARG = "0"
+ENABLE_CK = "0"
+
+[args]
+trust-remote-code = true
+max-running-requests = 512
+mem-fraction-static = 0.9
+attention-backend = "aiter"
+page-size = 64
+chunked-prefill-size = 3072
+max-prefill-tokens = 3072
+disable-radix-cache = true

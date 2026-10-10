@@ -1,0 +1,199 @@
+# Packages oaka may swap: a plan's [stack.<name>] installs <name> from a git tree at a commit
+# (or several commits, for A-B-A and bisect).  Reference: /<year>/oaka/README.md.
+#
+# Per package: `repo` (the plan's trees are worktrees of it), `module` (must import from
+# inside the tree after the install), `restore` (tracked files the install edits in place),
+# `install` (bash, run in the tree with TREE, SP, STATE, GPU_ARCH set: one recipe, or a
+# table with one per GPU arch where the build differs, `"gfx942 gfx950" = ...`; an arch
+# without a key has no recipe and `oaka check` says so), `pythonpath` (put the tree first on the
+# servers' PYTHONPATH, for packages the image itself puts there), and `clean`: what may be
+# deleted before an install at the cost of a rebuild, when the plan asks for it.
+#
+# Packages install in this file's order, which is their dependency order: Triton, then
+# AITER (built against the installed Triton), then SGLang.  (rocm.Dockerfile installs
+# Triton last only so that no later `pip install` can pull another torch; each package
+# here installs itself with --no-deps.)
+
+# Triton, converted from sglang's docker/rocm.Dockerfile (its last step, "Install AMD's ROCm
+# Triton").  Which Triton an image gets depends on the GPU arch (and ROCm flavour):
+# - gfx1250-rocm1000: upstream triton-lang/triton built from source at a pinned commit, in
+#   /sgl-workspace/triton-custom.  That is the only source build in the Dockerfile, so the
+#   only recipe here.
+# - gfx942/gfx950 on ROCm 10: the ROCm SDK's Triton wheel (BUILD_TRITON=0); ROCm 7.2
+#   flavours: pinned wheels from pypi.amd.com.  No tree, so no recipe: a plan with
+#   [stack.triton] on those GPUs fails `oaka check`.  (ww42: the gfx1250 build also ran on
+#   gfx950, from a clone of triton-lang/triton, at 626 vs the wheel's 666 tok/s for
+#   gpt-oss-20b.  To allow it, make the key "gfx950 gfx1250".)
+# The image's Triton version goes to $STATE/image_version at the first swap: going back
+# means reinstalling that wheel.  torch 2.11 names its Triton `triton-rocm`; it is
+# uninstalled, as the Dockerfile does, so only one Triton is importable.
+# Needs network: python/requirements.txt brings cmake and ninja (the Dockerfile also
+# apt-installs cmake; pip's is enough), and the build downloads LLVM.  build/ is not
+# cleaned: cmake rebuilds what changed, and a cold build takes minutes.
+[triton]
+description = "Triton from source (gfx1250, as its image): python/requirements.txt, editable install (+ triton_kernels)"
+repo = "/sgl-workspace/triton-custom"
+module = "triton"
+
+[triton.install]
+gfx1250 = '''
+if [ ! -s "$STATE/image_version" ]; then
+    python3 -m pip show triton 2>/dev/null | sed -n 's/^Version: //p' >"$STATE/image_version"
+    echo "the image's Triton was $(cat "$STATE/image_version"), recorded in $STATE/image_version"
+fi
+python3 -m pip uninstall -y -q triton-rocm 2>/dev/null || true
+python3 -m pip install --no-cache-dir -q -r python/requirements.txt   # brings cmake, ninja
+if ! command -v cmake >/dev/null; then
+    echo "cmake not found after python/requirements.txt; apt-get install -y cmake" >&2
+    exit 1
+fi
+python3 -m pip install --no-cache-dir --no-deps -e .
+if [ -d python/triton_kernels ]; then
+    python3 -m pip install --no-cache-dir --no-deps -q -e python/triton_kernels
+fi
+'''
+
+[triton.clean]
+# Triton's own cache dir, and ~/.cache, where sglang redirects TRITON_CACHE_DIR.
+paths = ["~/.triton", "~/.cache"]
+tree = ["**/__pycache__"]
+
+# AITER, converted from sglang's docker/rocm.Dockerfile ("AITER" section; image of
+# 2026-10-07, aiter e7d2453f2), one recipe per GPU arch as the Dockerfile branches on
+# GPU_ARCH_LIST:
+# - gfx942, gfx950 (BUILD_AITER_ALL=1): build_ext --inplace, then an editable install in
+#   compat mode (a .pth path entry naming the tree).
+# - gfx1250: ENABLE_CK=0 with ROCm's llvm/bin on PATH, build_ext --inplace, editable
+#   install without build isolation.
+# Both first: submodules, requirements.txt (pinned; torch and Triton deliberately absent),
+# SETUPTOOLS_SCM_PRETEND_VERSION cleared, AITER_USE_SYSTEM_TRITON=1.
+# Deliberate differences from the Dockerfile:
+# - No PREBUILD_KERNELS: the image prebuilds every kernel (hours); here they JIT-build on
+#   first use into the tree's aiter/jit, so each tree keeps its own.  Same kernels; the
+#   first server start is slower (~4.5 min for gpt-oss-20b on gfx950, ww42).
+# - No build isolation on gfx942/gfx950 either: requirements.txt already installs the build
+#   requirements, and isolation would fetch them from PyPI at every swap.
+# - Not the image's patches: for its pinned commit the Dockerfile cherry-picks
+#   ROCm/aiter#6042 and #5967 and seds pa_mqa_logits_fp4_prefill.py (gfx942/gfx950), or
+#   reverts four commits (gfx1250).  On another revision they may not apply; commit what
+#   you need into your tree (the image's own /sgl-workspace/aiter carries them uncommitted).
+# - The image puts /sgl-workspace/aiter on PYTHONPATH in /etc/bash.bashrc, so from any
+#   interactive shell its aiter wins over every install: `pythonpath = "."` puts the tree
+#   first for the servers (and the verify).
+# - Submodules (composable_kernel) borrow objects from the image's checkout instead of
+#   cloning them again (~10 s instead of a 170 MB download).
+[aiter]
+description = "AITER: submodules, requirements.txt, build_ext --inplace + editable install per GPU arch; kernels JIT on first use"
+repo = "/sgl-workspace/aiter"
+module = "aiter"
+pythonpath = "."
+
+[aiter.install]
+"gfx942 gfx950" = '''
+git -c submodule.alternateLocation=superproject -c submodule.alternateErrorStrategy=info \
+    submodule update --init --recursive
+unset SETUPTOOLS_SCM_PRETEND_VERSION   # aiter's version from its own commit, not sglang's
+export AITER_USE_SYSTEM_TRITON=1       # build against the venv's Triton
+python3 -m pip install --no-cache-dir -q -r requirements.txt
+GPU_ARCHS="$GPU_ARCH" python3 setup.py build_ext --inplace
+GPU_ARCHS="$GPU_ARCH" python3 -m pip install --no-cache-dir --no-deps --no-build-isolation -q \
+    --config-settings editable_mode=compat -e .
+'''
+gfx1250 = '''
+git -c submodule.alternateLocation=superproject -c submodule.alternateErrorStrategy=info \
+    submodule update --init --recursive
+unset SETUPTOOLS_SCM_PRETEND_VERSION   # aiter's version from its own commit, not sglang's
+export AITER_USE_SYSTEM_TRITON=1       # build against the venv's Triton
+python3 -m pip install --no-cache-dir -q -r requirements.txt
+export PATH="$PATH:${ROCM_HOME:-/opt/rocm}/llvm/bin"
+ENABLE_CK=0 GPU_ARCHS="$GPU_ARCH" python3 setup.py build_ext --inplace
+ENABLE_CK=0 GPU_ARCHS="$GPU_ARCH" python3 -m pip install --no-cache-dir --no-deps --no-build-isolation -q -e .
+'''
+
+[aiter.clean]
+# JIT kernels: in the tree's aiter/jit (build/ and the module .so files), or under ~/.aiter
+# when the tree is not writable (aiter/jit/core.py, get_user_jit_dir); FlyDSL's (an AITER
+# requirement) autotune cache under ~/.flydsl.
+paths = ["~/.aiter", "~/.flydsl"]
+tree = ["aiter/jit/build", "aiter/jit/*.so", "**/__pycache__"]
+
+# SGLang, converted from the sglang-dev skill's (retired in ww42) scripts/install_tree.sh (ww40-41), which
+# swapped 600 commits during the ww40 bisect.  What it learned, kept here:
+# - A different revision does not need a different image: install its tree over the
+#   image's.  The tree must be a `git worktree` of the image's checkout (shared objects);
+#   `git worktree move` across devices fails, remove and re-add instead.
+# - Two installs, as the Dockerfile does: sgl_kernel (AOT HIP kernels, a regular install)
+#   and the Python package (editable, --no-deps: every dependency is pinned by the image,
+#   and letting pip resolve moves torch/triton under you).
+# - The AOT build takes minutes, so it reruns only when python/sglang/kernels/aot changed
+#   (its git tree hash, plus the diff when the tree has local edits there).
+# - Import races: the AOT egg dir is version-named, so two eggs at once means the first
+#   easy-install.pth line silently wins and pins stale kernels against new Python; every
+#   old egg and its .pth line go before a rebuild.  A plain site-packages/sgl_kernel dir
+#   beats any egg, so it is moved aside after a rebuild.
+# - The image's own sgl_kernel is copied once to sgl_kernel.bak_pristine before the first
+#   swap: that copy is what recovers the container.
+# - sglang.__version__ (setuptools_scm) is not evidence of what runs; the import path and
+#   the tree's git HEAD are, and stack.sh checks both.
+# - cargo is needed (sglang.srt.rust_extensions); a fresh container home has none.
+[sglang]
+description = "SGLang: AOT sgl_kernel (rebuilt when its sources change) + editable package, --no-deps"
+repo = "/sgl-workspace/sglang"
+module = "sglang"
+restore = [
+    "python/pyproject.toml",
+    "python/sglang/kernels/aot/pyproject.toml",
+    "python/sglang/kernels/aot/pyproject_rocm.toml",
+]
+install = '''
+export PATH="$HOME/.cargo/bin:$PATH"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-16}"
+if ! command -v cargo >/dev/null; then
+    echo "cargo not found; install it first:" >&2
+    echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y" >&2
+    exit 1
+fi
+if [ -d "$SP/sgl_kernel" ] && [ ! -e "$SP/sgl_kernel.bak_pristine" ]; then
+    echo "keeping the image's sgl_kernel as $SP/sgl_kernel.bak_pristine"
+    cp -a "$SP/sgl_kernel" "$SP/sgl_kernel.bak_pristine"
+fi
+
+AOT=python/sglang/kernels/aot
+AOT_TREE="$(git rev-parse "HEAD:$AOT")"
+if ! git diff --quiet HEAD -- "$AOT"; then
+    AOT_TREE="$AOT_TREE+$(git diff HEAD -- "$AOT" | sha1sum | cut -c1-12)"
+fi
+if [ "$AOT_TREE" != "$(cat "$STATE/aot_tree" 2>/dev/null)" ]; then
+    echo "AOT sources changed ($(cat "$STATE/aot_tree" 2>/dev/null || echo none) -> $AOT_TREE); rebuilding sgl_kernel for $GPU_ARCH"
+    rm -rf "$SP"/sglang_kernel-*-py3*-linux-x86_64.egg "$SP"/sglang_kernel-*-py3*-linux-x86_64.egg-info
+    [ -f "$SP/easy-install.pth" ] && sed -i '/sglang_kernel-/d' "$SP/easy-install.pth"
+    rm -f "$STATE/aot_tree"
+    (
+        cd "$AOT"
+        rm -f pyproject.toml
+        [ -f pyproject_rocm.toml ] && mv pyproject_rocm.toml pyproject.toml
+        AMDGPU_TARGET="$GPU_ARCH" python3 setup_rocm.py install
+    )
+    if [ -d "$SP/sgl_kernel" ]; then
+        echo "moving $SP/sgl_kernel aside so the new egg wins"
+        rm -rf "$SP/sgl_kernel.displaced"
+        mv "$SP/sgl_kernel" "$SP/sgl_kernel.displaced"
+    fi
+    echo "$AOT_TREE" >"$STATE/aot_tree"
+else
+    echo "AOT sources unchanged ($AOT_TREE); keeping the installed sgl_kernel"
+fi
+
+echo "pip install --no-deps -e python/ (cold cargo build ~5 min, warm ~20 s)"
+cp python/pyproject_other.toml python/pyproject.toml
+python3 -m pip install --no-cache-dir --no-deps -q -e python/
+'''
+
+[sglang.clean]
+# sglang points its own and third-party JIT caches (triton, inductor, tilelang, cute) under
+# SGLANG_CACHE_DIR = ~/.cache/sglang (srt/environ.py, third_party_cache_defaults); TileLang
+# uses ~/.tilelang when that redirect comes too late.  ~/.cache goes as a whole: it also
+# holds pip's cache, Hugging Face downloads (datasets, models fetched by name) and the
+# agent CLI's cache, all rebuilt or fetched again on demand.
+paths = ["~/.cache", "~/.tilelang"]
+tree = ["**/__pycache__"]
