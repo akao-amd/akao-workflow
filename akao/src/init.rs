@@ -878,9 +878,9 @@ mod tests {
 
     #[test]
     fn tar_owner_and_excludes() {
-        let argv = tar_create(Path::new("/2026"), &["skills".into()], DEPLOY_EXCLUDES, true);
-        assert_eq!(argv[..6], ["tar", "-C", "/2026", "-h", "--owner=0", "--group=0"]);
+        let argv = tar_create(Path::new("/src"), &["extra".into()], DEPLOY_EXCLUDES, true);
+        assert_eq!(argv[..6], ["tar", "-C", "/src", "-h", "--owner=0", "--group=0"]);
         assert!(argv.contains(&"--exclude=.claude".to_string()));
-        assert!(argv.ends_with(&["-czf".into(), "-".into(), "skills".into()]));
+        assert!(argv.ends_with(&["-czf".into(), "-".into(), "extra".into()]));
     }
 }

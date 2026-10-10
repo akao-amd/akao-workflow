@@ -21,7 +21,7 @@ The following subsections define subcommands that akao supports.  Ideally it fol
     - **default docker image tag**
     - **current working year**. e.g. "2026".
     - **current working week in the year**. e.g. "ww39".
-  - Skills for agents: `skills/` in this repo (once `/2026/skills`), read from the repo
+  - Skills for agents: `skills/` in this repo, read from the repo
     checkout every agent has (`$AKAO_REPO_ROOT`).
   - useful utilities: `utils/` in this repo.
   - **home template**: The template directory, as in `/2026/template/container_home`.

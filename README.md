@@ -199,10 +199,9 @@ controller) is needed.
 place (`export AKAO_REPO_ROOT=<checkout>` unless it is `/root/akao-workflow`).
 Nothing under `/<year>` is needed: oaka's library is the repo's `oaka/`, and the
 post-commit hook builds `oaka/bin/oaka` there.  Boxes initialized before 2026-10-10 still
-hold old control-plane copies under `/<year>` (skills, utils, oaka, the markdown files, which
-agents there still auto-load); workers re-initialized since read their clone instead (oaka
-falls back to `/<year>/oaka` only without one), so remove them, after bringing back any
-profile saved there (`akao cp`).
+hold old control-plane copies under `/<year>`, which agents there may still load; workers
+re-initialized since read their clone instead (oaka falls back to `/<year>/oaka` only
+without one), so remove them, after bringing back any profile saved there (`akao cp`).
 
 **3. State.**  `export AKAO_CONFIG_ROOT=<dir>` in the shell profile, then in it:
 `config.toml` (`akao config set default_image ...`), `hosts.tsv` (`akao host add ...`), the
