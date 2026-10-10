@@ -1,13 +1,15 @@
 # oaka — worker reference
 
-Installed by the akao-workflow post-commit hook as `/<year>/oaka/README.md`, next to
-`bin/oaka`; `akao init` ships the library to every box and links `oaka` onto PATH.
-This file says what oaka does; the rules an agent follows when using it (what never to
-hand-write, when to stop and ask) are in `/2026/skills/worker/SKILL.md`.
+This directory of the akao-workflow repo is both oaka's source and its **library**: every
+worker has its own clone of the repo (`$AKAO_REPO_ROOT`, default `/root/akao-workflow`), and
+`akao init` puts the static `bin/oaka` (built by the post-commit hook, git-ignored) beside
+it and links it onto PATH.  This file says what oaka does; the rules an agent follows when using it (what never to
+hand-write, when to stop and ask) are in the worker skill, `$AKAO_REPO_ROOT/skills/worker/SKILL.md`
+(the worker's clone of akao-workflow, which `akao init` ships).
 
 ```
-/<year>/oaka/
-  bin/oaka                          static binary
+$AKAO_REPO_ROOT/oaka/
+  bin/oaka                          static binary (git-ignored; the hook builds it, init ships it)
   profiles/<model>/<recipe>.toml    server launch recipes, self-contained (see Profiles)
   stacks.toml                       packages a plan may install from a git tree (see Stack)
 ```
@@ -201,13 +203,15 @@ image's `GPU_ARCH_LIST` (what it was built for) names another arch.
 ## Profiles (`profiles/<model>/<recipe>.toml`)
 
 This library is the only home of server recipes (the former sglang-dev skill's profiles were
-converted into it); change recipes here, through `oaka profile save` or by hand.
+converted into it); change recipes here, through `oaka profile save` or by hand.  It is
+tracked in git: a saved or edited profile is a change in your clone, kept by committing it
+(how a worker's commit reaches the console: `/<year>/CLAUDE.md`, "Fixing the tools").
 
 Named `<model>/<recipe>`; `<model>` alone means `<model>/base`.  A recipe imported from an
 InferenceX entry by a mirror worker is `<model>/infx-<entry>[-<variant>]`.  `<model>` is the model
 family as you call it (`gpt-oss-120b`), and the `model` field holds the actual path.
 
-**A profile is self-contained.**  The library travels to every box without the console's
+**A profile is self-contained.**  The library travels to every worker without the console's
 `ww*` directories or anything else, so a profile must not point outside the library:
 `extends` (another profile) is its only reference.  Write provenance and evidence into
 the file as `#` comments — where the flags came from, what they measured, why each is
@@ -272,10 +276,11 @@ that are.
 
 ## Environment
 
-`AKAO_ARTIFACT_ROOT` (this worker's artifact root, set by `akao init`; `doctor` shows it,
+`AKAO_REPO_ROOT` (the worker's clone of akao-workflow, default `/root/akao-workflow`;
+`doctor` checks it), `AKAO_ARTIFACT_ROOT` (this worker's artifact root, set by `akao init`; `doctor` shows it,
 `check` warns when the Work Directory is not a task dir under it; its year is the `<year>`
 below, the only one the container mounts, else today's ISO year), `OAKA_LIB` (library root,
-default `/<year>/oaka`), `OAKA_INFX` (InferenceX tree, default
+default `$AKAO_REPO_ROOT/oaka`, or the old `/<year>/oaka` in a container without the clone), `OAKA_INFX` (InferenceX tree, default
 `/<year>/nocopy/InferenceX/inferencex-e2e`), `OAKA_GPUS` (comma-separated archs; overrides
 GPU detection where the KFD topology is not visible), `OAKA_ROCM` (overrides the ROCm
 version; `OAKA_GPUS` and `OAKA_ROCM` are honoured by `server_<name>.sh`'s check too),

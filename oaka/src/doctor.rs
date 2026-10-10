@@ -153,6 +153,21 @@ pub fn run(lib: &Library, json: bool) -> Result<()> {
         },
     }
 
+    // The worker's clone of akao-workflow: its skill, and where it fixes the tools.
+    let repo = std::env::var("AKAO_REPO_ROOT")
+        .ok()
+        .filter(|r| !r.is_empty())
+        .unwrap_or_else(|| "/root/akao-workflow".into());
+    if Path::new(&repo).join("skills/worker/SKILL.md").is_file() {
+        let head = output(&["git", "-C", &repo, "log", "-1", "--format=%h %cs"], &[]).unwrap_or_else(|| "?".into());
+        r.ok("repo", format!("{repo} at {head}"));
+    } else {
+        r.warn(
+            "repo",
+            format!("no akao-workflow clone at {repo} (the worker skill lives there); akao init ships one"),
+        );
+    }
+
     match which("sgl-eval") {
         Some(p) => r.ok("sgl-eval", p.display().to_string()),
         None => r.warn(
@@ -164,7 +179,7 @@ pub fn run(lib: &Library, json: bool) -> Result<()> {
         Some(p) => r.ok("oaka", p.display().to_string()),
         None => r.warn(
             "oaka",
-            "not on PATH; akao init links /<year>/oaka/bin/oaka to /usr/local/bin",
+            "not on PATH; akao init links $AKAO_REPO_ROOT/oaka/bin/oaka to /usr/local/bin",
         ),
     }
 
@@ -247,7 +262,7 @@ fn check_library(r: &mut Report, lib: &Library) {
         r.fail(
             "library",
             format!(
-                "{} missing; akao init deploys /<year>/oaka",
+                "{} missing; the library is the oaka/ dir of the akao-workflow clone, which akao init ships",
                 lib.profiles_dir().display()
             ),
         );

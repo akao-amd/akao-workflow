@@ -103,6 +103,24 @@ impl Sandbox {
         put("deploy/x", "", false);
         put("state/hosts.tsv", "fakebox\t-\t/m\t-\t/h\n", false);
         put("state/container_home/.bashrc", "", false);
+        // The repo init ships (AKAO_REPO_ROOT): year/CLAUDE.md with AGENTS.md a link to it.
+        put("repo/year/CLAUDE.md", "# Working under /<year>\n", false);
+        put("repo/oaka/bin/oaka", "#!/bin/sh\n", true);
+        std::os::unix::fs::symlink("CLAUDE.md", root.join("repo/year/AGENTS.md")).unwrap();
+        let out = Command::new("git")
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "init.defaultBranch=main",
+            ])
+            .args(["init", "-q"])
+            .current_dir(root.join("repo"))
+            .output()
+            .unwrap();
+        assert!(out.status.success());
         put("bin/ssh", FAKE_SSH, true);
         put("bin/docker", FAKE_DOCKER, true);
         Sandbox { root, rev }
@@ -116,6 +134,7 @@ impl Sandbox {
             .env("AKAO_SSH", self.root.join("bin/ssh"))
             .env("PATH", format!("{}:/usr/bin:/bin", self.root.join("bin").display()))
             .env_remove("AKAO_ARTIFACT_ROOT")
+            .env("AKAO_REPO_ROOT", self.root.join("repo"))
             .envs(env.iter().copied())
             .output()
             .unwrap();
@@ -156,7 +175,17 @@ fn mirror_brings_up_the_entrys_image_with_a_brief() {
     for want in [
         "fakebox: 2 x gfx950 as mi355x needs".to_string(),
         "image rocm/atom:1".to_string(),
-        format!("-e 'AKAO_ARTIFACT_ROOT={root}' -w {root}"),
+        format!("-e 'AKAO_ARTIFACT_ROOT={root}' -e 'AKAO_REPO_ROOT=/root/akao-workflow' -w {root}"),
+        // The orientation file from the repo, dereferenced, into the box's /<year>.
+        "year -h '--owner=0' '--group=0' -czf - CLAUDE.md AGENTS.md | [fakebox]".to_string(),
+        "[7/12] install packages".to_string(),
+        "[9/12] install tools and agents".to_string(),
+        "bash /root/akao-workflow/utils/install_gh.sh".to_string(),
+        "bundle create - --branches --tags | docker --context fakebox exec -i akao_m1-fp4-mi355x-atom".to_string(),
+        "cat >/root/.cache/akao-workflow.bundle".to_string(),
+        // The hook's static oaka, beside the bundle (git-ignored), into the clone's oaka/bin.
+        "oaka/bin/oaka | docker --context fakebox exec -i akao_m1-fp4-mi355x-atom".to_string(),
+        "ln -sf /root/akao-workflow/oaka/bin/oaka /usr/local/bin/oaka".to_string(),
         "rocm/atom:1 sleep infinity".to_string(),
         "[mirror] brief".to_string(),
         format!("[fakebox] if [ \"$(id -u)\" -eq 0 ]; then S=; else S=\"sudo -n\"; fi; $S mkdir -p /h{root}"),

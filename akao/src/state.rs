@@ -27,8 +27,9 @@ pub const KEYS: &[(&str, Option<&str>, &str)] = &[
     ),
     (
         "deploy_paths",
-        Some("CLAUDE.md AGENTS.md skills utils oaka"),
-        "space-separated paths under deploy_src shipped to <host_home>/<year>",
+        Some(""),
+        "extra space-separated paths under deploy_src shipped to <host_home>/<year>; none by \
+         default: skills, utils, oaka and /<year>/CLAUDE.md come from the repo, $AKAO_REPO_ROOT",
     ),
     (
         "infx_repo",
@@ -143,6 +144,44 @@ pub fn work_year() -> String {
 /// ISO week of today, e.g. "ww41".
 pub fn work_week() -> String {
     format!("ww{:02}", chrono::Local::now().iso_week().week())
+}
+
+/// Names the checkout of this repo an agent works from: skills, the /<year> orientation
+/// file and the tools' sources.  On the console it is what `akao init` ships; in a worker,
+/// the worker's own clone at [`WORKER_REPO`].
+pub const REPO_ROOT_ENV: &str = "AKAO_REPO_ROOT";
+
+/// Where `akao init` puts a worker's clone of the repo: its home, a bind mount.
+pub const WORKER_REPO: &str = "/root/akao-workflow";
+
+/// The console's checkout of this repo: `$AKAO_REPO_ROOT`, else /root/akao-workflow.
+pub fn repo_root() -> Result<(String, &'static str)> {
+    match std::env::var(REPO_ROOT_ENV) {
+        Ok(r) if !r.is_empty() => {
+            if !r.starts_with('/') {
+                bail!("{REPO_ROOT_ENV}={r} must be an absolute path");
+            }
+            Ok((r.trim_end_matches('/').to_string(), REPO_ROOT_ENV))
+        }
+        _ => Ok((WORKER_REPO.to_string(), "default")),
+    }
+}
+
+/// The repo checkout that init ships, checked: a git work tree with year/CLAUDE.md and
+/// the static oaka the post-commit hook builds into oaka/bin.
+pub fn shippable_repo() -> Result<String> {
+    let (root, from) = repo_root()?;
+    let year_md = Path::new(&root).join("year/CLAUDE.md");
+    if !Path::new(&root).join(".git").exists() || !year_md.is_file() {
+        bail!(
+            "{root} ({from}) is not a checkout of akao-workflow with year/CLAUDE.md; \
+             export {REPO_ROOT_ENV}=<your checkout>"
+        );
+    }
+    if !Path::new(&root).join("oaka/bin/oaka").is_file() {
+        bail!("no {root}/oaka/bin/oaka: commit in akao-workflow (the post-commit hook builds it)");
+    }
+    Ok(root)
 }
 
 /// Names an agent's artifact root: the directory holding its numbered dirs.  `akao init`

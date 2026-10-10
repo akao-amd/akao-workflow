@@ -32,7 +32,8 @@ checks it).
 | Built | Lands in | Reaches |
 |---|---|---|
 | `akao`, release | `target/release/akao` | you, through the symlink above |
-| `oaka`, static musl | `/<year>/oaka/bin/oaka`, plus `oaka/README.md` as `/<year>/oaka/README.md` | workers, at their next `akao init` (step 3 deploys `/<year>/oaka`, step 7 links `oaka` onto PATH) |
+| `oaka`, static musl | `oaka/bin/oaka` in this checkout (git-ignored) | workers, at their next `akao init` (step 8 puts it into the worker's clone, step 9 links it onto PATH) |
+| skills, `utils/`, `year/CLAUDE.md`, oaka's library (`oaka/profiles`, `oaka/stacks.toml`) | nowhere: read in place from this checkout (`$AKAO_REPO_ROOT`); `/<year>/CLAUDE.md`, `AGENTS.md`, `utils` link to it | workers, at their next `akao init` (step 3 copies `year/` files to the box's `/<year>`, step 8 updates the worker's own clone) |
 
 So a worker gets a new `oaka` only when `akao init` runs again for it; re-running init on an
 existing container is safe (every step reuses what exists) as long as `--skip-setup` is
@@ -46,11 +47,17 @@ Everything lives in `$AKAO_CONFIG_ROOT` (e.g. `/2026/nocopy/akao-workflow-state`
 
 | File | Content |
 |---|---|
-| `config.toml` | `default_image`, `deploy_src` (default `/<year>`), `deploy_paths` (default `CLAUDE.md AGENTS.md skills utils oaka`), `infx_repo`, `infx_local` (this machine's InferenceX clone, for `akao mirror`; default `/<year>/nocopy/InferenceX`) |
+| `config.toml` | `default_image`, `deploy_src` (default `/<year>`), `deploy_paths` (extra paths under `deploy_src` to ship to every box; none by default: the skills, `utils/`, oaka and `/<year>/CLAUDE.md` come from the repo), `infx_repo`, `infx_local` (this machine's InferenceX clone, for `akao mirror`; default `/<year>/nocopy/InferenceX`) |
 | `hosts.tsv` | one row per box: `nick image model_path docker_sock host_home rest`; `-` = default |
 | `container_home/` | home template, copied once per container to `<host_home>/container_home/akao_<name>` |
 
 The work year and week are not stored: they are today's ISO year and week (`2026`, `ww41`).
+
+**The repo.**  `$AKAO_REPO_ROOT` (default `/root/akao-workflow`) is the checkout of this
+repo akao ships: the role skills (`skills/`) are read from it in place, and its
+`year/CLAUDE.md` is the orientation every agent under `/<year>` loads.  On the console,
+`/<year>/CLAUDE.md` and `/<year>/AGENTS.md` are symlinks to it; every worker gets its own
+clone (init step 8).  Only committed work travels.
 
 **Artifact roots.**  Each agent keeps its numbered dirs under one directory, its *artifact
 root*: a worker's is `/<year>/<week>/<name>`, the controllers' `/<year>/<week>/controller`.
@@ -79,17 +86,24 @@ Brings up `akao_<name>` on `<nick>`:
    exists, it keeps its image and artifact root, and must mount `/<year>` and `/root` from
    where hosts.tsv says (a request it cannot satisfy fails here, before the host is touched)
 2. create the artifact root under `<host_home>` and `<host_home>/container_home` on the host
-3. deploy the control plane: `tar` of `deploy_paths` → `<host_home>/<year>`, owned root:root
-   (merge, never delete; `.git`, `.claude`, `__pycache__`, `*.pyc` excluded)
+3. deploy the control plane: `tar` of `deploy_paths` and of the repo's `year/CLAUDE.md`,
+   `AGENTS.md` → `<host_home>/<year>`, owned root:root, symlinks followed (merge, never
+   delete; `.git`, `.claude`, `__pycache__`, `*.pyc` excluded)
 4. copy the home template, unless that container's home already exists
 5. create docker context `<nick>` (`host=ssh://<nick>`) if missing, then `docker context use` it
 6. `docker run` the container, unless it already runs
-7. in the container: `apt install vim less tmux docker.io git`, `utils/install_gh.sh`,
-   `utils/agent.sh --yes`, `pip install sgl-eval` — each skipped when already present; link `oaka`
-   into `/usr/local/bin`
-8. clone InferenceX into `/<year>/nocopy/InferenceX`, unless a checkout is there (never pulled)
-9. start tmux with window `controller` running `claude`, unless tmux already runs
-10. run `oaka doctor` in the worker and show its report: GPU arch and ROCm version (what
+7. in the container: `apt install vim less tmux docker.io git`, unless all are there
+8. the worker's own clone of this repo at `/root/akao-workflow` (`$AKAO_REPO_ROOT` in the
+   container): the console's branches go over as a git bundle (no network, unpushed
+   commits included); the first time it is cloned, later fetched as `console/main` and
+   fast-forwarded only while the clone is on `main`, clean and behind — a worker's own
+   commits or edits are never moved
+9. from that clone's `utils/`: `install_gh.sh`, `agent.sh --yes`; then `pip install sgl-eval`
+   (a failure only warns) — each skipped when already present; link `oaka` into
+   `/usr/local/bin`
+10. clone InferenceX into `/<year>/nocopy/InferenceX`, unless a checkout is there (never pulled)
+11. start tmux with window `controller` running `claude`, unless tmux already runs
+12. run `oaka doctor` in the worker and show its report: GPU arch and ROCm version (what
     plans are checked against) and every prerequisite; reported, never fatal
 
 Mounts: model dir → `/model`, docker socket → `/var/run/docker.sock`,
@@ -104,12 +118,12 @@ survive, anything installed into the image's own filesystem does not).
 Every step reuses what exists, so re-running init resumes a half-done worker.
 Host-side writes use `sudo -n` when the ssh login is not root.
 
-Flags: `--dry-run` (probes run, changes are only printed), `--skip-setup` (skip steps 3 and 7),
+Flags: `--dry-run` (probes run, changes are only printed), `--skip-setup` (skip steps 3, 7, 8 and 9),
 `--week wwNN` or `--artifact-root <dir>`.
 
 Attach afterwards with `docker --context <nick> exec -it akao_<name> tmux attach`.  An agent
 driving workers (the controller) opens the worker's `claude` in a window of its own tmux
-instead, and keeps a record of what it ran: `/2026/skills/controller/SKILL.md`.
+instead, and keeps a record of what it ran: `$AKAO_REPO_ROOT/skills/controller/SKILL.md`.
 
 ## `akao mirror [<nick> [<name>]] --conf <terms>`
 
@@ -168,7 +182,7 @@ own ssh transport for the context still uses plain `ssh`.
 A controller is an agent (claude) that drives workers through akao: it runs `akao`, opens
 worker agents in tmux windows and keeps a record of what it ran.  It needs a Linux machine
 or container that reaches every box by ssh — this console is itself a container.  Its manual
-is `/<year>/skills/controller/SKILL.md`; this section sets up the machine it runs on.
+is `skills/controller/SKILL.md` in this repo; this section sets up the machine it runs on.
 
 > Draft (2026-10-10).  Parts marked TODO(user) depend on the environment and are yours to
 > fill in.
@@ -176,15 +190,27 @@ is `/<year>/skills/controller/SKILL.md`; this section sets up the machine it run
 **1. Tools.**  `docker` CLI (it talks to each box's daemon over ssh; no local daemon needed),
 openssh client, git, tmux, Rust (to build akao; `rustup target add
 x86_64-unknown-linux-musl` for the static oaka), and the claude CLI
-(`/<year>/utils/agent.sh --yes`, which also writes the gateway key into
-`~/.bash_profile`).  TODO(user): the base image the console containers start from, and
-whether `gh` (for the worker skill's `safe_push.sh`, which runs on the controller) is needed.
+(`utils/agent.sh --yes` in this repo, which also adds an `AMD_LLM_API_KEY` placeholder to
+`~/.bash_profile` for you to fill in).  `utils/controller/Dockerfile` is an Ubuntu 24.04
+image with these tools except Rust and claude.  TODO(user): how the console container is
+started from it, and whether `gh` (for the worker skill's `safe_push.sh`, which runs on the
+controller) is needed.
 
-**2. The control plane** under `/<year>` (it is what `akao init` ships, `deploy_src`):
-`CLAUDE.md`/`AGENTS.md`, `skills/` (controller, worker), `utils/`, and `oaka/` (the library:
-`profiles/`, `stacks.toml`; this repo's post-commit hook adds `bin/oaka` and the README).
-TODO(user): where a new console gets `/<year>` from (a copy of an existing console's, or a
-host mount).
+**2. The control plane.**  From this repo: the skills, `utils/` and the orientation file,
+read in place (`export AKAO_REPO_ROOT=<checkout>` unless it is `/root/akao-workflow`), with
+links under `/<year>` so old paths and auto-loading keep working:
+
+```bash
+ln -sfn "$AKAO_REPO_ROOT/year/CLAUDE.md" /<year>/CLAUDE.md
+ln -sfn "$AKAO_REPO_ROOT/year/CLAUDE.md" /<year>/AGENTS.md
+ln -sfn "$AKAO_REPO_ROOT/utils" /<year>/utils
+```
+
+Nothing else under `/<year>` is needed: oaka's library is the repo's `oaka/`, and the
+post-commit hook builds `oaka/bin/oaka` there.  Boxes initialized before 2026-10-10 still
+hold old `/<year>/skills/`, `/<year>/utils/` and `/<year>/oaka/` copies; workers re-initialized
+since read their clone instead (oaka falls back to `/<year>/oaka` only without one), so
+remove them at leisure, after bringing back any profile saved there (`akao cp`).
 
 **3. State.**  `export AKAO_CONFIG_ROOT=<dir>` in the shell profile, then in it:
 `config.toml` (`akao config set default_image ...`), `hosts.tsv` (`akao host add ...`), the
@@ -233,7 +259,7 @@ oaka draft --profile gpt-oss-120b --gpus 7 --client gsm8k --client fixed-seq
 vim plan.toml && oaka check && oaka run
 ```
 
-Commands, plan and profile fields: [oaka/README.md](oaka/README.md), which every commit
-installs as `/<year>/oaka/README.md` together with a static `/<year>/oaka/bin/oaka`
+Commands, plan and profile fields: [oaka/README.md](oaka/README.md); the profiles and
+`stacks.toml` sit beside it in `oaka/`, and every commit builds a static `oaka/bin/oaka`
 (`.githooks/post-commit`; `git config core.hooksPath .githooks` once per clone).
 Why it is built this way: [SPEC.md](SPEC.md).

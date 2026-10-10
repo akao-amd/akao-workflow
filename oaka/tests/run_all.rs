@@ -197,6 +197,7 @@ impl Sandbox {
             .env("OAKA_STACK_STATE", self.root.join("stack-state"))
             .env_remove("GPU_ARCH_LIST")
             .env_remove("AKAO_ARTIFACT_ROOT")
+            .env("AKAO_REPO_ROOT", self.root.join("repo-clone"))
             .env("OAKA_ROCM", "10.0.0")
             .stdin(Stdio::null());
         c
@@ -528,6 +529,7 @@ fn doctor_reports_missing_prerequisites() {
         "ok    gpus        2 x gfx950",
         "ok    inferencex",
         "ok    sgl-eval",
+        "warn  repo        no akao-workflow clone at",
     ] {
         assert!(text.contains(want), "{want:?} not in {text}");
     }
@@ -1058,4 +1060,26 @@ fn a_model_path_is_never_shell_code() {
         );
     }
     sb.assert_no_leftovers();
+}
+
+#[test]
+fn the_library_is_the_repo_checkouts_oaka_dir() {
+    let sb = Sandbox::new("library");
+    // Without OAKA_LIB: $AKAO_REPO_ROOT/oaka, where a saved profile is a file git tracks.
+    let repo = sb.root.join("akao-workflow");
+    fs::create_dir_all(repo.join("oaka")).unwrap();
+    fs::rename(sb.root.join("lib/profiles"), repo.join("oaka/profiles")).unwrap();
+    let out = sb
+        .oaka(&["profile", "ls"])
+        .env_remove("OAKA_LIB")
+        .env("AKAO_REPO_ROOT", &repo)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}");
+    assert!(
+        text.starts_with(&format!("# {}", repo.join("oaka/profiles").display())),
+        "{text}"
+    );
+    assert!(text.contains("m/vllm"), "{text}");
 }

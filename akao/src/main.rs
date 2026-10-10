@@ -258,6 +258,8 @@ fn config_cmd(state: &mut State, cmd: ConfigCmd) -> Result<()> {
             );
             let (root, from) = state::artifact_root()?;
             println!("# artifact root {root} ({from})");
+            let (repo, from) = state::repo_root()?;
+            println!("# repo {repo} ({from})");
             for (key, _, desc) in state::KEYS {
                 let v = state.get(key)?;
                 let origin = if state.is_explicit(key) { "" } else { "  (default)" };

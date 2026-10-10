@@ -27,6 +27,9 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
   fail): install + verify + clean + dirty-tree refusal, a failing recipe and a running
   server stopping `stack.sh`, A-B-A's `compare.csv`, and a bisect that skips a broken
   commit and finds the planted regression.
+- `init.rs`'s `the_repo_reaches_a_worker_without_touching_its_work` runs the clone/fetch
+  script against real git repos: first clone, fast-forward, a worker's own commit kept (and
+  rebased), uncommitted changes and another branch left alone.
 - `akao/tests/mirror.rs` runs `akao mirror --dry-run` against a scratch InferenceX repo with
   stand-in ssh (`AKAO_SSH`; `FAKE_GFX` is the box's KFD) and docker (`FAKE_EXISTING` is a
   container that already exists): the commands a bring-up would run, and the refusals
@@ -80,11 +83,14 @@ binary but no repo, so these are subcommands, not cargo tests).  Each prints
 - `akao doctor` (console): `AKAO_CONFIG_ROOT` exported, `default_image`, `hosts.tsv`, the
   `ssh` first on PATH honours `$AKAO_CONFIG_ROOT/.ssh/config` (compared with
   `ssh -F <config> -G` for every host, so docker contexts get the same config), home
-  template, deploy sources incl. a runnable `oaka/bin/oaka`, docker CLI; for a controller
-  (warn only): its artifact root, `tmux`, `claude`, the InferenceX clone mirror reads.
+  template, deploy sources incl. a runnable `oaka/bin/oaka`, docker CLI, the repo checkout
+  init ships (`$AKAO_REPO_ROOT`: FAIL if missing, warn if dirty) and `/<year>/CLAUDE.md`,
+  `AGENTS.md` linking to its `year/CLAUDE.md`; for a controller (warn only): its artifact
+  root, `tmux`, `claude`, the InferenceX clone mirror reads.
 - `oaka doctor` (worker; `akao init` runs it as its last step): ROCm version, library
   profiles resolve, GPUs visible, InferenceX checked out and importable, the serving engines
-  python finds (SGLang, vllm, ATOM; FAIL only when none), the artifact root, `sgl-eval` and
+  python finds (SGLang, vllm, ATOM; FAIL only when none), the artifact root, the worker's
+  clone of the repo (`$AKAO_REPO_ROOT`, warn only), `sgl-eval` and
   `oaka` on PATH (warn only).
 
 Run them after `akao init`, and first when a run fails for environmental reasons.

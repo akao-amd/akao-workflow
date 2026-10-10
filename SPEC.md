@@ -21,8 +21,9 @@ The following subsections define subcommands that akao supports.  Ideally it fol
     - **default docker image tag**
     - **current working year**. e.g. "2026".
     - **current working week in the year**. e.g. "ww39".
-  - Skills for agents, in `/2026/skills` for this year.
-  - useful utilities, in `/2026/utils`.
+  - Skills for agents: `skills/` in this repo (once `/2026/skills`), read from the repo
+    checkout every agent has (`$AKAO_REPO_ROOT`).
+  - useful utilities: `utils/` in this repo (once `/2026/utils`).
   - **home template**: The template directory, as in `/2026/template/container_home`.
   - **A TSV file** to store the information about the remote host, which is essential although we want to bypass it. The basics of an entry are:
     - **host nick name**: A shorten nmoenics of a host, often a ending substring. A full host name of the remote box can be looked up with the nick name from `~/.ssh/config`.
@@ -53,7 +54,7 @@ The following subsections define subcommands that akao supports.  Ideally it fol
 ## Worker-side plan generator and script compiler: `oaka`
 
 `oaka` runs inside a worker container and is driven by the worker agent or by hand.  It
-distills the deterministic part of the former `sglang-dev` skill (now `/2026/skills/worker`,
+distills the deterministic part of the former `sglang-dev` skill (now `skills/worker` in this repo,
 which keeps only what oaka does not do) into a **hybrid tool**: the
 agent (or a human) writes a *plan*; `oaka` compiles the plan into stand-alone scripts that
 anyone can read and rerun without `oaka`.  The point is to stop re-deriving the same
@@ -199,15 +200,34 @@ Where the how lives: worker reference (commands, plan and profile fields)
   judgment, and a number oaka's client cannot measure the same way must be labelled, not
   silently compared with the dashboard.
 
+### Decisions on the repo as the control plane (ww42)
+
+- **The skills and the `/<year>` orientation file live in this repo and are read in place
+  from a checkout (`$AKAO_REPO_ROOT`), not copied into `/<year>/skills` by a hook.**  Why:
+  they change with the tools, need the same review and history, and a copy is one more
+  thing to drift.  `/<year>/CLAUDE.md` must still exist where agents start, so the console
+  links it to `year/CLAUDE.md` and init ships a copy to each box; `AGENTS.md` is a symlink
+  to it, identical by construction.
+- **Every worker gets its own clone of the repo, shipped as a git bundle.**  Why: workers
+  are developers too (a bug found in a task is fixed where it is found), one clone per
+  worker means no two edit the same checkout, the console's commits are often unpushed and
+  boxes may have no network, and a fetch into `console/*` never moves a worker's own work.
+- **A worker's fix reaches the console as a patch in its task dir, applied by the
+  controller with `git am`.**  Why: review before delivery, the patch stays with the task's
+  artifacts, and no push credential has to leave the console.
+- **oaka's library is the repo's `oaka/` directory** (`profiles/`, `stacks.toml` tracked;
+  `bin/` git-ignored, built by the hook).  Why: a saved profile is then a change in the
+  saving worker's clone and travels like any fix (commit, patch, `git am`), with review and
+  history; the old box libraries had no way back and were silently overwritten by init.
+  oaka falls back to `/<year>/oaka` only in a container without its clone.
+- **Tokens only from the environment, at the moment of use.**  Why: a GitHub token typed
+  into a command once ended up in plain text in `.claude/settings.local.json`; `.claude/` is
+  now git-ignored.
+
 ## Open designs
 
-- **Where `oaka profile save` goes, and how it gets back.**  Today a saved profile stays in
-  the library of the box it was saved on: `akao init` ships the console's library to boxes
-  (merge, never delete), nothing ships back, and the console's library is not in git (so a
-  same-named profile from the console silently replaces it on the next init).  Proposal:
-  the library's source moves into this repo (`oaka/library/`), installed into `/<year>/oaka/`
-  by the post-commit hook with the binary; `akao lib pull <nick> [<profile>...]` copies a
-  box's new or changed profiles, with their whole `extends` closure, into the working tree
-  for review and commit; init warns before overwriting a box profile that differs from the
-  deployed baseline.  Until then: `akao cp <nick>:oaka/profiles/<model>/<recipe>.toml
-  /<year>/oaka/profiles/<model>/` on the console.
+- **Profiles saved on boxes before the library moved into the repo.**  They sit in those
+  boxes' old `/<year>/oaka/profiles`, which nothing ships back.  Bring each back with
+  `akao cp` and commit it before removing the old directory; an `akao lib pull <nick>` that
+  lists the box's profiles missing from the repo (with their `extends` closure) is worth
+  writing only if there turn out to be many.

@@ -17,7 +17,7 @@ use toml::Value;
 /// A plan (plan.toml in the Work Directory) names servers by profile plus overrides, and
 /// the clients to run against them.  `oaka compile` turns it into stand-alone scripts in
 /// scripts/; `oaka run` compiles and runs them.  Profiles live in the library,
-/// $OAKA_LIB or /<year>/oaka.
+/// $OAKA_LIB, else the oaka/ dir of the akao-workflow checkout ($AKAO_REPO_ROOT).
 #[derive(Parser)]
 #[command(version = sys::VERSION)]
 struct Cli {

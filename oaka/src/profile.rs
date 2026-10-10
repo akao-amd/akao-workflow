@@ -342,18 +342,30 @@ pub fn valid_name(name: &str) -> bool {
     matches!(name.split('/').collect::<Vec<_>>()[..], [m, r] if part(m) && part(r))
 }
 
-/// The oaka library: `$OAKA_LIB`, else `/<year>/oaka`.
+/// The oaka library: `$OAKA_LIB`; else the `oaka/` dir of the akao-workflow checkout
+/// (`$AKAO_REPO_ROOT`, default /root/akao-workflow), where profiles and stacks.toml are
+/// tracked and a saved profile becomes a commit; else (a container without its clone yet)
+/// the old `/<year>/oaka`.
 pub struct Library {
     pub root: PathBuf,
 }
 
 impl Library {
     pub fn locate() -> Library {
-        let root = match std::env::var_os("OAKA_LIB") {
-            Some(r) if !r.is_empty() => PathBuf::from(r),
-            _ => PathBuf::from(format!("/{}/oaka", crate::sys::work_year())),
-        };
-        Library { root }
+        if let Some(r) = std::env::var_os("OAKA_LIB").filter(|r| !r.is_empty()) {
+            return Library { root: PathBuf::from(r) };
+        }
+        let repo = std::env::var_os("AKAO_REPO_ROOT")
+            .filter(|r| !r.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/root/akao-workflow"));
+        let root = repo.join("oaka");
+        if root.join("profiles").is_dir() {
+            return Library { root };
+        }
+        Library {
+            root: PathBuf::from(format!("/{}/oaka", crate::sys::work_year())),
+        }
     }
 
     pub fn profiles_dir(&self) -> PathBuf {

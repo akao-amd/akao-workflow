@@ -2,7 +2,23 @@
 
 Rust workspace with two CLI tools: `akao` (local driver) and `oaka` (worker-side plan
 generator and script compiler).  Target: `x86_64-unknown-linux-gnu`; `oaka` is also built
-static for `x86_64-unknown-linux-musl` so it runs in any worker image.
+static for `x86_64-unknown-linux-musl` so it runs in any worker image.  The repo also holds
+what agents read: the role skills (`skills/`) and the orientation every agent under
+`/<year>` loads (`year/CLAUDE.md`).  `AGENTS.md` here and in `year/` are symlinks to the
+`CLAUDE.md` beside them, so codex and claude read the same text.
+
+This file is the developer's guide.  Controllers and workers are developers too: when they
+hit a bug in these tools they fix it here, in their checkout `$AKAO_REPO_ROOT` (a worker's
+own clone; how a fix travels: `year/CLAUDE.md`, "Fixing the tools").
+
+## Credentials
+
+Never write a token (`GH_TOKEN`, `AMD_LLM_API_KEY`, any key or password) into a file, a
+script, a commit, a test, a record, or a command line that gets saved: Claude Code stores
+approved commands verbatim in `.claude/settings.local.json`, which is how a GitHub token
+once ended up there in plain text.  Read it from the environment at the moment of use
+(`"$GH_TOKEN"`), mask it in kept output (`sed "s|$GH_TOKEN|<token>|g"`), and ask the user
+when it is not set.  `.claude/` is git-ignored.
 
 ## Build & test
 
@@ -21,14 +37,15 @@ model; it is usually on the box already).
 
 **Docs, one home each**: SPEC.md = intent, decisions with reasons, open designs (no
 how-to); `oaka/README.md` = oaka user reference; README.md = akao usage; CLAUDE.md = how
-to change the code; TEST.md = how to test.  When something ships, move its how-to out of
+to change the code; TEST.md = how to test; `year/CLAUDE.md` = orientation for agents under
+`/<year>` (roles, where things are, fixing the tools, credentials); `skills/<role>/SKILL.md`
+= how a role uses the tools.  When something ships, move its how-to out of
 SPEC.md and leave the decision behind.
 
 **Post-commit hook** (`.githooks/post-commit`, enable with `git config core.hooksPath
 .githooks`): after every commit it rebuilds `target/release/akao` (the user runs it through
-a `~/.local/bin/akao` symlink) and installs a musl `oaka` as `/<year>/oaka/bin/oaka`
-(`$OAKA_LIB/bin/oaka` if set) with `oaka/README.md` beside it, which `akao init` then
-deploys.  Both binaries stamp their commit into `--version` (`build.rs`).  Setup and the
+a `~/.local/bin/akao` symlink) and builds a musl `oaka` into `oaka/bin/oaka` (git-ignored;
+`$OAKA_LIB/bin/oaka` if set), which `akao init` ships into each worker's clone.  Both binaries stamp their commit into `--version` (`build.rs`).  Setup and the
 delivery path are in README.md, "Dev environment".
 Needs `rustup target add x86_64-unknown-linux-musl`.
 
@@ -37,8 +54,16 @@ Needs `rustup target add x86_64-unknown-linux-musl`.
 ```
 Cargo.toml            workspace root
 rustfmt.toml          max_width = 120
+AGENTS.md             -> CLAUDE.md
+year/CLAUDE.md        orientation for every agent under /<year>; AGENTS.md -> CLAUDE.md beside it.
+                      The console's /<year>/CLAUDE.md and AGENTS.md link here; init ships copies
+skills/<name>/        role manuals (controller, worker) and bring-codex-back; read in place
+                      from $AKAO_REPO_ROOT, which init clones into every worker
+utils/                agent.sh (claude + codex via the AMD gateway), install_gh.sh (init step 9
+                      runs both from the worker's clone), controller/Dockerfile (console image);
+                      the console's /<year>/utils links here
 TEST.md               test layers: cargo test, real GPU smoke, environment doctors
-.githooks/post-commit installs a static oaka into /<year>/oaka/bin
+.githooks/post-commit builds akao (release) and a static oaka into oaka/bin
 akao/
   Cargo.toml
   build.rs            stamps the git sha into the version
@@ -55,13 +80,16 @@ akao/
   tests/mirror.rs     akao mirror --dry-run vs. a scratch InferenceX repo, stand-in ssh/docker
 oaka/
   Cargo.toml
-  README.md           worker reference; the hook installs it as /<year>/oaka/README.md
+  README.md           worker reference, next to the library it describes
+  profiles/, stacks.toml  the library (OAKA_LIB default: $AKAO_REPO_ROOT/oaka); tracked
+  .gitignore          /bin/: the hook's static oaka
   build.rs            stamps the git sha into the version
   templates/*.sh.j2   script templates (minijinja), embedded with include_str!
   src/
     main.rs           CLI: draft, check, compile, run, profile ls|show|save|diff
     sys.rs            work year, artifact root, GPU archs from KFD topology, free ports, q()
-    profile.rs        Library ($OAKA_LIB or /<year>/oaka), profiles, extends, overlays, Engine
+    profile.rs        Library ($OAKA_LIB, $AKAO_REPO_ROOT/oaka, legacy /<year>/oaka), profiles,
+                      extends, overlays, Engine
     plan.rs           plan.toml schema + validation (check), plan.lock.toml
     stack.rs          the library's stacks.toml: swappable packages, recipes, clean paths
     compile.rs        plan + library + templates -> scripts/
@@ -78,7 +106,8 @@ The variable is **required**; every subcommand fails clearly if unset.
 
 ```
 $AKAO_CONFIG_ROOT/
-  config.toml         settings: default_image, deploy_src, deploy_paths, infx_repo, infx_local
+  config.toml         settings: default_image, deploy_src, deploy_paths (default: none),
+                      infx_repo, infx_local
   hosts.tsv           one row per remote box (TSV, 5–6 cols)
   container_home/     home template, copied once per akao_<name>
     .local/bin/ssh    ssh wrapper adding -F $AKAO_CONFIG_ROOT/.ssh/config (see Design notes)
@@ -88,12 +117,17 @@ $AKAO_CONFIG_ROOT/
 Work year and week are always today's ISO values (`state::work_year()`, `state::work_week()`).
 Never stored in config to avoid staleness.
 
+**The repo** (`AKAO_REPO_ROOT`, `state::repo_root()`): the console's checkout of this repo,
+default `/root/akao-workflow`; init ships its committed branches (step 8) and its `year/`
+files (step 3); `akao doctor` checks it and that `/<year>/CLAUDE.md`, `AGENTS.md` link to
+`year/CLAUDE.md`.  oaka's doctor checks the worker's clone.
+
 **Artifact roots** (`AKAO_ARTIFACT_ROOT`): one per agent, the directory holding its numbered
 dirs.  On the console it is the controller's (`state::artifact_root()`: the variable, else
 `/<year>/<week>/controller`); it never feeds a worker's.  A worker's is chosen by init
 (`--artifact-root`, else `/<year>/<week>/<name>`) and pinned into its container (`-e`, `-w`);
 oaka reads it (`sys::artifact_root()`) and takes its work year from it (the container
-mounts only that `/<year>`; `/<year>/oaka` and the InferenceX path follow).  An existing container's root always wins over a
+mounts only that `/<year>`; the InferenceX path and the legacy `/<year>/oaka` follow).  An existing container's root always wins over a
 derived one.
 
 ## Key modules
@@ -137,7 +171,8 @@ they are appended after the fixed skeleton but before the image in `init`.
 
 ### init.rs — `akao init <nick> <name>`
 
-Ten ordered steps, each idempotent (checks before acting):
+Twelve ordered steps, each idempotent (checks before acting).  Unless `--skip-setup`, the
+repo checkout (`$AKAO_REPO_ROOT`, `state::shippable_repo`) is checked before step 1.
 
 1. Resolve nick via `ssh -G` (verifies ssh connectivity); `docker -H ssh://<nick> version`
    (fails loudly: the `ssh` wrapper, see Design notes); `ps -a` tells a missing container
@@ -147,22 +182,34 @@ Ten ordered steps, each idempotent (checks before acting):
    `/root` mounted from elsewhere than hosts.tsv says, a mount of its own over the root)
    fails here, before the host is touched
 2. `mkdir -p` the artifact root under `<host_home>` + `container_home` root
-3. Deploy control plane: `tar | ssh tar` with `sudo -n`, `root:root`, no delete
+3. Deploy control plane: `tar -h | ssh tar` with `sudo -n`, `root:root`, no delete:
+   `deploy_paths` from `deploy_src` (none by default), then the repo's `year/CLAUDE.md` + `AGENTS.md`
+   (dereferenced: a link into the console's tree would dangle on the box)
 4. Copy home template (skipped if container home already exists)
 5. Create docker context `ssh://<nick>` (updates it if it points elsewhere).  Relies on the
    `ssh` wrapper (see Design notes).
 6. `docker run` the container (reuses if running; starts if stopped; fails on other states,
    and when its id is not the one step 1 judged: created, removed or replaced meanwhile)
-7. Install apt packages + gh + claude agent + sgl-eval (each skipped if already present;
-   sgl-eval failing only warns: mirrored images may refuse pip); link
-   `/<year>/oaka/bin/oaka` to `/usr/local/bin/oaka`
-8. Clone `infx_repo` into `/<year>/nocopy/InferenceX` unless a checkout exists (never pulled;
+7. Install apt packages (incl. git, which step 8 needs), skipped if all present
+8. The worker's clone of this repo at `/root/akao-workflow` (`state::WORKER_REPO`; the
+   container gets `AKAO_REPO_ROOT` pointing there): `git bundle create - --branches --tags`
+   on the console piped into the container, then `repo_sync_script`: clone the first time
+   (origin = the console repo's origin), later fetch into `refs/remotes/console/*` and
+   fast-forward `main` only when on `main`, clean and behind; it never moves the worker's own
+   work and is never fatal for it.  A bundle, not a GitHub clone: the console's commits may
+   be unpushed and the box may have no network.  Only commits travel, plus the hook's
+   git-ignored `oaka/bin/oaka`, piped into the same place in the clone.
+9. From the clone's `utils/`: gh, the claude agent; then sgl-eval (each skipped if already
+   present; sgl-eval failing only warns: mirrored images may refuse pip); link
+   the clone's `oaka/bin/oaka` to `/usr/local/bin/oaka`
+10. Clone `infx_repo` into `/<year>/nocopy/InferenceX` unless a checkout exists (never pulled;
    not skipped by `--skip-setup`: oaka's benchmark client needs it)
-9. Start tmux session with window `controller` running `claude` (skipped if tmux already runs)
-10. Worker doctor: `/<year>/oaka/bin/oaka doctor` in the container, report shown (GPU arch,
+11. Start tmux session with window `controller` running `claude` (skipped if tmux already runs)
+12. Worker doctor: the clone's `oaka/bin/oaka doctor` (the legacy `/<year>/oaka/bin/oaka` in
+    a container without one) in the container, report shown (GPU arch,
     ROCm version, prerequisites); read-only and never fatal
 
-Steps 3 and 7 are skipped together by `--skip-setup`.
+Steps 3, 7, 8 and 9 are skipped together by `--skip-setup`.
 
 **docker run skeleton**: `--rm -d --privileged --ulimit nofile=1048576 --network=host
 --device=/dev/kfd --device=/dev/dri --group-add video --cap-add=SYS_PTRACE
@@ -173,7 +220,8 @@ Host's `rest` field appends after this, before the image.
 Mounts: `model_path:/model`, `docker_sock:/var/run/docker.sock`,
 `host_home/<year>:/<year>`, `host_home/container_home/akao_<name>:/root`.
 Workdir and `-e AKAO_ARTIFACT_ROOT`: the artifact root (`/<year>/<week>/<name>` or
-`--artifact-root`, which must lie under `/<year>/`: the only persistent mount).
+`--artifact-root`, which must lie under `/<year>/`: the only persistent mount).  Also
+`-e AKAO_REPO_ROOT=/root/akao-workflow` (the clone step 8 makes).
 `init::run` returns the `Plan` with the root the container really has (mirror uses it).
 
 ### mirror.rs — `akao mirror [<nick> [<name>]] --conf <terms>`

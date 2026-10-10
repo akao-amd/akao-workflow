@@ -772,7 +772,7 @@ pub fn brief(repo: &Repo, e: &Entry, pts: &[Point], files: &[Shipped], notes: &[
         m += &format!("- missing: {n}\n");
     }
     m += "\n## For the worker\n\n\
-          Follow the worker skill's \"Mirror workers\" section (`/<year>/skills/worker/SKILL.md`): turn the\n\
+          Follow the worker skill's \"Mirror workers\" section (`$AKAO_REPO_ROOT/skills/worker/SKILL.md`): turn the\n\
           recipe into an oaka profile named `<model>/infx-<entry>[-<variant>]` with this revision in its\n\
           `#` provenance, prove it with a one-point fixed-seq plan, then run the entry's points.\n\
           Report every point oaka cannot reproduce as it stands (the caveats above), rather than\n\

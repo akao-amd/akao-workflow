@@ -131,6 +131,8 @@ impl Plan {
         argv.extend([
             "-e".into(),
             format!("{}={}", state::ARTIFACT_ROOT_ENV, self.artifact_root),
+            "-e".into(),
+            format!("{}={}", state::REPO_ROOT_ENV, state::WORKER_REPO),
         ]);
         argv.extend(["-w".into(), self.artifact_root.clone()]);
         argv.extend(h.rest_args()?);
@@ -146,14 +148,58 @@ impl Plan {
     }
 }
 
-fn tar_create(dir: &Path, paths: &[String], excludes: &[&str]) -> Vec<String> {
+/// `tar` of `paths` in `dir` to stdout, owned root.  Deploys dereference symlinks
+/// (`deref`): a link into the console's tree would dangle on a box.
+fn tar_create(dir: &Path, paths: &[String], excludes: &[&str], deref: bool) -> Vec<String> {
     let mut argv: Vec<String> = vec!["tar".into(), "-C".into(), dir.display().to_string()];
+    if deref {
+        argv.push("-h".into());
+    }
     argv.extend(["--owner=0".into(), "--group=0".into()]);
     argv.extend(excludes.iter().map(|e| format!("--exclude={e}")));
     argv.push("-czf".into());
     argv.push("-".into());
     argv.extend(paths.iter().cloned());
     argv
+}
+
+/// Where the repo bundle lands in the container on its way into the clone.
+const REPO_BUNDLE: &str = "/root/.cache/akao-workflow.bundle";
+
+/// Bash, run in the worker: clone the bundle into `repo` the first time; later fetch it into
+/// `refs/remotes/console/*` and fast-forward `main` only while the clone is on main, clean
+/// and behind.  Never fatal for the worker's own state; says what it did.
+pub fn repo_sync_script(bundle: &str, repo: &str, origin: Option<&str>) -> String {
+    let (b, r) = (q(bundle), q(repo));
+    let set_origin = origin
+        .map(|o| format!("git -C \"$R\" remote set-url origin {}; ", q(o)))
+        .unwrap_or_default();
+    format!(
+        r#"B={b}; R={r}; say() {{ echo "  $*"; }}
+fetch() {{ git -C "$R" fetch -q "$B" '+refs/heads/*:refs/remotes/console/*'; }}
+at() {{ git -C "$R" log -1 --format='%h %s' "$1"; }}
+if [ ! -e "$R/.git" ]; then
+    if [ -e "$R" ]; then echo "$R exists but is not a git checkout; resolve it by hand" >&2; exit 1; fi
+    git clone -q -b main "$B" "$R" || exit 1
+    {set_origin}fetch || exit 1
+    say "cloned $R at $(at HEAD)"
+else
+    fetch || {{ echo "cannot fetch the console's bundle into $R" >&2; exit 1; }}
+    branch="$(git -C "$R" symbolic-ref -q --short HEAD)"
+    if [ "$(git -C "$R" rev-parse HEAD)" = "$(git -C "$R" rev-parse console/main)" ]; then
+        say "$R is at console/main ($(at HEAD))"
+    elif [ "$branch" != main ]; then
+        say "$R is on ${{branch:-a detached HEAD}}; console/main ($(at console/main)) fetched, not merged"
+    elif [ -n "$(git -C "$R" status --porcelain --untracked-files=no)" ]; then
+        say "$R has uncommitted changes; console/main ($(at console/main)) fetched, not merged"
+    elif git -C "$R" merge-base --is-ancestor HEAD console/main; then
+        git -C "$R" merge -q --ff-only console/main && say "$R fast-forwarded to $(at HEAD)"             || say "$R could not fast-forward to console/main; left as is"
+    else
+        say "$R has commits of its own; console/main ($(at console/main)) fetched: git rebase console/main"
+    fi
+fi
+rm -f "$B""#
+    )
 }
 
 struct Steps {
@@ -324,7 +370,13 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
         p.host.host_home,
         p.artifact_root
     );
-    let mut s = Steps { n: 0, total: 10 };
+    // What step 3 and the repo step ship; checked before anything changes.
+    let repo = if opts.skip_setup {
+        None
+    } else {
+        Some(state::shippable_repo()?)
+    };
+    let mut s = Steps { n: 0, total: 12 };
 
     s.next("resolve host and container");
     let cfg = r.query(&r.ssh_config_argv(nick))?;
@@ -384,8 +436,17 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
             }
         }
         let extract = format!("{ESCALATE}$S tar -xzf - -C {}", q(&p.host_year_dir()));
+        // Anything beyond the repo the user ships to every box (none by default).
+        if !paths.is_empty() {
+            r.pipe(
+                &tar_create(Path::new(&src), &paths, DEPLOY_EXCLUDES, true),
+                &r.ssh_argv(nick, &extract),
+            )?;
+        }
+        // The orientation every agent under /<year> loads, from the repo.
+        let year = Path::new(repo.as_deref().unwrap()).join("year");
         r.pipe(
-            &tar_create(Path::new(&src), &paths, DEPLOY_EXCLUDES),
+            &tar_create(&year, &["CLAUDE.md".into(), "AGENTS.md".into()], &[], true),
             &r.ssh_argv(nick, &extract),
         )?;
     }
@@ -400,7 +461,10 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
             bail!("home template missing: {}", template.display());
         }
         let extract = format!("{ESCALATE}$S mkdir -p {home} && $S tar -xzf - -C {home}");
-        r.pipe(&tar_create(&template, &[".".into()], &[]), &r.ssh_argv(nick, &extract))?;
+        r.pipe(
+            &tar_create(&template, &[".".into()], &[], false),
+            &r.ssh_argv(nick, &extract),
+        )?;
     }
 
     s.next("docker context");
@@ -454,7 +518,7 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
         None => r.run(&p.docker_run_argv()?)?,
     }
 
-    s.next("install packages and agents");
+    s.next("install packages");
     if opts.skip_setup {
         println!("  skipped (--skip-setup)");
     } else {
@@ -463,12 +527,50 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
             .map(|p| format!("command -v {} >/dev/null", if *p == "docker.io" { "docker" } else { p }))
             .collect::<Vec<_>>()
             .join(" && ");
-        let utils = format!("/{}/utils", p.year);
         let script = format!(
             "{have_all} || {{ export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y {}; }}",
             APT_PACKAGES.join(" ")
         );
         r.run(&p.exec(&[], &script))?;
+    }
+
+    s.next("akao-workflow clone");
+    match &repo {
+        None => println!("  skipped (--skip-setup)"),
+        Some(repo) => {
+            // A bundle of the console's branches: no network, unpushed commits included,
+            // and fetching it never touches the worker's own work.
+            let origin = r
+                .probe(&["git", "-C", repo, "remote", "get-url", "origin"].map(String::from))?
+                .map(|o| o.trim().to_string());
+            let bundle: Vec<String> = ["git", "-C", repo, "bundle", "create", "-", "--branches", "--tags"]
+                .map(String::from)
+                .into();
+            let receive = p.exec(&["-i"], &format!("mkdir -p /root/.cache && cat >{}", q(REPO_BUNDLE)));
+            r.pipe(&bundle, &receive)?;
+            r.run(&p.exec(
+                &[],
+                &repo_sync_script(REPO_BUNDLE, state::WORKER_REPO, origin.as_deref()),
+            ))?;
+            // The static oaka the hook built: git-ignored, so it travels beside the bundle,
+            // into the same place in the clone (the library is the clone's oaka/).
+            let bin = format!("{}/oaka/bin", state::WORKER_REPO);
+            let receive = p.exec(
+                &["-i"],
+                &format!(
+                    "mkdir -p {bin} && cat >{bin}/oaka.tmp && chmod +x {bin}/oaka.tmp && mv {bin}/oaka.tmp {bin}/oaka"
+                ),
+            );
+            r.pipe(&["cat".to_string(), format!("{repo}/oaka/bin/oaka")], &receive)?;
+        }
+    }
+
+    s.next("install tools and agents");
+    if opts.skip_setup {
+        println!("  skipped (--skip-setup)");
+    } else {
+        // The install scripts come with the repo (step 8), like everything akao ships.
+        let utils = format!("{}/utils", state::WORKER_REPO);
         r.run(&p.exec(&[], &format!("command -v gh >/dev/null || bash {utils}/install_gh.sh")))?;
         r.run(&p.exec(
             &[],
@@ -483,8 +585,8 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
             "command -v sgl-eval >/dev/null || python3 -m pip install sgl-eval \
              || echo 'warning: pip install sgl-eval failed; gsm8k clients will not run here'",
         ))?;
-        // oaka ships in the control plane (step 3); put it on PATH for the worker agent.
-        let oaka = format!("/{}/oaka/bin/oaka", p.year);
+        // oaka came with the clone (step 8); put it on PATH for the worker agent.
+        let oaka = format!("{}/oaka/bin/oaka", state::WORKER_REPO);
         r.run(&p.exec(
             &[],
             &format!(
@@ -526,8 +628,11 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
     // and every prerequisite oaka's scripts need, now that setup is done: a container
     // from the wrong image, or a step that silently failed, shows here.  Reported, not
     // fatal: the container is up, and the report names each fix.
-    let oaka = format!("/{}/oaka/bin/oaka", p.year);
-    match r.probe(&p.exec(&[], &format!("{oaka} doctor 2>&1; true")))? {
+    // The clone's oaka; a container set up before the repo shipped has /<year>/oaka's.
+    let oaka = format!("{}/oaka/bin/oaka", state::WORKER_REPO);
+    let legacy = format!("/{}/oaka/bin/oaka", p.year);
+    let script = format!("b={oaka}; [ -x \"$b\" ] || b={legacy}; \"$b\" doctor 2>&1; true");
+    match r.probe(&p.exec(&[], &script))? {
         Some(out) => {
             for line in out.lines() {
                 println!("  {line}");
@@ -596,7 +701,7 @@ mod tests {
         let argv = plan().docker_run_argv().unwrap();
         let s = argv.join(" ");
         assert!(
-            s.contains("-e AKAO_ARTIFACT_ROOT=/2026/ww41/exp -w /2026/ww41/exp"),
+            s.contains("-e AKAO_ARTIFACT_ROOT=/2026/ww41/exp -e AKAO_REPO_ROOT=/root/akao-workflow -w /2026/ww41/exp"),
             "{s}"
         );
         assert!(check_artifact_root("/2026/nocopy/exp", "2026").is_ok());
@@ -688,9 +793,96 @@ mod tests {
     }
 
     #[test]
+    fn the_repo_reaches_a_worker_without_touching_its_work() {
+        let dir = std::env::temp_dir().join(format!("akao-reposync-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("console")).unwrap();
+        let git = |cwd: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "init.defaultBranch=main",
+                ])
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let (console, clone) = (dir.join("console"), dir.join("clone"));
+        let commit = |cwd: &Path, file: &str| {
+            std::fs::write(cwd.join(file), file).unwrap();
+            git(cwd, &["add", "-A"]);
+            git(cwd, &["commit", "-q", "-m", file]);
+        };
+        git(&console, &["init", "-q"]);
+        commit(&console, "c1");
+        let bundle = dir.join("x.bundle");
+        let sync = || {
+            git(
+                &console,
+                &[
+                    "bundle",
+                    "create",
+                    "-q",
+                    bundle.to_str().unwrap(),
+                    "--branches",
+                    "--tags",
+                ],
+            );
+            let script = repo_sync_script(
+                bundle.to_str().unwrap(),
+                clone.to_str().unwrap(),
+                Some("https://example.com/r.git"),
+            );
+            let out = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(&script)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            assert!(!bundle.exists(), "the bundle is removed");
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        assert!(sync().contains("cloned"));
+        assert_eq!(
+            git(&clone, &["remote", "get-url", "origin"]),
+            "https://example.com/r.git"
+        );
+        assert!(sync().contains("is at console/main"));
+        commit(&console, "c2");
+        assert!(sync().contains("fast-forwarded to"));
+        assert!(clone.join("c2").exists());
+        // The worker's own commit is never moved; console/main is fetched for a rebase.
+        commit(&clone, "w1");
+        commit(&console, "c3");
+        let out = sync();
+        assert!(out.contains("has commits of its own"), "{out}");
+        assert!(clone.join("w1").exists() && !clone.join("c3").exists());
+        git(&clone, &["rebase", "-q", "console/main"]);
+        // Uncommitted changes, then another branch: fetched, not merged.
+        commit(&console, "c4");
+        std::fs::write(clone.join("c1"), "edited").unwrap();
+        assert!(sync().contains("has uncommitted changes"));
+        git(&clone, &["checkout", "-q", "--", "c1"]);
+        git(&clone, &["checkout", "-q", "-b", "topic"]);
+        assert!(sync().contains("is on topic"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn tar_owner_and_excludes() {
-        let argv = tar_create(Path::new("/2026"), &["skills".into()], DEPLOY_EXCLUDES);
-        assert_eq!(argv[..5], ["tar", "-C", "/2026", "--owner=0", "--group=0"]);
+        let argv = tar_create(Path::new("/2026"), &["skills".into()], DEPLOY_EXCLUDES, true);
+        assert_eq!(argv[..6], ["tar", "-C", "/2026", "-h", "--owner=0", "--group=0"]);
         assert!(argv.contains(&"--exclude=.claude".to_string()));
         assert!(argv.ends_with(&["-czf".into(), "-".into(), "skills".into()]));
     }

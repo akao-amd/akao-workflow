@@ -72,6 +72,7 @@ pub fn run() -> Result<()> {
     check_ssh(&mut r, &state, &nicks);
     check_template(&mut r, &state);
     check_deploy(&mut r, &state);
+    check_repo(&mut r, &state);
     match output(&["docker", "--version"]) {
         Some(v) => r.ok("docker", v.trim()),
         None => r.fail("docker", "docker CLI not found; init drives workers through it"),
@@ -81,6 +82,66 @@ pub fn run() -> Result<()> {
         bail!("{} check(s) failed", r.failed);
     }
     Ok(())
+}
+
+/// The repo checkout init ships (skills, /<year>/CLAUDE.md), and the console's own
+/// /<year>/CLAUDE.md and AGENTS.md: links to the repo's year/CLAUDE.md.
+fn check_repo(r: &mut Report, state: &State) {
+    let repo = match state::repo_root() {
+        Ok((repo, _)) => repo,
+        Err(e) => return r.fail("repo", format!("{e:#}")),
+    };
+    let bin = Path::new(&repo).join("oaka/bin/oaka");
+    match output(&[&bin.to_string_lossy(), "--version"]) {
+        Some(v) => r.ok("oaka", format!("{} ({})", bin.display(), v.trim())),
+        None => r.fail(
+            "oaka",
+            format!(
+                "{} missing or broken; commit in akao-workflow (the post-commit hook builds it)",
+                bin.display()
+            ),
+        ),
+    }
+    if !Path::new(&repo).join(".git").exists() || !Path::new(&repo).join("year/CLAUDE.md").is_file() {
+        return r.fail(
+            "repo",
+            format!(
+                "{repo} is not a checkout of akao-workflow with year/CLAUDE.md (init ships it to every \
+                 worker); export {}=<your checkout>",
+                state::REPO_ROOT_ENV
+            ),
+        );
+    }
+    let head = output(&["git", "-C", &repo, "log", "-1", "--format=%h %s"]).unwrap_or_default();
+    match output(&["git", "-C", &repo, "status", "--porcelain", "--untracked-files=no"]) {
+        Some(dirty) if !dirty.trim().is_empty() => r.warn(
+            "repo",
+            format!(
+                "{repo} at {}; uncommitted changes are not shipped (init sends commits only)",
+                head.trim()
+            ),
+        ),
+        _ => r.ok("repo", format!("{repo} at {}", head.trim())),
+    }
+    let want = Path::new(&repo).join("year/CLAUDE.md");
+    let Ok(src) = state.require("deploy_src") else { return };
+    for name in ["CLAUDE.md", "AGENTS.md"] {
+        let have = Path::new(&src).join(name);
+        let same = have.canonicalize().ok() == want.canonicalize().ok();
+        if same {
+            r.ok(name, format!("{} -> {}", have.display(), want.display()));
+        } else {
+            r.warn(
+                name,
+                format!(
+                    "{} is not the repo's; agents under {src} load it: ln -sfn {} {}",
+                    have.display(),
+                    want.display(),
+                    have.display()
+                ),
+            );
+        }
+    }
 }
 
 /// What a controller agent on this console uses besides akao itself: never fatal, akao
@@ -98,7 +159,7 @@ fn check_controller(r: &mut Report, state: &State) {
         ("tmux", "the controller opens worker agents in tmux windows"),
         (
             "claude",
-            "the controller agent itself; /<year>/utils/agent.sh installs it",
+            "the controller agent itself; $AKAO_REPO_ROOT/utils/agent.sh installs it",
         ),
     ] {
         match which(tool) {
@@ -215,25 +276,14 @@ fn check_deploy(r: &mut Report, state: &State) {
         .split_whitespace()
         .filter(|p| !Path::new(&src).join(p).exists())
         .collect();
-    if missing.is_empty() {
+    if paths.trim().is_empty() {
+        r.ok("deploy", "nothing beyond the repo (deploy_paths is empty)");
+    } else if missing.is_empty() {
         r.ok("deploy", format!("{src}: {paths}"));
     } else {
         r.fail(
             "deploy",
             format!("missing under {src}: {} (init step 3 ships them)", missing.join(" ")),
         );
-    }
-    if paths.split_whitespace().any(|p| p == "oaka") {
-        let bin = Path::new(&src).join("oaka/bin/oaka");
-        match output(&[&bin.to_string_lossy(), "--version"]) {
-            Some(v) => r.ok("oaka", format!("{} ({})", bin.display(), v.trim())),
-            None => r.fail(
-                "oaka",
-                format!(
-                    "{} missing or broken; commit in akao-workflow (post-commit hook installs it)",
-                    bin.display()
-                ),
-            ),
-        }
     }
 }

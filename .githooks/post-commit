@@ -2,8 +2,8 @@
 # After every commit, refresh the binaries the dev environment runs, so neither can lag
 # behind the committed code:
 #   - akao: release build in target/release/akao (link it onto PATH once; see README.md)
-#   - oaka: static (musl) build installed into the library that `akao init` ships to
-#     workers, ${OAKA_LIB:-/<ISO year>/oaka}/bin/oaka, with oaka/README.md as its README.md
+#   - oaka: static (musl) build in the library's bin/, ${OAKA_LIB:-<repo>/oaka}/bin/oaka
+#     (git-ignored), which `akao init` ships into each worker's clone of this repo
 #
 # Enable once per clone:  git config core.hooksPath .githooks
 # A failed build never blocks the commit (it already happened); it is reported instead.
@@ -17,7 +17,7 @@ else
     echo "post-commit: akao build failed; target/release/akao is stale" >&2
 fi
 
-lib="${OAKA_LIB:-/$(date +%G)/oaka}"
+lib="${OAKA_LIB:-$top/oaka}"
 target=x86_64-unknown-linux-musl
 if ! cargo build --release -q -p oaka --target "$target" --manifest-path "$manifest"; then
     echo "post-commit: oaka build failed; $lib/bin/oaka not updated" >&2
@@ -26,5 +26,4 @@ fi
 mkdir -p "$lib/bin" && cp "$top/target/$target/release/oaka" "$lib/bin/oaka.tmp" \
     && mv "$lib/bin/oaka.tmp" "$lib/bin/oaka" \
     && echo "post-commit: installed $lib/bin/oaka ($("$lib/bin/oaka" --version))"
-cp "$top/oaka/README.md" "$lib/README.md" && echo "post-commit: installed $lib/README.md"
 exit 0

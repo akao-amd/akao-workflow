@@ -29,7 +29,7 @@ impl Sandbox {
         sb.write(
             "state/config.toml",
             &format!(
-                "default_image = 'img:tag'\ndeploy_src = '{}'\ndeploy_paths = 'x oaka'\n",
+                "default_image = 'img:tag'\ndeploy_src = '{}'\ndeploy_paths = 'x'\n",
                 deploy.display()
             ),
         );
@@ -40,7 +40,16 @@ impl Sandbox {
         );
         sb.exe("state/container_home/.local/bin/ssh", SSH_WRAPPER);
         sb.write("deploy/x", "");
-        sb.exe("deploy/oaka/bin/oaka", "#!/bin/sh\necho 'oaka 0.0.0 (test)'\n");
+        sb.exe("repo/oaka/bin/oaka", "#!/bin/sh\necho 'oaka 0.0.0 (test)'\n");
+        sb.write("repo/year/CLAUDE.md", "# Working under /<year>\n");
+        let git = Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(sb.root.join("repo"))
+            .status()
+            .unwrap();
+        assert!(git.success());
+        std::os::unix::fs::symlink(sb.root.join("repo/year/CLAUDE.md"), deploy.join("CLAUDE.md")).unwrap();
+        std::os::unix::fs::symlink(sb.root.join("repo/year/CLAUDE.md"), deploy.join("AGENTS.md")).unwrap();
         sb.exe("bin/ssh", SSH_WRAPPER);
         sb.exe("bin/docker", "#!/bin/sh\necho 'Docker version 0.0 (fake)'\n");
         sb.exe("bin-nowrap/docker", "#!/bin/sh\necho 'Docker version 0.0 (fake)'\n");
@@ -68,7 +77,8 @@ impl Sandbox {
         let mut c = Command::new(env!("CARGO_BIN_EXE_akao"));
         c.arg("doctor")
             .env("PATH", format!("{}:/usr/bin:/bin", self.root.join(bin_dir).display()))
-            .env_remove("AKAO_ARTIFACT_ROOT");
+            .env_remove("AKAO_ARTIFACT_ROOT")
+            .env("AKAO_REPO_ROOT", self.root.join("repo"));
         match config_root {
             Some(r) => c.env("AKAO_CONFIG_ROOT", r),
             None => c.env_remove("AKAO_CONFIG_ROOT"),
@@ -110,6 +120,9 @@ fn sound_setup_passes() {
         "resolves every host through",
         "ok    oaka",
         "ok    docker",
+        "ok    repo",
+        "ok    CLAUDE.md",
+        "ok    AGENTS.md",
     ] {
         assert!(out.contains(want), "{want:?} not in {out}");
     }
@@ -137,14 +150,16 @@ fn missing_pieces_are_named() {
         "{out}"
     );
 
-    fs::remove_file(sb.root.join("deploy/oaka/bin/oaka")).unwrap();
+    fs::remove_file(sb.root.join("repo/oaka/bin/oaka")).unwrap();
     fs::remove_file(sb.root.join("deploy/x")).unwrap();
     fs::remove_dir_all(sb.state().join("container_home")).unwrap();
+    fs::remove_file(sb.root.join("repo/year/CLAUDE.md")).unwrap();
     let (code, out) = sb.doctor("bin", Some(&sb.state()));
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("FAIL  deploy         missing under"), "{out}");
     assert!(out.contains("FAIL  oaka"), "{out}");
     assert!(out.contains("FAIL  home template"), "{out}");
+    assert!(out.contains("FAIL  repo"), "{out}");
 }
 
 #[test]
@@ -152,6 +167,12 @@ fn controller_prerequisites_are_reported() {
     let sb = Sandbox::new("controller");
     let (code, out) = sb.doctor("bin", Some(&sb.state()));
     assert_eq!(code, 0, "{out}");
+    // /<year>/CLAUDE.md as a stale copy instead of the repo's: agents would load the copy.
+    fs::remove_file(sb.root.join("deploy/CLAUDE.md")).unwrap();
+    fs::write(sb.root.join("deploy/CLAUDE.md"), "old\n").unwrap();
+    let (code, out) = sb.doctor("bin", Some(&sb.state()));
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("warn  CLAUDE.md") && out.contains("ln -sfn"), "{out}");
     // Not on the sandbox's PATH (system dirs aside): warned, never fatal.
     assert!(out.contains("artifact root  /"), "{out}");
     assert!(out.contains("(derived)"), "{out}");
