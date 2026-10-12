@@ -1,0 +1,17 @@
+# gpt-oss-120b/base at TP2.  Created 2026-10-12 for ww42 1012_update_dpx_tp2.
+#
+# Same recipe as gpt-oss-120b/base (inherited via extends: aiter unified attention +
+# page 64 + chunked prefill 3072, same env); only the tp pin changes, 1 -> 2.
+# base pins tp = 1, so a plan giving it two GPUs is rejected; tp cannot be a plan
+# override or an [args] flag, hence this child profile.
+#
+# First use: GPUs 6+7 on a gfx1250 box in DPX / NPS2 mode, i.e. the two partitions of
+# ONE physical card -- TP2 across a card's halves, not across two cards.
+#
+# Not yet measured.  base's flags were tuned at TP1 (page 64 and chunk 3072 were picked
+# on one GPU); whether they still sit at the optimum at TP2 is untested.
+
+description = "gpt-oss-120b, base recipe (tuned) at TP2"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/base"
+tp = 2
