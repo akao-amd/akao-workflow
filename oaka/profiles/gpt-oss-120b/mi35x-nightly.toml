@@ -30,7 +30,7 @@
 description = "gpt-oss-120b MXFP4 (openai), MI355X TP8: SGLang's MI35x nightly perf/accuracy recipe"
 arch = ["gfx950"]
 model = "/model/gpt-oss-120b"
-tp = 8
+tp = 1
 
 [env]
 SGLANG_USE_AITER = "1"
