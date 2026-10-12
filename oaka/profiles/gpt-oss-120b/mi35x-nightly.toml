@@ -1,0 +1,44 @@
+# gpt-oss-120b on MI355X (gfx950), TP8: SGLang's own MI35x nightly recipe, copied as is.
+#
+# Source: sgl-project/sglang main,
+#   test/registered/amd/perf/mi35x/test_gpt_oss_perf_mi35x.py (last changed d91c3682b0,
+#   2026-08-16, "[AMD][CI] Add GPT-OSS perf benchmarks to the ROCm 7.2 nightly", #34645),
+#   whose SERVER_ARGS/ENV_VARS match test/registered/amd/accuracy/mi35x/test_gpt_oss_eval_mi35x.py.
+# Read 2026-10-12.  Not yet measured by us; the point of copying it verbatim is that a
+# throughput change against SGLang's nightly then points at the stack, not at the recipe.
+#
+# Checkpoint: openai/gpt-oss-120b, the MXFP4 release (MI35x serves it directly; MI30x uses a
+# bf16 conversion).  NOT the AMD Quark W4A8 checkpoint gpt-oss-120b/base uses.  No box had
+# it on 2026-10-12 (m15-21's /raid/models has none); `model` below assumes it is downloaded
+# to <model_path>/gpt-oss-120b.  Elsewhere, override `model` in the plan.
+#
+# Flags (upstream SERVER_ARGS; --tp 8 is pinned as `tp`, oaka owns the flag):
+#   --attention-backend triton, --chunked-prefill-size 130172, --max-running-requests 128,
+#   --mem-fraction-static 0.85, --trust-remote-code.
+# Env (upstream ENV_VARS): SGLANG_USE_AITER=1; SGLANG_USE_AITER_MOE_GU_ITLV=1, upstream's
+#   comment: "AITER's MXFP4 fused MoE for gpt-oss uses the separated gate/up tile layout;
+#   other AITER MXFP4 callers default to interleave, so opt out explicitly."  (The comment
+#   says opt out, the value is 1; kept as upstream ships it.)
+#
+# Upstream's measurement, for comparison (its client, not oaka's):
+#   bench_one_batch_server via NightlyBenchmarkRunner, batch sizes 1,1,8,16,64 (the leading
+#   1 is a warm-up), ISL 4096 / OSL 512 (NIGHTLY_INPUT_LENS/OUTPUT_LENS), --trust-remote-code.
+#   Closest oaka plan: fixed-seq, isl 4096, osl 512, conc [1, 8, 16, 64].  That is a serving
+#   benchmark, not a one-batch run: compare trends with the nightly, not absolute numbers.
+# Accuracy gate upstream: GSM8K few-shot completion, 200 questions, threshold 0.79 (120b).
+
+description = "gpt-oss-120b MXFP4 (openai), MI355X TP8: SGLang's MI35x nightly perf/accuracy recipe"
+arch = ["gfx950"]
+model = "/model/gpt-oss-120b"
+tp = 8
+
+[env]
+SGLANG_USE_AITER = "1"
+SGLANG_USE_AITER_MOE_GU_ITLV = "1"
+
+[args]
+trust-remote-code = true
+attention-backend = "triton"
+chunked-prefill-size = 130172
+max-running-requests = 128
+mem-fraction-static = 0.85
