@@ -8,10 +8,34 @@
 # First use: GPUs 6+7 on a gfx1250 box in DPX / NPS2 mode, i.e. the two partitions of
 # ONE physical card -- TP2 across a card's halves, not across two cards.
 #
-# Not yet measured.  base's flags were tuned at TP1 (page 64 and chunk 3072 were picked
-# on one GPU); whether they still sit at the optimum at TP2 is untested.
+# base's flags were tuned at TP1 (page 64 and chunk 3072 were picked on one GPU); whether
+# they still sit at the optimum at TP2 is untested.
+#
+# ---------------------------------------------------------------------------------------
+# --disable-custom-all-reduce  (added 2026-10-12, ww42 1012_update_dpx_tp2)
+#
+#   Without it, TP2 HANGS. sglang picks AiterCustomAllreduce (IPC transport on gfx1250,
+#   ROCm 10.0.0); on GPUs 6+7 in DPX mode GSM8K stalled ~15 s in, both ranks stuck in
+#   process_batch_result_decode -> stream.synchronize, until the 300 s watchdog killed
+#   the server. 2 of 2 runs. With this flag (RCCL all-reduce): GSM8K 95.91%, no hang,
+#   full 8k/1k sweep completed. Untested: whether custom AR also hangs across two
+#   physical cards (non-DPX); what RCCL costs vs a working custom AR.
+#
+# What it measured, ISL 8192 / OSL 1024, 1 sample per point, vs base (TP1) on one of the
+# two partitions:
+#
+#   conc            4      8      16     32      64
+#   TP1  tok/s      270.5  596.5  895.4  1024.0  1432.5
+#   TP2  tok/s      358.8  635.7  960.0  1287.4  1447.4   -> 1.01x-1.33x on 2x the hardware
+#
+#   conc=4 is the first point after server start in both (warm-up). Estimated from the TP1
+#   row, two TP1 servers (one per partition, half the concurrency each) would give
+#   ~1.4x TP2 at total conc 32/64 -- an estimate, not measured.
 
-description = "gpt-oss-120b, base recipe (tuned) at TP2"
+description = "gpt-oss-120b, base recipe (tuned) at TP2, RCCL all-reduce"
 arch = ["gfx1250"]
 extends = "gpt-oss-120b/base"
 tp = 2
+
+[args]
+disable-custom-all-reduce = true
