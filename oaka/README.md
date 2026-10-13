@@ -25,6 +25,7 @@ oaka check      # every error names the field to fix; --json for agents
 oaka compile    # -> scripts/ (+ plan.lock.toml)
 oaka run        # compile, then scripts/run_all.sh
 oaka doctor     # this worker: GPU arch, ROCm version, prerequisites; --json for agents
+                # (`gpu index`: plan GPU = amd-smi GPU, where amd-smi numbers them differently)
 oaka profile ls | show <p> | diff <a> <b> | save <server> --as <model>/<recipe>
 ```
 

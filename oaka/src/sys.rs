@@ -61,6 +61,17 @@ pub fn gpus() -> Option<Vec<String>> {
                 .collect(),
         );
     }
+    Some(kfd_gpus()?.into_iter().map(|(_, a)| a).collect())
+}
+
+/// The KFD node of each GPU, in HIP device order (what plans and HIP_VISIBLE_DEVICES
+/// number); None without a KFD topology.
+pub fn gpu_nodes() -> Option<Vec<u32>> {
+    Some(kfd_gpus()?.into_iter().map(|(n, _)| n).collect())
+}
+
+/// (KFD node, arch) of every GPU node, sorted by node: HIP's device order.
+fn kfd_gpus() -> Option<Vec<(u32, String)>> {
     let dir = fs::read_dir("/sys/class/kfd/kfd/topology/nodes").ok()?;
     let mut nodes: Vec<(u32, String)> = Vec::new();
     for entry in dir.flatten() {
@@ -80,7 +91,31 @@ pub fn gpus() -> Option<Vec<String>> {
         }
     }
     nodes.sort();
-    Some(nodes.into_iter().map(|(_, a)| a).collect())
+    Some(nodes)
+}
+
+/// `amd-smi list`'s (GPU index, KFD node) pairs.
+pub fn amd_smi_nodes(list: &str) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    let mut gpu = None;
+    for line in list.lines().map(str::trim) {
+        if let Some(g) = line.strip_prefix("GPU:") {
+            gpu = g.trim().parse().ok();
+        } else if let (Some(n), Some(g)) = (line.strip_prefix("NODE_ID:"), gpu) {
+            if let Ok(n) = n.trim().parse() {
+                out.push((g, n));
+            }
+        }
+    }
+    out
+}
+
+/// For each HIP device (by its KFD node), amd-smi's index of the same GPU, if amd-smi lists it.
+pub fn amd_smi_index(hip_nodes: &[u32], amd: &[(u32, u32)]) -> Vec<Option<u32>> {
+    hip_nodes
+        .iter()
+        .map(|n| amd.iter().find(|(_, node)| node == n).map(|(g, _)| *g))
+        .collect()
 }
 
 /// The one architecture of this machine's GPUs, if they all agree.
@@ -195,6 +230,19 @@ mod tests {
         assert_eq!(root_year(Path::new("/2026")).as_deref(), Some("2026"));
         assert_eq!(root_year(Path::new("/work/exp")), None);
         assert_eq!(root_year(Path::new("/20261/x")), None);
+    }
+
+    #[test]
+    fn amd_smi_numbers_gpus_its_own_way() {
+        // n10-17, 2026-10-13: amd-smi orders by PCI address, HIP by KFD node.
+        let list = "GPU: 0\n    BDF: 0000:05:00.0\n    NODE_ID: 3\n    PARTITION_ID: 0\n\nGPU: 1\n    NODE_ID: 5\n\n\
+                    GPU: 2\n    NODE_ID: 4\nGPU: 3\n    NODE_ID: 2\n";
+        let amd = amd_smi_nodes(list);
+        assert_eq!(amd, [(0, 3), (1, 5), (2, 4), (3, 2)]);
+        assert_eq!(
+            amd_smi_index(&[2, 3, 4, 5, 9], &amd),
+            [Some(3), Some(0), Some(2), Some(1), None]
+        );
     }
 
     #[test]

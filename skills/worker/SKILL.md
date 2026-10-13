@@ -48,7 +48,10 @@ read an A-B-A, the bisect journey). The rules that are yours to keep:
   are in `$AKAO_REPO_ROOT/oaka/stacks.toml`. No recipe for your case? Do not improvise one — stop, ask
   the user, and add theirs to `stacks.toml`. A stack swap changes this container's Python
   for every process in it: say so in your report.
-- GPUs are yours to pick but must be free (`amd-smi metric --usage`).
+- GPUs are yours to pick but must be free (`amd-smi metric --usage`). Plans number GPUs as
+  HIP does; amd-smi may number the same cards differently (n10-17, m15-21: plan GPU 7 is
+  amd-smi GPU 5). `oaka doctor`'s `gpu index` line gives the map: check a GPU by its amd-smi
+  number.
 
 ## Mirror workers — reproduce an InferenceX config
 

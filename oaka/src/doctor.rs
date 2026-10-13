@@ -94,6 +94,8 @@ pub fn run(lib: &Library, json: bool) -> Result<()> {
         ),
     }
 
+    check_gpu_index(&mut r);
+
     match sys::rocm() {
         Some((v, from)) => r.ok("rocm", format!("{v} (from {from})")),
         None => r.warn(
@@ -191,6 +193,35 @@ pub fn run(lib: &Library, json: bool) -> Result<()> {
         bail!("{} check(s) failed", r.failed);
     }
     Ok(())
+}
+
+/// Plans, HIP_VISIBLE_DEVICES and oaka number GPUs in HIP order (KFD nodes); amd-smi numbers
+/// them by PCI address.  Where the two differ, "is GPU 7 free?" read off amd-smi looks at
+/// another card, so the map is shown.
+fn check_gpu_index(r: &mut Report) {
+    if std::env::var_os("OAKA_GPUS").is_some() {
+        return;
+    }
+    let (Some(nodes), Some(list)) = (sys::gpu_nodes(), output(&["amd-smi", "list"], &[])) else {
+        return;
+    };
+    let amd = sys::amd_smi_index(&nodes, &sys::amd_smi_nodes(&list));
+    if amd.iter().enumerate().all(|(i, a)| *a == Some(i as u32)) {
+        return r.ok("gpu index", "amd-smi numbers the GPUs as plans do (HIP order)");
+    }
+    let show = |a: &Option<u32>| a.map(|g| g.to_string()).unwrap_or_else(|| "?".into());
+    let pairs: Vec<String> = amd
+        .iter()
+        .enumerate()
+        .map(|(i, a)| format!("{i}={}", show(a)))
+        .collect();
+    r.warn(
+        "gpu index",
+        format!(
+            "plan GPU (HIP) = amd-smi GPU: {}; check a plan GPU's use by its amd-smi number",
+            pairs.join(" ")
+        ),
+    );
 }
 
 /// Where python3 finds an engine's package (without importing it), or None.

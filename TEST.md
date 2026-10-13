@@ -92,7 +92,8 @@ cargo tests).  Each prints
   init ships (`$AKAO_REPO_ROOT`: FAIL if missing, warn if dirty); for a controller (warn
   only): its artifact
   root, `tmux`, `claude`, `curl` (`mirror --dashboard`), the InferenceX clone mirror reads.
-- `oaka doctor` (worker; `akao init` runs it as its last step): ROCm version, library
+- `oaka doctor` (worker; `akao init` runs it as its last step): the plan-GPU (HIP) to amd-smi
+  numbering where they differ, ROCm version, library
   profiles resolve, GPUs visible, InferenceX checked out and importable, the serving engines
   python finds (SGLang, vllm, ATOM; FAIL only when none), the artifact root, the worker's
   clone of the repo (`$AKAO_REPO_ROOT`, warn only), `sgl-eval` and
