@@ -77,7 +77,8 @@ recipe only for gfx1250; on gfx950 (after cloning triton-lang/triton into
 ## 3. Environment: `akao doctor`, `oaka doctor` (seconds, read-only)
 
 Prerequisites of a real machine, checked where the tools run (workers have the `oaka`
-binary but no repo, so these are subcommands, not cargo tests).  Each prints
+binary and a clone of the repo, but seldom a Rust toolchain, so these are subcommands, not
+cargo tests).  Each prints
 `ok`/`warn`/`FAIL` with the fix and exits 1 on any FAIL.
 
 - `akao doctor` (console): `AKAO_CONFIG_ROOT` exported, `hosts.tsv`, the

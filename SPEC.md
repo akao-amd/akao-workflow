@@ -121,10 +121,12 @@ Where the how lives: worker reference (commands, plan and profile fields)
   by `__version__` (setuptools_scm's string misleads across a fetch).  Every server script
   also prints `pip show` for the record.
 - **Delivery, not deployment.**  The "deployment helper" role was dropped: a static (musl)
-  binary is installed into the library by this repo's post-commit hook, and `akao init`
-  ships the library.  Why: worker images vary in glibc; akao already deploys `/<year>`.
-- **Environment checks are `doctor` subcommands**, not cargo tests.  Why: workers have the
-  binary but no repo; the same checks must run where the tools run.
+  binary is built into the repo's `oaka/bin` by its post-commit hook, and `akao init` ships
+  it into each worker's clone of the repo.  Why: worker images vary in glibc; akao already
+  ships the repo to every worker.
+- **Environment checks are `doctor` subcommands**, not cargo tests.  Why: the same checks
+  must run where the tools run, and a worker has the binary but seldom a Rust toolchain
+  (its clone of the repo cannot run `cargo test`).
 - **GSM8K through `sgl-eval`, never `sglang[test]`**, which pulls PyPI sglang over the
   image's.
 
