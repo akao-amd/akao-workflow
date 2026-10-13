@@ -34,7 +34,7 @@ esac
 exit $?
 "#;
 
-/// docker: unreachable when $FAKE_DOCKER_DOWN is set; $FAKE_EXISTING describes an existing
+/// docker: unreachable when $FAKE_DOCKER_DOWN is set; no tmux in the container with $FAKE_NO_TMUX; $FAKE_EXISTING describes an existing
 /// akao_m1-fp4-mi355x-atom (inspect lines separated by |: id, image, workdir, mount/env
 /// lines), running, until $FAKE_REPLACED_ID says another container took its name; without
 /// it there is no container.
@@ -51,6 +51,7 @@ case "$*" in
         [ -n "$FAKE_EXISTING" ] || exit 1
         echo "$FAKE_EXISTING" | tr '|' '\n' ;;
     *"context inspect"*) exit 1 ;;
+    *"tmux has-session"*) [ -z "$FAKE_NO_TMUX" ] || exit 1 ;;
 esac
 exit 0
 "#;
@@ -216,10 +217,12 @@ fn mirror_brings_up_the_entrys_image_with_a_brief() {
             "ww07",
             "--dry-run",
         ],
-        &[("FAKE_GFX", "90500 90500")],
+        &[("FAKE_GFX", "90500 90500"), ("FAKE_NO_TMUX", "1")],
     );
     assert_eq!(code, 0, "{out}");
     let root = format!("/{year}/ww07/m1-fp4-mi355x-atom");
+    // The worker's own agent reads the clone without a prompt: it is a working directory too.
+    assert!(out.contains("claude --add-dir /root/akao-workflow"), "{out}");
     for want in [
         "fakebox: 2 x gfx950 as mi355x needs".to_string(),
         "image rocm/atom:1".to_string(),

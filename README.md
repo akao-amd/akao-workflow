@@ -104,7 +104,8 @@ and names the one it runs):
    (a failure only warns) — each skipped when already present; link `oaka` into
    `/usr/local/bin`
 10. clone InferenceX into `/<year>/nocopy/InferenceX`, unless a checkout is there (never pulled)
-11. start tmux with window `controller` running `claude`, unless tmux already runs
+11. start tmux with window `controller` running `claude` (with the clone as an extra working
+    directory, `--add-dir`, so reading the skills never prompts), unless tmux already runs
 12. run `oaka doctor` in the worker and show its report: GPU arch and ROCm version (what
     plans are checked against) and every prerequisite; reported, never fatal
 

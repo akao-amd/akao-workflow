@@ -283,7 +283,8 @@ repo checkout (`$AKAO_REPO_ROOT`, `state::shippable_repo`) is checked before ste
    the clone's `oaka/bin/oaka` to `/usr/local/bin/oaka`
 10. Clone `infx_repo` into `/<year>/nocopy/InferenceX` unless a checkout exists (never pulled;
    not skipped by `--skip-setup`: oaka's benchmark client needs it)
-11. Start tmux session with window `controller` running `claude` (skipped if tmux already runs)
+11. Start tmux session with window `controller` running `claude --add-dir /root/akao-workflow`
+   (the clone is the agent's manual, outside its working directory; skipped if tmux already runs)
 12. Worker doctor: the clone's `oaka/bin/oaka doctor` (the legacy `/<year>/oaka/bin/oaka` in
     a container without one) in the container, report shown (GPU arch,
     ROCm version, prerequisites); read-only and never fatal

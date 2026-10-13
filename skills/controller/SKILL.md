@@ -59,8 +59,16 @@ next to yours. It goes through the worker's login shell, whose `~/.bash_profile`
 `akao init`) holds `AMD_LLM_API_KEY`; nothing secret leaves the console:
 
 ```bash
-tmux new-window -d -n <name> "docker --context <nick> exec -it akao_<name> bash -lc 'exec /root/.local/bin/claude'"
+tmux new-window -d -e "AKAO_CONFIG_ROOT=$AKAO_CONFIG_ROOT" -n <name> \
+    "docker --context <nick> exec -it akao_<name> bash -lc 'exec /root/.local/bin/claude --add-dir \$AKAO_REPO_ROOT'"
 ```
+
+- `-e AKAO_CONFIG_ROOT`: the window runs under the tmux server's environment, which may lack
+  it; docker's `ssh` wrapper then falls back to `~/.ssh/config`, and a box that needs akao's
+  own ssh config (h21-5) refuses, closing the window at once.
+- `--add-dir $AKAO_REPO_ROOT`: the worker reads its clone of the repo (CLAUDE.md, its skill,
+  oaka's README and library) outside its working directory; without it, the first read stops
+  at a "read outside the working directories?" prompt.
 
 It starts in the worker's working directory, so the same command with `claude --resume`
 reopens that directory's conversations after the window is gone. `/exit` ends the agent and

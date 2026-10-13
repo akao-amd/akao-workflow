@@ -670,7 +670,15 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
             &[],
             &format!("tmux new-session -d -n controller -c {}", q(&p.artifact_root)),
         ))?;
-        r.run(&p.exec(&[], "tmux send-keys -t :controller claude Enter"))?;
+        // The repo is the worker's manual (CLAUDE.md, its skill, oaka's library), outside the
+        // working directory: a working directory of the agent's too, or every read prompts.
+        r.run(&p.exec(
+            &[],
+            &format!(
+                "tmux send-keys -t :controller 'claude --add-dir {}' Enter",
+                state::WORKER_REPO
+            ),
+        ))?;
     }
 
     s.next("worker doctor");
