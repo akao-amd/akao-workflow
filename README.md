@@ -85,7 +85,7 @@ hosts.tsv, else `default_image` (an existing container running another image tha
 `--image` fails):
 
 1. resolve the nick through `ssh -G`, tell AMD (`/dev/kfd`) from NVIDIA (`/dev/nvidiactl`)
-   GPUs, and reach the box's docker; if `akao_<name>` already
+   GPUs (NVIDIA: launch only, init stops after step 6), and reach the box's docker; if `akao_<name>` already
    exists, it keeps its image and artifact root, and must mount `/<year>` and `/root` from
    where hosts.tsv says (a request it cannot satisfy fails here, before the host is touched)
 2. create the artifact root under `<host_home>` and `<host_home>/container_home` on the host

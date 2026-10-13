@@ -66,7 +66,8 @@ const NVIDIA_RUN_SKELETON: &[&str] = &[
 pub enum Gpu {
     /// `/dev/kfd`
     Amd,
-    /// `/dev/nvidiactl`; oaka does not drive these (it reads the KFD topology).
+    /// `/dev/nvidiactl`: the container is only launched (steps 1-6); the rest of init sets up
+    /// oaka, which drives AMD GPUs only (it reads the KFD topology).
     Nvidia,
 }
 
@@ -426,7 +427,8 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
     p.gpu = if has("/dev/kfd")? {
         Gpu::Amd
     } else if has("/dev/nvidiactl")? {
-        println!("  NVIDIA GPUs (/dev/nvidiactl, no /dev/kfd): --gpus all; oaka's GPU checks will fail here");
+        println!("  NVIDIA GPUs (/dev/nvidiactl, no /dev/kfd): --gpus all, launch only");
+        s.total = 6;
         Gpu::Nvidia
     } else {
         bail!("{nick} has neither /dev/kfd (AMD) nor /dev/nvidiactl (NVIDIA): no GPUs for a worker");
@@ -562,6 +564,11 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
         Some("created" | "exited") => r.run(&p.docker(&["start", &p.container]))?,
         Some(other) => bail!("{} exists but is {other}; resolve it by hand", p.container),
         None => r.run(&p.docker_run_argv()?)?,
+    }
+    if p.gpu == Gpu::Nvidia {
+        let shell = p.docker(&["exec", "-it", &p.container, "bash"]);
+        println!("done (NVIDIA: launched only). enter with:\n  {}", show(&shell));
+        return Ok(p);
     }
 
     s.next("install packages");

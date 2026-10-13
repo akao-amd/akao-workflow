@@ -184,6 +184,10 @@ fn init_runs_nvidia_boxes_with_gpus_all() {
     assert!(out.contains("NVIDIA GPUs"), "{out}");
     assert!(out.contains(" run --rm -d --gpus all '--ipc=host'"), "{out}");
     assert!(!out.contains("--device=/dev/kfd"), "{out}");
+    // Launched only: no setup steps, a shell to enter.
+    assert!(out.contains("[6/6] container"), "{out}");
+    assert!(!out.contains("[7/"), "{out}");
+    assert!(out.contains("docker --context fakebox exec -it akao_gb bash"), "{out}");
     let (code, out) = sb.akao("init", &args, &[]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains(" run --rm -d --privileged"), "{out}");

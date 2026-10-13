@@ -292,8 +292,8 @@ Steps 3, 7, 8 and 9 are skipped together by `--skip-setup`.
 -e TERM=tmux-256color --ipc=host --shm-size=32g`.  On NVIDIA (`NVIDIA_RUN_SKELETON`, the
 flags of a hand-run GB300 container): `--rm -d --gpus all --ipc=host --shm-size=32g
 --ulimit memlock=-1 --ulimit stack=67108864 --cap-add SYS_NICE` and the same four `-e`;
-mounts, workdir and env below are the same.  oaka reads the KFD topology, so on NVIDIA its
-GPU checks fail (step 12 reports it; never fatal).
+mounts, workdir and env below are the same.  An NVIDIA container is only launched: init
+stops after step 6 (the later steps set up oaka, which reads the KFD topology: AMD only).
 Host's `rest` field appends after this, before the image.
 
 Mounts: `model_path:/model`, `docker_sock:/var/run/docker.sock`,
