@@ -79,7 +79,9 @@ host network/IPC, `--shm-size=32g`, ...); it never replaces it.
 
 ## `akao init <nick> <name>`
 
-Brings up `akao_<name>` on `<nick>`:
+Brings up `akao_<name>` on `<nick>`, from `--image` if given, else the host's image in
+hosts.tsv, else `default_image` (an existing container running another image than
+`--image` fails):
 
 1. resolve the nick through `ssh -G` and reach the box's docker; if `akao_<name>` already
    exists, it keeps its image and artifact root, and must mount `/<year>` and `/root` from

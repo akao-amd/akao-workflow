@@ -41,6 +41,10 @@ enum Cmd {
         nick: String,
         /// Container name, without the akao_ prefix
         name: String,
+        /// Image of a new container [default: the host's in hosts.tsv, else config default_image];
+        /// an existing container running another one fails
+        #[arg(long)]
+        image: Option<String>,
         #[command(flatten)]
         flags: InitFlags,
     },
@@ -155,9 +159,14 @@ fn run(cli: Cli) -> Result<()> {
             let runner = exec::Runner::new(dry_run)?;
             cp::run(&state, &runner, &src, &dst)
         }
-        Cmd::Init { nick, name, flags } => {
+        Cmd::Init {
+            nick,
+            name,
+            image,
+            flags,
+        } => {
             let runner = exec::Runner::new(flags.dry_run)?;
-            init::run(&state, &runner, &flags.options(nick, name, None))?;
+            init::run(&state, &runner, &flags.options(nick, name, image))?;
             Ok(())
         }
         Cmd::Mirror {

@@ -127,8 +127,12 @@ impl Sandbox {
     }
 
     fn mirror(&self, args: &[&str], env: &[(&str, &str)]) -> (i32, String) {
+        self.akao("mirror", args, env)
+    }
+
+    fn akao(&self, cmd: &str, args: &[&str], env: &[(&str, &str)]) -> (i32, String) {
         let out = Command::new(env!("CARGO_BIN_EXE_akao"))
-            .arg("mirror")
+            .arg(cmd)
             .args(args)
             .env("AKAO_CONFIG_ROOT", self.root.join("state"))
             .env("AKAO_SSH", self.root.join("bin/ssh"))
@@ -151,6 +155,22 @@ impl Drop for Sandbox {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+#[test]
+fn init_image_overrides_the_hosts_and_must_match_an_existing_container() {
+    let sb = Sandbox::new("init-image");
+    let args = ["fakebox", "m1-fp4-mi355x-atom", "--image", "img:new", "--dry-run"];
+    let (code, out) = sb.akao("init", &args, &[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("\n  image img:new\n"), "{out}");
+    assert!(out.contains(" img:new sleep infinity"), "{out}");
+
+    let year = chrono_year();
+    let old = existing("img:old", &format!("/{year}/ww07/m1-fp4-mi355x-atom"));
+    let (code, out) = sb.akao("init", &args, &[("FAKE_EXISTING", &old)]);
+    assert_ne!(code, 0, "{out}");
+    assert!(out.contains("runs img:old, not the requested img:new"), "{out}");
 }
 
 #[test]
