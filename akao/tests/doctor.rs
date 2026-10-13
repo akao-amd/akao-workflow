@@ -28,12 +28,9 @@ impl Sandbox {
         let deploy = sb.root.join("deploy");
         sb.write(
             "state/config.toml",
-            &format!(
-                "default_image = 'img:tag'\ndeploy_src = '{}'\ndeploy_paths = 'x'\n",
-                deploy.display()
-            ),
+            &format!("deploy_src = '{}'\ndeploy_paths = 'x'\n", deploy.display()),
         );
-        sb.write("state/hosts.tsv", "fakebox\t-\t/m\t-\t/h\n");
+        sb.write("state/hosts.tsv", "fakebox\t/m\t-\t/h\n");
         sb.write(
             "state/.ssh/config",
             "Host fakebox\n    HostName 10.9.8.7\n    User akao\n",

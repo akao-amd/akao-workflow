@@ -19,7 +19,6 @@ pub const DEFAULT_DOCKER_SOCK: &str = "/var/run/docker.sock";
 
 /// Known config keys: (name, default, description). `{year}` expands to the work year.
 pub const KEYS: &[(&str, Option<&str>, &str)] = &[
-    ("default_image", None, "docker image tag for hosts without their own"),
     (
         "deploy_src",
         Some("/{year}"),
@@ -207,8 +206,6 @@ pub fn artifact_root() -> Result<(String, &'static str)> {
 pub struct Host {
     /// ssh Host alias, resolved through ~/.ssh/config.
     pub nick: String,
-    /// Image tag; None means config `default_image`.
-    pub image: Option<String>,
     /// Model directory on the host, mounted as /model.
     pub model_path: String,
     /// Docker socket on the host; None means /var/run/docker.sock.
@@ -219,7 +216,7 @@ pub struct Host {
     pub rest: Option<String>,
 }
 
-pub const HOSTS_HEADER: &str = "# nick\timage\tmodel_path\tdocker_sock\thost_home\trest";
+pub const HOSTS_HEADER: &str = "# nick\tmodel_path\tdocker_sock\thost_home\trest";
 
 impl Host {
     /// host_home without a trailing slash ("" for "/"), to join paths onto.
@@ -265,7 +262,6 @@ impl Host {
         }
         let fields = [
             Some(&self.nick),
-            self.image.as_ref(),
             Some(&self.model_path),
             self.docker_sock.as_ref(),
             Some(&self.host_home),
@@ -303,16 +299,22 @@ pub fn parse_hosts(text: &str) -> Result<Vec<Host>> {
             continue;
         }
         let f: Vec<&str> = line.split('\t').collect();
-        if f.len() < 5 || f.len() > 6 {
-            bail!("line {}: expected 5 or 6 tab-separated columns, got {}", i + 1, f.len());
+        // The old layout had an image column second (`-` or a tag), where model_path now is.
+        if f.len() >= 5 && !f[1].starts_with('/') && f[2].starts_with('/') {
+            bail!(
+                "line {}: hosts.tsv has no image column any more (akao init --image); delete the second column",
+                i + 1
+            );
+        }
+        if f.len() < 4 || f.len() > 5 {
+            bail!("line {}: expected 4 or 5 tab-separated columns, got {}", i + 1, f.len());
         }
         let host = Host {
             nick: f[0].to_string(),
-            image: opt(f[1]),
-            model_path: f[2].to_string(),
-            docker_sock: opt(f[3]),
-            host_home: f[4].to_string(),
-            rest: f.get(5).and_then(|r| opt(r)),
+            model_path: f[1].to_string(),
+            docker_sock: opt(f[2]),
+            host_home: f[3].to_string(),
+            rest: f.get(4).and_then(|r| opt(r)),
         };
         host.validate().with_context(|| format!("line {}", i + 1))?;
         if hosts.iter().any(|h| h.nick == host.nick) {
@@ -328,9 +330,8 @@ pub fn format_hosts(hosts: &[Host]) -> String {
     let mut out = format!("{HOSTS_HEADER}\n");
     for h in hosts {
         out += &format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\n",
             h.nick,
-            dash(&h.image),
             h.model_path,
             dash(&h.docker_sock),
             h.host_home,
@@ -347,7 +348,6 @@ mod tests {
     fn sample() -> Host {
         Host {
             nick: "f19-11".into(),
-            image: None,
             model_path: "/mnt/raid/models".into(),
             docker_sock: Some("/data/docker.sock".into()),
             host_home: "/root/akao".into(),
@@ -365,8 +365,7 @@ mod tests {
 
     #[test]
     fn hosts_dash_and_short_rows() {
-        let h = parse_hosts("h21-4\t-\t/m\t-\t/home/akao\n").unwrap();
-        assert_eq!(h[0].image, None);
+        let h = parse_hosts("h21-4\t/m\t-\t/home/akao\n").unwrap();
         assert_eq!(h[0].docker_sock(), DEFAULT_DOCKER_SOCK);
         assert_eq!(h[0].rest, None);
     }
@@ -389,9 +388,17 @@ mod tests {
     #[test]
     fn hosts_reject_bad_rows() {
         assert!(parse_hosts("a\tb\n").is_err());
-        assert!(parse_hosts("a\t-\trelative\t-\t/h\n").is_err());
-        assert!(parse_hosts("a\t-\t/m\t-\t/h\na\t-\t/m\t-\t/h\n").is_err());
-        assert!(parse_hosts("a\t-\t/m\t-\t/h\t'unterminated\n").is_err());
+        assert!(parse_hosts("a\trelative\t-\t/h\n").is_err());
+        assert!(parse_hosts("a\t/m\t-\t/h\na\t/m\t-\t/h\n").is_err());
+        assert!(parse_hosts("a\t/m\t-\t/h\t'unterminated\n").is_err());
+    }
+
+    #[test]
+    fn hosts_name_the_removed_image_column() {
+        for old in ["a\t-\t/m\t-\t/h\n", "a\timg:tag\t/m\t-\t/h\t--shm-size=64g\n"] {
+            let err = format!("{:#}", parse_hosts(old).unwrap_err());
+            assert!(err.contains("no image column any more"), "{err}");
+        }
     }
 
     #[test]

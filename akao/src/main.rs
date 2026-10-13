@@ -41,10 +41,9 @@ enum Cmd {
         nick: String,
         /// Container name, without the akao_ prefix
         name: String,
-        /// Image of a new container [default: the host's in hosts.tsv, else config default_image];
-        /// an existing container running another one fails
+        /// The container's image (an existing container running another one fails)
         #[arg(long)]
-        image: Option<String>,
+        image: String,
         #[command(flatten)]
         flags: InitFlags,
     },
@@ -113,9 +112,6 @@ enum HostCmd {
         /// Model directory on the host (absolute), mounted as /model
         #[arg(long)]
         model: String,
-        /// Image tag [default: config default_image]
-        #[arg(long)]
-        image: Option<String>,
         /// Docker socket on the host [default: /var/run/docker.sock]
         #[arg(long)]
         sock: Option<String>,
@@ -201,7 +197,7 @@ fn run(cli: Cli) -> Result<()> {
 }
 
 impl InitFlags {
-    fn options(self, nick: String, name: String, image: Option<String>) -> init::Options {
+    fn options(self, nick: String, name: String, image: String) -> init::Options {
         init::Options {
             nick,
             name,
@@ -223,14 +219,12 @@ fn host_cmd(state: &State, cmd: HostCmd) -> Result<()> {
             nick,
             home,
             model,
-            image,
             sock,
             rest,
             force,
         } => {
             let host = Host {
                 nick,
-                image,
                 model_path: model,
                 docker_sock: sock,
                 host_home: home,

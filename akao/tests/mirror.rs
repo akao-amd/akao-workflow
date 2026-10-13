@@ -96,14 +96,14 @@ impl Sandbox {
         put(
             "state/config.toml",
             &format!(
-                "default_image = 'img:default'\ninfx_local = '{}'\ndeploy_src = '{}'\ndeploy_paths = 'x'\n",
+                "infx_local = '{}'\ndeploy_src = '{}'\ndeploy_paths = 'x'\n",
                 infx.display(),
                 root.join("deploy").display()
             ),
             false,
         );
         put("deploy/x", "", false);
-        put("state/hosts.tsv", "fakebox\t-\t/m\t-\t/h\n", false);
+        put("state/hosts.tsv", "fakebox\t/m\t-\t/h\n", false);
         put("state/container_home/.bashrc", "", false);
         // The repo init ships (AKAO_REPO_ROOT): CLAUDE.md with AGENTS.md a link to it.
         put("repo/CLAUDE.md", "# akao-workflow\n", false);
@@ -160,7 +160,7 @@ impl Drop for Sandbox {
 }
 
 #[test]
-fn init_image_overrides_the_hosts_and_must_match_an_existing_container() {
+fn init_takes_its_image_which_an_existing_container_must_run() {
     let sb = Sandbox::new("init-image");
     let args = ["fakebox", "m1-fp4-mi355x-atom", "--image", "img:new", "--dry-run"];
     let (code, out) = sb.akao("init", &args, &[]);
@@ -172,13 +172,21 @@ fn init_image_overrides_the_hosts_and_must_match_an_existing_container() {
     let old = existing("img:old", &format!("/{year}/ww07/m1-fp4-mi355x-atom"));
     let (code, out) = sb.akao("init", &args, &[("FAKE_EXISTING", &old)]);
     assert_ne!(code, 0, "{out}");
-    assert!(out.contains("runs img:old, not the requested img:new"), "{out}");
+    assert!(
+        out.contains("runs img:old, not the requested img:new; pass --image img:old"),
+        "{out}"
+    );
+
+    // No image, no default to fall back on.
+    let (code, out) = sb.akao("init", &["fakebox", "x", "--dry-run"], &[]);
+    assert_ne!(code, 0, "{out}");
+    assert!(out.contains("--image <IMAGE>"), "{out}");
 }
 
 #[test]
 fn init_runs_nvidia_boxes_with_gpus_all() {
     let sb = Sandbox::new("init-nvidia");
-    let args = ["fakebox", "gb", "--dry-run"];
+    let args = ["fakebox", "gb", "--image", "img:tag", "--dry-run"];
     let (code, out) = sb.akao("init", &args, &[("FAKE_NVIDIA", "1")]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("NVIDIA GPUs"), "{out}");
@@ -319,10 +327,10 @@ fn mirror_refuses_before_touching_the_box() {
         assert!(!out.contains("mkdir"), "{out}");
     }
     // A container of that name already runs another image, or mounts another host home.
-    let other = existing("img:default", &root);
+    let other = existing("img:other", &root);
     let (code, out) = sb.mirror(&args, &[("FAKE_GFX", "90500"), ("FAKE_EXISTING", &other)]);
     assert_eq!(code, 1, "{out}");
-    assert!(out.contains("runs img:default, not the requested rocm/atom:1"), "{out}");
+    assert!(out.contains("runs img:other, not the requested rocm/atom:1"), "{out}");
     assert!(!out.contains("mkdir"), "{out}");
     let moved = existing("rocm/atom:1", &root).replace(" /h/", " /h1/");
     let (code, out) = sb.mirror(&args, &[("FAKE_GFX", "90500"), ("FAKE_EXISTING", &moved)]);

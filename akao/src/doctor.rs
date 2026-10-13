@@ -67,7 +67,6 @@ pub fn run() -> Result<()> {
             bail!("1 check failed; the others need AKAO_CONFIG_ROOT");
         }
     };
-    check_config(&mut r, &state);
     let nicks = check_hosts(&mut r, &state);
     check_ssh(&mut r, &state, &nicks);
     check_template(&mut r, &state);
@@ -154,13 +153,6 @@ fn check_controller(r: &mut Report, state: &State) {
             "inferencex",
             format!("{infx} is not a git checkout; akao mirror reads InferenceX configs from it (config infx_local)"),
         ),
-    }
-}
-
-fn check_config(r: &mut Report, state: &State) {
-    match state.get("default_image") {
-        Ok(Some(i)) => r.ok("default_image", i),
-        _ => r.fail("default_image", "unset; akao config set default_image <tag>"),
     }
 }
 

@@ -33,7 +33,7 @@ record is then exactly what ran:
 
 ```bash
 # 004_init_dsv4_exp.sh: a DSV4 worker on n10-17 for the fp4 indexer task (user, 10-09)
-akao init n10-17 dsv4_exp
+akao init n10-17 dsv4_exp --image rocm/sgl-dev:v0.5.21-rocm10-mi35x-20261012
 ```
 
 Which workers exist this week: `grep -hE "akao (init|mirror)" <root>/*.sh`, and
@@ -44,7 +44,7 @@ Which workers exist this week: `grep -hE "akao (init|mirror)" <root>/*.sh`, and
 | Need | How |
 |---|---|
 | a box akao does not know | ask the user its host home and model dir (never guess or probe), then `akao host add <nick> --home <dir> --model <dir>`; `akao host ls` |
-| a new worker, or refresh one | `akao init <nick> <name>` (`--dry-run` first on an unfamiliar box). It makes the home, runs `akao_<name>` with its **artifact root** (`/<year>/<week>/<name>`, or `--artifact-root`) as working directory and `$AKAO_ARTIFACT_ROOT`, ships the worker its own clone of the repo (skills, utils, oaka and its library), installs tools, and ends with the worker's `oaka doctor` report — read it. Init prints the root; an existing container keeps the one it was created with |
+| a new worker, or refresh one | `akao init <nick> <name> --image <tag>` (`--dry-run` first on an unfamiliar box; the image is required, the user's to choose: ask if not given; refreshing a worker takes the image it runs). It makes the home, runs `akao_<name>` with its **artifact root** (`/<year>/<week>/<name>`, or `--artifact-root`) as working directory and `$AKAO_ARTIFACT_ROOT`, ships the worker its own clone of the repo (skills, utils, oaka and its library), installs tools, and ends with the worker's `oaka doctor` report — read it. Init prints the root; an existing container keeps the one it was created with |
 | a worker that reproduces an InferenceX config (another engine than SGLang, e.g. the dashboard's vllm or ATOM entry) | `akao mirror --conf <terms> [--rev <sha>]` to list and preview (gpt-oss entries were retired: the error names the commits to `--rev` before), then `akao mirror <nick> --conf <terms> ...` — the box must have the runner's GPUs. It is `akao init` with the entry's image, plus a brief `mirror/<entry>@<sha>/MIRROR.md` in the worker's root; hand that path to the worker (below) |
 | one worker's results for another to refer to | `akao cp <nick>:ww42/<a>/<NNNN>_<desc> <nick2>:ww42/<b>` (lands inside the destination; merge, never delete) |
 

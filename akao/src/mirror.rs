@@ -921,7 +921,7 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
             name,
             week: opts.week.clone(),
             artifact_root: opts.artifact_root.clone(),
-            image: Some(image),
+            image,
             skip_setup: opts.skip_setup,
         },
     )?;

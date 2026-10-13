@@ -181,9 +181,9 @@ The variable is **required**; every subcommand fails clearly if unset.
 
 ```
 $AKAO_CONFIG_ROOT/
-  config.toml         settings: default_image, deploy_src, deploy_paths (default: none),
+  config.toml         settings: deploy_src, deploy_paths (default: none),
                       infx_repo, infx_local
-  hosts.tsv           one row per remote box (TSV, 5–6 cols)
+  hosts.tsv           one row per remote box (TSV, 4–5 cols)
   container_home/     home template, copied once per akao_<name>
     .local/bin/ssh    ssh wrapper adding -F $AKAO_CONFIG_ROOT/.ssh/config (see Design notes)
   .ssh/config         optional; when present, -F is added to every ssh call
@@ -237,13 +237,14 @@ Loads and saves config and hosts.  `Host.validate()` enforces absolute, plain pa
 `//`, `.`, `..`: init compares them with docker's normalized mount sources), no tabs, and
 valid shlex for `rest`; join paths onto `Host::home()` (no trailing slash).  `state::parse_hosts` / `format_hosts` are the TSV codec.
 
-Hosts TSV columns: `nick  image  model_path  docker_sock  host_home  rest`
+Hosts TSV columns: `nick  model_path  docker_sock  host_home  rest` (no image: init's
+`--image` is required, and a row in the old layout with an image second fails, saying so)
 (`-` in any column means "use the default").
 
 `Host.rest_args()` returns the extra `docker run` arguments as a `Vec<String>` via `shlex`;
 they are appended after the fixed skeleton but before the image in `init`.
 
-### init.rs — `akao init <nick> <name>`
+### init.rs — `akao init <nick> <name> --image <tag>`
 
 Twelve ordered steps, each idempotent (checks before acting).  Unless `--skip-setup`, the
 repo checkout (`$AKAO_REPO_ROOT`, `state::shippable_repo`) is checked before step 1.

@@ -47,8 +47,8 @@ Everything lives in `$AKAO_CONFIG_ROOT` (e.g. `/2026/nocopy/akao-workflow-state`
 
 | File | Content |
 |---|---|
-| `config.toml` | `default_image`, `deploy_src` (default `/<year>`), `deploy_paths` (extra paths under `deploy_src` to ship to every box; none by default: `CLAUDE.md`, the skills, `utils/` and oaka come from the repo), `infx_repo`, `infx_local` (this machine's InferenceX clone, for `akao mirror`; default `/<year>/nocopy/InferenceX`) |
-| `hosts.tsv` | one row per box: `nick image model_path docker_sock host_home rest`; `-` = default |
+| `config.toml` | `deploy_src` (default `/<year>`), `deploy_paths` (extra paths under `deploy_src` to ship to every box; none by default: `CLAUDE.md`, the skills, `utils/` and oaka come from the repo), `infx_repo`, `infx_local` (this machine's InferenceX clone, for `akao mirror`; default `/<year>/nocopy/InferenceX`) |
+| `hosts.tsv` | one row per box: `nick model_path docker_sock host_home rest`; `-` = default (no image: `akao init --image` names it) |
 | `container_home/` | home template, copied once per container to `<host_home>/container_home/akao_<name>` |
 
 The work year and week are not stored: they are today's ISO year and week (`2026`, `ww41`).
@@ -66,7 +66,6 @@ worker, `akao init` pins it into the container (below).
 
 ```bash
 akao config ls
-akao config set default_image rocm/sgl-dev:v0.5.20-rocm10-mi45x-20260930
 akao host add f19-11 --home /root/akao --model /mnt/raid/models
 akao host add h21-4  --home /home/akao --model /data/models --sock /data/docker.sock \
                      --rest '--shm-size=64g -e HF_HOME=/model/hf'
@@ -78,11 +77,11 @@ akao host rm h21-4
 host network/IPC, `--shm-size=32g`, ...; on an NVIDIA box `--gpus all`, IPC, `--shm-size=32g`,
 memlock/stack ulimits, `SYS_NICE`); it never replaces it.
 
-## `akao init <nick> <name>`
+## `akao init <nick> <name> --image <tag>`
 
-Brings up `akao_<name>` on `<nick>`, from `--image` if given, else the host's image in
-hosts.tsv, else `default_image` (an existing container running another image than
-`--image` fails):
+Brings up `akao_<name>` on `<nick>` from `--image`, which is required: there is no default
+image, per host or global.  An existing `akao_<name>` must run that image (else init fails
+and names the one it runs):
 
 1. resolve the nick through `ssh -G`, tell AMD (`/dev/kfd`) from NVIDIA (`/dev/nvidiactl`)
    GPUs (NVIDIA: launch only, init stops after step 6), and reach the box's docker; if `akao_<name>` already
@@ -209,7 +208,7 @@ re-initialized since read their clone instead (oaka falls back to `/<year>/oaka`
 without one), so remove them, after bringing back any profile saved there (`akao cp`).
 
 **3. State.**  `export AKAO_CONFIG_ROOT=<dir>` in the shell profile, then in it:
-`config.toml` (`akao config set default_image ...`), `hosts.tsv` (`akao host add ...`), the
+`config.toml` (`akao config set ...`, all keys have defaults), `hosts.tsv` (`akao host add ...`), the
 home template `container_home/` (dotfiles every worker gets; it must hold the `ssh` wrapper
 `.local/bin/ssh`), and `.ssh/config` with the keys it names, if the boxes need their own ssh
 settings.  TODO(user): how keys reach a new console.

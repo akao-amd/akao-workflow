@@ -82,8 +82,8 @@ pub struct Options {
     pub week: Option<String>,
     /// The worker's artifact root, instead of /<year>/<week>/<name>.
     pub artifact_root: Option<String>,
-    /// Image instead of the host's or the default (`akao mirror`: the entry's).
-    pub image: Option<String>,
+    /// The container's image (`akao mirror`: the entry's).
+    pub image: String,
     pub skip_setup: bool,
 }
 
@@ -112,10 +112,6 @@ impl Plan {
         }
         let name = opts.name.strip_prefix("akao_").unwrap_or(&opts.name);
         let host = state.host(&opts.nick)?;
-        let image = match (&opts.image, &host.image) {
-            (Some(i), _) | (None, Some(i)) => i.clone(),
-            (None, None) => state.require("default_image")?,
-        };
         let year = state::work_year();
         let artifact_root = match (&opts.artifact_root, &opts.week) {
             (Some(_), Some(_)) => bail!("give --week or --artifact-root, not both"),
@@ -137,7 +133,7 @@ impl Plan {
             artifact_root,
             host_container_home: format!("{}/container_home/{container}", host.home()),
             container,
-            image,
+            image: opts.image.clone(),
             gpu: Gpu::Amd,
             year,
             host,
@@ -318,25 +314,19 @@ impl Existing {
     }
 }
 
-/// Make the plan agree with an existing container: its image and artifact root stay what
-/// they were.  An explicit request it cannot satisfy fails before anything changes.
+/// Make the plan agree with an existing container: it must run the requested image, and its
+/// artifact root stays what it was.  A request it cannot satisfy fails before anything changes.
 fn adopt(p: &mut Plan, e: &Existing, opts: &Options) -> Result<()> {
     println!("  {} exists: image {}, artifact root {}", p.container, e.image, e.root);
     let remove = format!("docker --context {} rm -f {}", p.context, p.container);
     if e.image != p.image {
-        if opts.image.is_some() {
-            bail!(
-                "{} runs {}, not the requested {}; pick another name, or remove it first ({remove})",
-                p.container,
-                e.image,
-                p.image
-            );
-        }
-        println!(
-            "  it keeps its image; {} applies to a new container only ({remove})",
-            p.image
+        bail!(
+            "{} runs {}, not the requested {}; pass --image {}, pick another name, or remove it first ({remove})",
+            p.container,
+            e.image,
+            p.image,
+            e.image
         );
-        p.image = e.image.clone();
     }
     let year = e.root.split('/').nth(1).unwrap_or_default();
     if year != p.year {
@@ -707,7 +697,6 @@ mod tests {
         Plan {
             host: Host {
                 nick: "f19-11".into(),
-                image: None,
                 model_path: "/mnt/raid/models".into(),
                 docker_sock: Some("/data/docker.sock".into()),
                 host_home: "/root/akao".into(),
@@ -764,7 +753,7 @@ mod tests {
             name: "exp".into(),
             week: None,
             artifact_root: None,
-            image: None,
+            image: "img:tag".into(),
             skip_setup: false,
         }
     }
@@ -813,23 +802,18 @@ mod tests {
             "truncated output is not a container"
         );
 
-        // Derived root and host image: the container's win.
+        // A derived root: the container's wins; its image must be the requested one.
         let mut p = plan();
         adopt(&mut p, &legacy, &opts()).unwrap();
         assert_eq!(
             (p.image.as_str(), p.artifact_root.as_str()),
             ("img:tag", "/2026/ww40/exp")
         );
-        let mut p = plan();
-        adopt(&mut p, &e, &opts()).unwrap();
-        assert_eq!(p.image, "img:old");
-        // Explicit requests it cannot satisfy fail.
-        let mirror = Options {
-            image: Some("img:tag".into()),
-            ..opts()
-        };
-        let err = adopt(&mut plan(), &e, &mirror).unwrap_err().to_string();
-        assert!(err.contains("runs img:old, not the requested img:tag"), "{err}");
+        let err = adopt(&mut plan(), &e, &opts()).unwrap_err().to_string();
+        assert!(
+            err.contains("runs img:old, not the requested img:tag; pass --image img:old"),
+            "{err}"
+        );
         let week = Options {
             week: Some("ww40".into()),
             ..opts()

@@ -80,7 +80,7 @@ Prerequisites of a real machine, checked where the tools run (workers have the `
 binary but no repo, so these are subcommands, not cargo tests).  Each prints
 `ok`/`warn`/`FAIL` with the fix and exits 1 on any FAIL.
 
-- `akao doctor` (console): `AKAO_CONFIG_ROOT` exported, `default_image`, `hosts.tsv`, the
+- `akao doctor` (console): `AKAO_CONFIG_ROOT` exported, `hosts.tsv`, the
   `ssh` first on PATH honours `$AKAO_CONFIG_ROOT/.ssh/config` (compared with
   `ssh -F <config> -G` for every host, so docker contexts get the same config), home
   template, deploy sources incl. a runnable `oaka/bin/oaka`, docker CLI, the repo checkout
