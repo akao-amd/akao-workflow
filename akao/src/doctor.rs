@@ -140,6 +140,7 @@ fn check_controller(r: &mut Report, state: &State) {
             "claude",
             "the controller agent itself; $AKAO_REPO_ROOT/utils/agent.sh installs it",
         ),
+        ("curl", "akao mirror --dashboard reads the InferenceX dashboard with it"),
     ] {
         match which(tool) {
             Some(p) => r.ok(tool, p.display().to_string()),

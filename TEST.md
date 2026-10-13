@@ -33,7 +33,11 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 - `akao/tests/mirror.rs` runs `akao mirror --dry-run` against a scratch InferenceX repo with
   stand-in ssh (`AKAO_SSH`; `FAKE_GFX` is the box's KFD) and docker (`FAKE_EXISTING` is a
   container that already exists): the commands a bring-up would run, and the refusals
-  (another GPU arch, another image) before any host command.  `mirror.rs`'s unit tests cover
+  (another GPU arch, another image) before any host command.  Its `--dashboard` cases put a
+  stand-in `curl` first on PATH that answers the dashboard's API from canned JSON and a commit's
+  tarball (mid-2026 `.github/configs` layout), with the InferenceX clone removed: the brief's
+  measured points and server arguments, the image of the run, and the refusals (an unknown run,
+  a run without a commit, several matching curves).  `mirror.rs`'s unit tests cover
   both InferenceX layouts (configs at the root; under `inferencex-e2e/` with
   `configs/deprecated/`), the launcher's script lookup and the brief.
 - A profile for another ROCm version: `oaka check` aborts, and scripts compiled for 10.1
@@ -87,7 +91,7 @@ cargo tests).  Each prints
   template, deploy sources incl. a runnable `oaka/bin/oaka`, docker CLI, the repo checkout
   init ships (`$AKAO_REPO_ROOT`: FAIL if missing, warn if dirty); for a controller (warn
   only): its artifact
-  root, `tmux`, `claude`, the InferenceX clone mirror reads.
+  root, `tmux`, `claude`, `curl` (`mirror --dashboard`), the InferenceX clone mirror reads.
 - `oaka doctor` (worker; `akao init` runs it as its last step): ROCm version, library
   profiles resolve, GPUs visible, InferenceX checked out and importable, the serving engines
   python finds (SGLang, vllm, ATOM; FAIL only when none), the artifact root, the worker's

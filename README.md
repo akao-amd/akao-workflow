@@ -47,7 +47,7 @@ Everything lives in `$AKAO_CONFIG_ROOT` (e.g. `/2026/nocopy/akao-workflow-state`
 
 | File | Content |
 |---|---|
-| `config.toml` | `deploy_src` (default `/<year>`), `deploy_paths` (extra paths under `deploy_src` to ship to every box; none by default: `CLAUDE.md`, the skills, `utils/` and oaka come from the repo), `infx_repo`, `infx_local` (this machine's InferenceX clone, for `akao mirror`; default `/<year>/nocopy/InferenceX`) |
+| `config.toml` | `deploy_src` (default `/<year>`), `deploy_paths` (extra paths under `deploy_src` to ship to every box; none by default: `CLAUDE.md`, the skills, `utils/` and oaka come from the repo), `infx_repo`, `infx_local` (this machine's InferenceX clone, for `akao mirror`; default `/<year>/nocopy/InferenceX`), `infx_dashboard` and `infx_snapshot` (the dashboard and the GitHub tarball URL of a commit, for `akao mirror --dashboard`) |
 | `hosts.tsv` | one row per box: `nick model_path docker_sock host_home rest`; `-` = default (no image: `akao init --image` names it) |
 | `container_home/` | home template, copied once per container to `<host_home>/container_home/akao_<name>` |
 
@@ -159,6 +159,28 @@ akao mirror m15-21 --conf gptoss,mi355,atom --rev 4699ab81a^ --week ww42   # bri
   name, or the legacy bash script the runner's launcher picks, with `benchmark_lib.sh`).
 - Then brief the worker's agent as usual and point it at `MIRROR.md`; the worker skill's
   "Mirror workers" section says what it does with it.
+
+**From the dashboard** (`--dashboard`): mirror what [the InferenceX dashboard](https://inferencex.semianalysis.com)
+measured, with no clone and no revision to pick:
+
+```bash
+akao mirror --dashboard --conf mi355,vllm                                # its MI355X vllm curves
+akao mirror --dashboard --conf gptoss,mi355,vllm                         # preview the brief
+akao mirror n10-17 vllm_mirror --dashboard --conf gptoss,mi355,vllm      # bring it up
+```
+
+- `--conf` terms match the dashboard's curves, named like entries from its model key,
+  precision, GPU, framework and variants (`gptoss120b-fp4-mi355x-vllm`, `...-mtp`,
+  `...-agentic`), or its display model (`gpt-oss-120b`).
+- The curve's latest run is mirrored (`--run <id>` for another one it lists: the dashboard
+  shows each sequence's latest run, so one curve may hold several runs and images;
+  `--date YYYY-MM-DD` for its data as of a day).  The container gets the image that run
+  ran, and the brief comes from the commit it ran at, fetched as a tarball from GitHub
+  (often a PR branch's commit that no clone of main has).
+- `MIRROR.md` adds the run, its PR, every measured point (output tok/s as oaka reports it,
+  per GPU, median TTFT/TPOT) and, per distinct server, the arguments it really ran with,
+  from its stored log; `dashboard/` holds the rows (`rows.json`) and those logs.
+- Reads the dashboard's public API with `curl` (`akao doctor` checks it); every URL is printed.
 
 ## `akao cp <src> <dst>`
 

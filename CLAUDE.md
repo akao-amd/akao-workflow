@@ -148,11 +148,14 @@ akao/
     state.rs          State: config.toml + hosts.tsv + home template
     init.rs           `akao init` — 10-step container bring-up
     mirror.rs         `akao mirror` — InferenceX entry (git, serde_yaml) -> init + brief
+    dashboard.rs      `akao mirror --dashboard` — the dashboard's API (curl, serde_json):
+                      curve, run, commit snapshot, measured points, server logs
     cp.rs             `akao cp`  — cross-host path copy via tar | ssh
     doctor.rs         `akao doctor` — console prerequisites (ssh wrapper, state, deploy,
                       controller: artifact root, tmux, claude, InferenceX clone)
   tests/doctor.rs     akao doctor against a scratch AKAO_CONFIG_ROOT
-  tests/mirror.rs     akao mirror --dry-run vs. a scratch InferenceX repo, stand-in ssh/docker
+  tests/mirror.rs     akao mirror --dry-run vs. a scratch InferenceX repo, stand-in ssh/docker;
+                      --dashboard vs. a stand-in curl serving the API and a commit's tarball
 oaka/
   Cargo.toml
   README.md           worker reference, next to the library it describes
@@ -182,7 +185,7 @@ The variable is **required**; every subcommand fails clearly if unset.
 ```
 $AKAO_CONFIG_ROOT/
   config.toml         settings: deploy_src, deploy_paths (default: none),
-                      infx_repo, infx_local
+                      infx_repo, infx_local, infx_dashboard, infx_snapshot
   hosts.tsv           one row per remote box (TSV, 4–5 cols)
   container_home/     home template, copied once per akao_<name>
     .local/bin/ssh    ssh wrapper adding -F $AKAO_CONFIG_ROOT/.ssh/config (see Design notes)
@@ -320,6 +323,17 @@ then `init::run` with `Options.image` = the entry's image, and the brief
 scripts srt recipes name.  `recipe_facts` lists what oaka cannot reproduce; labelled, not refused:
 the worker agent studies the recipe.  Git reads run directly (not `Runner`): local, read-only,
 many.  Without a nick it prints the listing or the brief and changes nothing.
+
+`--dashboard` swaps the source, not the tail (`Source`: tree, entry, image, evidence).
+`dashboard::crawl` reads the dashboard's public API (`infx_dashboard`; `curl`, each URL printed,
+read-only, so it runs under `--dry-run` too): `views/options` (display model of a model key),
+`availability` (`Curve`s, named like entries), `benchmarks` (rows, grouped into `Run`s per GitHub
+Actions run and image, newest first), `workflow-info` (the run's `head_sha`, changelog config keys
+and PR), `server-log` (one per distinct server: the arguments it ran with).  The commit's tree is a
+tarball (`infx_snapshot`, `{sha}`) extracted into a scratch dir, read by `Repo::snapshot`; the
+entry is the changelog's config key, else the curve's own; the image is the one the run ran.
+Row ids arrive as strings, numbers as either (`dashboard::n`).  Mid-2026 trees keep configs in
+`.github/configs/` with `benchmarks/` at the top (`entry_root`).
 
 ### cp.rs — `akao cp <src> <dst>`
 

@@ -1,4 +1,5 @@
 mod cp;
+mod dashboard;
 mod doctor;
 mod exec;
 mod init;
@@ -50,10 +51,14 @@ enum Cmd {
     /// A worker for one InferenceX benchmark config (init with its image, plus a brief)
     ///
     /// Reads the entries of InferenceX's *master.yaml from this machine's clone (config
-    /// infx_local) at --rev.  Without a host, lists the matches or previews the brief.
+    /// infx_local) at --rev; or, with --dashboard, what the InferenceX dashboard measured
+    /// (config infx_dashboard): a curve's latest run, its image, the commit it ran at and
+    /// the server logs.  Without a host, lists the matches or previews the brief.
     #[command(
         after_help = "Examples:\n  akao mirror --conf gptoss,mi355 --rev 4699ab81a^     # list\n  \
-                            akao mirror h21-17 --conf gptoss,mi355,atom --rev 4699ab81a^"
+                            akao mirror h21-17 --conf gptoss,mi355,atom --rev 4699ab81a^\n  \
+                            akao mirror --dashboard --conf mi355,vllm             # the dashboard's curves\n  \
+                            akao mirror n10-17 --dashboard --conf gptoss,mi355,vllm"
     )]
     Mirror {
         /// Host nick to bring the worker up on; omit to list or preview
@@ -65,8 +70,17 @@ enum Cmd {
         #[arg(long, value_name = "TERMS")]
         conf: String,
         /// InferenceX revision to read the configs at
-        #[arg(long, default_value = "HEAD")]
+        #[arg(long, default_value = "HEAD", conflicts_with = "dashboard")]
         rev: String,
+        /// Mirror what the InferenceX dashboard measured, not a config of this machine's clone
+        #[arg(long)]
+        dashboard: bool,
+        /// The dashboard's data as of this date (YYYY-MM-DD) [default: the latest]
+        #[arg(long, value_name = "YYYY-MM-DD", requires = "dashboard")]
+        date: Option<String>,
+        /// The curve's GitHub Actions run to mirror [default: its latest]
+        #[arg(long, value_name = "ID", requires = "dashboard")]
+        run: Option<String>,
         #[command(flatten)]
         flags: InitFlags,
     },
@@ -170,6 +184,9 @@ fn run(cli: Cli) -> Result<()> {
             name,
             conf,
             rev,
+            dashboard,
+            date,
+            run,
             flags,
         } => {
             if nick.is_none() && (flags.week.is_some() || flags.artifact_root.is_some() || flags.skip_setup) {
@@ -182,6 +199,9 @@ fn run(cli: Cli) -> Result<()> {
                 &mirror::Options {
                     conf,
                     rev: Some(rev),
+                    dashboard,
+                    date,
+                    run,
                     nick,
                     name,
                     week: flags.week,

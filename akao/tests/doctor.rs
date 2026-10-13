@@ -164,6 +164,8 @@ fn controller_prerequisites_are_reported() {
     assert!(out.contains("artifact root  /"), "{out}");
     assert!(out.contains("(derived)"), "{out}");
     assert!(out.contains(" inferencex "), "{out}");
+    // What akao mirror --dashboard reads the dashboard with.
+    assert!(out.contains("ok    curl           /"), "{out}");
     // A relative AKAO_ARTIFACT_ROOT is an error everywhere akao reads it.
     let out = Command::new(env!("CARGO_BIN_EXE_akao"))
         .arg("doctor")

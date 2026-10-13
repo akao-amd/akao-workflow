@@ -202,7 +202,16 @@ Where the how lives: worker reference (commands, plan and profile fields)
   judgment, and a number oaka's client cannot measure the same way must be labelled, not
   silently compared with the dashboard.
 
-### Decisions on the repo as the control plane (ww42)
+#- **A mirror can start from the dashboard (`--dashboard`) rather than a revision.**  It reads
+  the dashboard's public API: the curve's latest run, the image that ran, the InferenceX commit
+  the run ran at (fetched from GitHub as a tarball, not from a clone) and the stored server logs.
+  Why: what a user wants reproduced is a point they saw, and its provenance is the dashboard's,
+  not a config at some revision: picking a `--rev` for a retired entry is guesswork, the run's
+  commit is often a PR branch's that no clone of main has, a config's image can differ from the
+  one that ran, and only the logs say what arguments the servers really got.  One run per mirror:
+  a curve shows each sequence's latest run, and one container runs one image.
+
+## Decisions on the repo as the control plane (ww42)
 
 - **The skills and the agents' orientation live in this repo and are read in place from a
   checkout (`$AKAO_REPO_ROOT`), not copied under `/<year>`.**  Why: they change with the

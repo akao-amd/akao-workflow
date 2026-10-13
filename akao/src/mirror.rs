@@ -7,7 +7,13 @@
 //! `mirror/<entry>@<sha12>/`: MIRROR.md (what the entry is, its points, what oaka can and
 //! cannot reproduce), entry.yaml (its text, comments kept) and the files that define its
 //! server at that revision.  Turning those into an oaka profile is the worker agent's job.
+//!
+//! With `--dashboard` the source is what the InferenceX dashboard measured instead
+//! (`dashboard.rs`): a curve's latest run, the image it ran, the commit it ran at (a
+//! snapshot from GitHub, so this machine's clone plays no part), its measured points and
+//! the server logs with the arguments each server really had, all added to the brief.
 
+use crate::dashboard::{self, Evidence};
 use crate::exec::{q, Runner, ESCALATE};
 use crate::init;
 use crate::state::State;
@@ -18,12 +24,18 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// InferenceX frameworks oaka has an engine for.
-const ENGINES: &[&str] = &["sglang", "vllm", "atom"];
+pub const ENGINES: &[&str] = &["sglang", "vllm", "atom"];
 
 pub struct Options {
     /// Comma-separated terms naming one entry, e.g. "gptoss,mi355,atom".
     pub conf: String,
     pub rev: Option<String>,
+    /// Read the dashboard (what it measured) instead of the clone at `rev`.
+    pub dashboard: bool,
+    /// Dashboard only: its snapshot as of this date (YYYY-MM-DD).
+    pub date: Option<String>,
+    /// Dashboard only: this GitHub Actions run of the curve instead of its latest.
+    pub run: Option<String>,
     /// Bring it up on this host; None lists or previews the matches only.
     pub nick: Option<String>,
     pub name: Option<String>,
@@ -51,16 +63,43 @@ fn git(dir: &str, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// The InferenceX clone at one commit.
+/// The InferenceX tree at one commit: this machine's clone read through git, or a snapshot
+/// of the commit extracted into a directory (the dashboard's source).
 pub struct Repo {
     pub dir: String,
     pub sha: String,
     /// "<sha7> <date> <subject>"
     pub title: String,
     pub files: Vec<String>,
+    /// Files are read from `dir` itself (a snapshot), not through git.
+    plain: bool,
 }
 
 impl Repo {
+    /// The extracted tree of commit `sha` in `dir`.
+    pub fn snapshot(dir: &Path, sha: &str, title: String) -> Result<Repo> {
+        let mut files = Vec::new();
+        let mut todo = vec![dir.to_path_buf()];
+        while let Some(d) = todo.pop() {
+            for e in fs::read_dir(&d).with_context(|| format!("reading {}", d.display()))? {
+                let e = e?;
+                if e.file_type()?.is_dir() {
+                    todo.push(e.path());
+                } else if let Ok(rel) = e.path().strip_prefix(dir) {
+                    files.push(rel.to_string_lossy().into_owned());
+                }
+            }
+        }
+        files.sort();
+        Ok(Repo {
+            dir: dir.display().to_string(),
+            sha: sha.to_string(),
+            title,
+            files,
+            plain: true,
+        })
+    }
+
     pub fn open(dir: &str, rev: &str) -> Result<Repo> {
         let sha = git(
             dir,
@@ -84,10 +123,15 @@ impl Repo {
             sha,
             title,
             files,
+            plain: false,
         })
     }
 
     pub fn show(&self, path: &str) -> Result<String> {
+        if self.plain {
+            let p = Path::new(&self.dir).join(path);
+            return fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()));
+        }
         git(&self.dir, &["show", &format!("{}:{path}", self.sha)])
     }
 }
@@ -677,7 +721,15 @@ pub struct Target {
     pub host_archs: Option<Vec<String>>,
 }
 
-pub fn brief(repo: &Repo, e: &Entry, pts: &[Point], files: &[Shipped], notes: &[String], t: Option<&Target>) -> String {
+pub fn brief(
+    repo: &Repo,
+    e: &Entry,
+    pts: &[Point],
+    files: &[Shipped],
+    notes: &[String],
+    t: Option<&Target>,
+    dash: Option<&Evidence>,
+) -> String {
     let mut m = String::new();
     let rel = |p: &str| p.strip_prefix(&e.root).unwrap_or(p).to_string();
     m += &format!("# Mirror of InferenceX `{}`\n\n", e.name);
@@ -696,9 +748,31 @@ pub fn brief(repo: &Repo, e: &Entry, pts: &[Point], files: &[Shipped], notes: &[
         .map(|en| format!("oaka engine `{en}`"))
         .unwrap_or_else(|| "no oaka engine".into());
     m += "| | |\n|---|---|\n";
+    if let Some(d) = dash {
+        m += &format!(
+            "| dashboard | {} ({}): curve `{}`, as measured on {} |\n",
+            d.base,
+            d.display,
+            d.curve.name(),
+            d.run.date
+        );
+        m += &format!("| run | [{}]({}) {} |\n", d.run.id, d.run.url, d.run_name);
+        if let Some(desc) = &d.description {
+            let pr = d.pr.as_deref().map(|p| format!(" ({p})")).unwrap_or_default();
+            m += &format!("| change | {}{pr} |\n", desc.replace('\n', " ").replace('|', "\\|"));
+        }
+    }
     m += &format!("| InferenceX | `{}` ({}) |\n", repo.sha, repo.title);
     m += &format!("| config | `{}` |\n", e.file);
-    m += &format!("| image | `{}` |\n", e.field("image"));
+    match dash.and_then(|d| d.run.image.as_deref()) {
+        Some(img) if img != e.field("image") => {
+            m += &format!(
+                "| image | `{img}` (what ran; the config says `{}`) |\n",
+                e.field("image")
+            )
+        }
+        _ => m += &format!("| image | `{}` |\n", e.field("image")),
+    }
     m += &format!(
         "| model | `{}` (Hugging Face id; the weights are wherever this box keeps them, e.g. under /model) |\n",
         e.field("model")
@@ -761,8 +835,17 @@ pub fn brief(repo: &Repo, e: &Entry, pts: &[Point], files: &[Shipped], notes: &[
     for c in caveats {
         m += &format!("- {c}\n");
     }
+    if let Some(d) = dash {
+        m += &measured(d);
+    }
 
     m += "\n## Files\n\n- `entry.yaml`: the entry as written in the config, comments included\n";
+    if let Some(d) = dash {
+        m += "- `dashboard/rows.json`: the run's rows as the dashboard's API sent them, every metric\n";
+        for l in &d.logs {
+            m += &format!("- `{}`: the server log of {}\n", l.file, l.label);
+        }
+    }
     for f in files {
         m += &format!("- `recipes/{}`", rel(&f.path));
         let facts = recipe_facts(f);
@@ -784,6 +867,55 @@ pub fn brief(repo: &Repo, e: &Entry, pts: &[Point], files: &[Shipped], notes: &[
           `#` provenance, prove it with a one-point fixed-seq plan, then run the entry's points.\n\
           Report every point oaka cannot reproduce as it stands (the caveats above), rather than\n\
           bending the plan to fit.\n";
+    if dash.is_some() {
+        m += "\nThe points were measured: report each of yours next to the dashboard's number above.\n\
+              Where the server log's arguments and the recipe disagree, the log is what ran.\n";
+    }
+    m
+}
+
+/// MIRROR.md's section of what the dashboard measured, and with which server arguments.
+fn measured(d: &Evidence) -> String {
+    let mut m = format!(
+        "\n## Measured on the dashboard\n\nRun {} on {}.  `out tok/s` is the dashboard's output tok/s per GPU times the \
+         GPUs, the number oaka's fixed-seq summary calls `output_tok_s`.\n\n",
+        d.run.id, d.run.date
+    );
+    m += "| isl/osl | tp | ep | dp-attn | gpus | conc | out tok/s | out tok/s/gpu | median ttft ms | median tpot ms | id |\n";
+    m += "|---|---|---|---|---|---|---|---|---|---|---|\n";
+    let f = |v: Option<f64>, p: usize| v.map(|x| format!("{x:.p$}")).unwrap_or_else(|| "-".into());
+    for p in &d.points {
+        m += &format!(
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            p.seq,
+            p.tp,
+            p.ep,
+            if p.dp_attn { "yes" } else { "-" },
+            p.gpus,
+            p.conc,
+            f(p.out_tok_s, 1),
+            f(p.out_per_gpu, 1),
+            f(p.median_ttft_ms, 1),
+            f(p.median_tpot_ms, 2),
+            p.id
+        );
+    }
+    if !d.others.is_empty() {
+        m += "\nOther runs on this curve (another sequence or image; `akao mirror --dashboard --run <id>`):\n\n";
+        for o in &d.others {
+            m += &format!("- {o}\n");
+        }
+    }
+    m += "\n### Server arguments, from the stored logs\n\n";
+    if d.logs.is_empty() {
+        m += "The dashboard has no server log for these points.\n";
+    }
+    for l in &d.logs {
+        match &l.args {
+            Some(a) => m += &format!("{} (`{}`):\n\n```\n{a}\n```\n\n", l.label, l.file),
+            None => m += &format!("{} (`{}`): no argument line found; read the log.\n\n", l.label, l.file),
+        }
+    }
     m
 }
 
@@ -836,17 +968,29 @@ fn listing(found: &[&Entry]) -> String {
         .join("\n")
 }
 
-pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
+/// What a mirror is made of: the InferenceX tree, its entry, the image to run and, from the
+/// dashboard, what was measured with it.
+struct Source {
+    repo: Repo,
+    entry: Entry,
+    image: String,
+    dash: Option<Evidence>,
+    /// The dashboard's snapshot of the tree, removed when the mirror is done.
+    _scratch: Option<dashboard::Scratch>,
+}
+
+/// The entry `--conf` names in this machine's clone at `--rev`; None when only listed.
+fn from_git(state: &State, opts: &Options) -> Result<Option<Source>> {
     let dir = state.require("infx_local")?;
     let rev = opts.rev.clone().unwrap_or_else(|| "HEAD".into());
     let repo = Repo::open(&dir, &rev)?;
     println!("InferenceX {dir} at {}", repo.title);
-    let (all, notes) = entries(&repo)?;
+    let (mut all, notes) = entries(&repo)?;
     for n in &notes {
         println!("  note: {n}");
     }
     let found = select(&all, &opts.conf);
-    let e = match found.as_slice() {
+    let name = match found.as_slice() {
         [] => {
             let first = opts.conf.split(',').next().unwrap_or_default().trim();
             // Retired entries live in history: the commits that last changed the first term.
@@ -856,7 +1000,8 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
                 .map(|l| {
                     let lines: Vec<String> = l.lines().map(|x| format!("    {}", x.chars().take(100).collect::<String>())).collect();
                     format!(
-                        "\n  the latest commits that changed {first:?} in a master config (retired? try --rev <one of them>^):\n{}",
+                        "\n  the latest commits that changed {first:?} in a master config (retired? try --rev <one of them>^, \
+                         or --dashboard for what the dashboard measured):\n{}",
                         lines.join("\n")
                     )
                 })
@@ -870,7 +1015,7 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
                     listing(rest)
                 );
             }
-            *one
+            one.name.clone()
         }
         _ if opts.nick.is_none() => {
             println!(
@@ -878,7 +1023,7 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
                 found.len(),
                 listing(&found)
             );
-            return Ok(());
+            return Ok(None);
         }
         _ => bail!(
             "--conf {} matches {} entries; add a term:\n{}",
@@ -887,11 +1032,125 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
             listing(&found)
         ),
     };
+    let entry = all.swap_remove(all.iter().position(|e| e.name == name).unwrap());
+    let image = entry.get("image").context("the entry has no image")?;
+    Ok(Some(Source {
+        repo,
+        entry,
+        image,
+        dash: None,
+        _scratch: None,
+    }))
+}
+
+/// The dashboard curve `--conf` names, its run's commit and the entry that run measured;
+/// None when only listed.
+fn from_dashboard(state: &State, opts: &Options) -> Result<Option<Source>> {
+    let ask = dashboard::Ask {
+        conf: &opts.conf,
+        date: opts.date.as_deref(),
+        run: opts.run.as_deref(),
+    };
+    let Some(crawled) = dashboard::crawl(state, &ask)? else {
+        if opts.nick.is_some() {
+            bail!(
+                "--conf {} matches several dashboard curves (listed above); add a term",
+                opts.conf
+            );
+        }
+        return Ok(None);
+    };
+    let (mut all, notes) = entries(&crawled.repo)?;
+    for n in &notes {
+        println!("  note: {n}");
+    }
+    let d = crawled.evidence;
+    let c = &d.curve;
+    let fits = |e: &Entry| {
+        e.gpu().as_deref() == Some(c.hardware.as_str())
+            && e.field("framework") == c.framework
+            && e.field("precision") == c.precision
+    };
+    // The run's changelog names the entries it measured; without one, the curve's own.
+    let mut pick: Vec<usize> = (0..all.len())
+        .filter(|i| d.config_keys.contains(&all[*i].name) && fits(&all[*i]))
+        .collect();
+    if pick.is_empty() {
+        let agentic = c.kind != "single_turn";
+        pick = (0..all.len())
+            .filter(|i| {
+                let e = &all[*i];
+                fits(e)
+                    && norm(&c.model).starts_with(&norm(&e.field("model-prefix")))
+                    && e.name.contains("agentic") == agentic
+                    && (c.spec == "none") != e.name.contains(&format!("-{}", c.spec))
+            })
+            .collect();
+    }
+    let i = match pick.as_slice() {
+        [i] => *i,
+        [] => bail!(
+            "run {}'s commit {} has no config entry for {} (its changelog names: {})",
+            d.run.id,
+            crawled.repo.sha,
+            c.name(),
+            if d.config_keys.is_empty() {
+                "nothing".to_string()
+            } else {
+                d.config_keys.join(" ")
+            }
+        ),
+        many => bail!(
+            "run {}'s commit has several entries for {}: {}",
+            d.run.id,
+            c.name(),
+            many.iter().map(|i| all[*i].name.as_str()).collect::<Vec<_>>().join(" ")
+        ),
+    };
+    let entry = all.swap_remove(i);
+    println!(
+        "  entry {} in {} at {}",
+        entry.name,
+        entry.file,
+        &crawled.repo.sha[..12.min(crawled.repo.sha.len())]
+    );
+    let image = match &d.run.image {
+        Some(img) => img.clone(),
+        None => entry
+            .get("image")
+            .context("neither the dashboard nor the entry names an image")?,
+    };
+    Ok(Some(Source {
+        repo: crawled.repo,
+        entry,
+        image,
+        dash: Some(d),
+        _scratch: Some(crawled.scratch),
+    }))
+}
+
+pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
+    let source = if opts.dashboard {
+        from_dashboard(state, opts)?
+    } else {
+        from_git(state, opts)?
+    };
+    let Some(Source {
+        repo,
+        entry,
+        image,
+        dash,
+        _scratch,
+    }) = source
+    else {
+        return Ok(());
+    };
+    let e = &entry;
     let pts = points(e);
     let (files, missing) = recipe_files(&repo, e, &pts)?;
 
     let Some(nick) = &opts.nick else {
-        print!("\n{}", brief(&repo, e, &pts, &files, &missing, None));
+        print!("\n{}", brief(&repo, e, &pts, &files, &missing, None, dash.as_ref()));
         return Ok(());
     };
     let problems = e.problems();
@@ -919,7 +1178,6 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
         );
     }
     println!("  {nick}: {} as {} needs", summarize(&archs), e.field("runner"));
-    let image = e.get("image").context("the entry has no image")?;
     let p = init::run(
         state,
         r,
@@ -944,7 +1202,8 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
         host_archs: Some(archs),
     };
     let rel = brief_dir(e, &repo);
-    let local = write_brief(&repo, e, &pts, &files, &missing, &target, &rel)?;
+    let md = brief(&repo, e, &pts, &files, &missing, Some(&target), dash.as_ref());
+    let local = write_brief(&md, e, &files, &rel, dash.as_ref())?;
     let dest = format!("{}{}", p.host.home(), p.artifact_root);
     let tar: Vec<String> = ["tar", "-C"]
         .iter()
@@ -970,16 +1229,9 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
     Ok(())
 }
 
-/// The brief in a local scratch dir, as `<scratch>/<rel>/...`; returns the scratch dir.
-fn write_brief(
-    repo: &Repo,
-    e: &Entry,
-    pts: &[Point],
-    files: &[Shipped],
-    missing: &[String],
-    t: &Target,
-    rel: &str,
-) -> Result<PathBuf> {
+/// The brief (MIRROR.md's text `md`) in a local scratch dir, as `<scratch>/<rel>/...`;
+/// returns the scratch dir.
+fn write_brief(md: &str, e: &Entry, files: &[Shipped], rel: &str, dash: Option<&Evidence>) -> Result<PathBuf> {
     let scratch = std::env::temp_dir().join(format!("akao-mirror-{}", std::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     let dir = scratch.join(rel);
@@ -987,11 +1239,17 @@ fn write_brief(
         fs::create_dir_all(path.parent().unwrap())?;
         fs::write(path, text).with_context(|| format!("writing {}", path.display()))
     };
-    write(&dir.join("MIRROR.md"), &brief(repo, e, pts, files, missing, Some(t)))?;
+    write(&dir.join("MIRROR.md"), md)?;
     write(&dir.join("entry.yaml"), &e.raw)?;
     for f in files {
         let rel = f.path.strip_prefix(&e.root).unwrap_or(&f.path);
         write(&dir.join("recipes").join(rel), &f.text)?;
+    }
+    if let Some(d) = dash {
+        write(&dir.join("dashboard/rows.json"), &d.rows_json)?;
+        for l in &d.logs {
+            write(&dir.join(&l.file), &l.text)?;
+        }
     }
     Ok(scratch)
 }
@@ -1312,6 +1570,30 @@ m2-fp8-mi355x-sglang-disagg:
     }
 
     #[test]
+    fn a_snapshot_reads_like_the_clone() {
+        let dir = std::env::temp_dir().join(format!("akao-snapshot-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let put = |rel: &str, text: &str| {
+            let p = dir.join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, text).unwrap();
+        };
+        put(".github/configs/amd-master.yaml", MASTER);
+        put("benchmarks/single_node/fixed_seq_len/m1_fp4_mi355x.sh", VLLM_SH);
+        put("benchmarks/benchmark_lib.sh", "run_benchmark_serving() { :; }\n");
+        let repo = Repo::snapshot(&dir, "abc1234def", "t".into()).unwrap();
+        assert_eq!(repo.files[0], ".github/configs/amd-master.yaml");
+        let (all, _) = entries(&repo).unwrap();
+        let e = all.iter().find(|e| e.name == "m1-fp4-mi355x-vllm").unwrap();
+        assert_eq!(e.root, "");
+        let (files, notes) = recipe_files(&repo, e, &points(e)).unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(files[0].path, "benchmarks/single_node/fixed_seq_len/m1_fp4_mi355x.sh");
+        assert_eq!(files[0].text, VLLM_SH);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_brief_says_what_oaka_cannot_reproduce() {
         let (f, old, _) = Fixture::new("brief");
         let repo = f.repo(&old);
@@ -1320,7 +1602,7 @@ m2-fp8-mi355x-sglang-disagg:
             let e = all.iter().find(|e| e.name == n).unwrap();
             let pts = points(e);
             let (files, notes) = recipe_files(&repo, e, &pts).unwrap();
-            brief(&repo, e, &pts, &files, &notes, None)
+            brief(&repo, e, &pts, &files, &notes, None, None)
         };
         let vllm = brief_of("m1-fp4-mi355x-vllm");
         assert!(vllm.contains(&format!("| InferenceX | `{old}`")), "{vllm}");

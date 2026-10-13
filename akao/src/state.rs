@@ -40,6 +40,16 @@ pub const KEYS: &[(&str, Option<&str>, &str)] = &[
         Some("/{year}/nocopy/InferenceX"),
         "this machine's InferenceX clone, which `akao mirror` reads its configs from",
     ),
+    (
+        "infx_dashboard",
+        Some("https://inferencex.semianalysis.com"),
+        "the InferenceX dashboard, whose public API `akao mirror --dashboard` reads",
+    ),
+    (
+        "infx_snapshot",
+        Some("https://codeload.github.com/SemiAnalysisAI/InferenceX/tar.gz/{sha}"),
+        "a tarball of InferenceX at commit {sha}: the tree a dashboard run ran at",
+    ),
 ];
 
 pub struct State {

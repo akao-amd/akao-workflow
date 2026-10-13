@@ -55,7 +55,10 @@ read an A-B-A, the bisect journey). The rules that are yours to keep:
 **When:** the controller says you are a mirror worker (`akao mirror` brought you up with an
 InferenceX entry's image). Start with `<root>/mirror/<entry>@<sha>/MIRROR.md`; next to it are
 the entry's text (`entry.yaml`) and the files that define its server at that InferenceX
-revision (`recipes/`). The image may have no SGLang at all.
+revision (`recipes/`). The image may have no SGLang at all. A mirror from the dashboard also
+has `dashboard/`: the measured rows and, per server, the log whose argument line (shown in
+MIRROR.md) is what really ran — where it and the recipe disagree, follow the log, and say so
+in the profile's provenance.
 
 1. **Find what serves here.** `oaka doctor`: GPUs, ROCm, engines. Locate the weights of the
    entry's model (an HF id) on this box, usually under `/model`; never download them
@@ -77,7 +80,8 @@ revision (`recipes/`). The image may have no SGLang at all.
    ISL/OSL), plus gsm8k as the accuracy gate where sgl-eval is installed.
 4. **Run the entry's points**: one plan per server setting, `isl_osl` and `conc` from
    MIRROR.md's table, `range_ratio` from the recipe (0.8 unless it says otherwise).
-5. **Report** per point: the numbers, which profile, and whether the point is comparable
+5. **Report** per point: the numbers, which profile, the dashboard's number for it when
+   MIRROR.md has one (its "Measured on the dashboard" table), and whether the point is comparable
    with the dashboard. It is *not* when MIRROR.md lists something oaka's client cannot do
    (chat-templated prompts, client flags like `--trust-remote-code`), data parallelism, or a
    setup script you did not run — say so next to the number; never adjust the plan to hide

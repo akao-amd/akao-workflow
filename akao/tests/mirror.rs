@@ -347,6 +347,220 @@ fn mirror_refuses_before_touching_the_box() {
     assert!(!out.contains("[fakebox]"), "{out}");
 }
 
+/// curl: answers the dashboard's API from $FAKE_DASH, and the snapshot of a commit as a
+/// GitHub tarball (`InferenceX-<sha>/...`).
+const FAKE_CURL: &str = r#"#!/bin/sh
+for a; do url=$a; done
+echo "$url" >>"$FAKE_DASH/urls"
+case "$url" in
+    */api/v1/views/options) cat "$FAKE_DASH/options.json" ;;
+    */api/v1/availability) cat "$FAKE_DASH/availability.json" ;;
+    */api/v1/benchmarks\?*) cat "$FAKE_DASH/benchmarks.json" ;;
+    */api/v1/workflow-info\?*) cat "$FAKE_DASH/workflow.json" ;;
+    */api/v1/server-log-files\?*) echo '["results/server.log"]' ;;
+    */api/v1/server-log\?*) id=${url#*id=}; cat "$FAKE_DASH/log_${id%%&*}.txt" ;;
+    */snap/*) tar -C "$FAKE_DASH/snap" -czf - "InferenceX-${url##*/}" ;;
+    *) echo "curl: (22) The requested URL returned error: 404" >&2; exit 22 ;;
+esac
+"#;
+
+const DASH_SHA: &str = "770268c51c2b368e9d669096041c003520f14c3a";
+
+/// The dashboard of M1 (key m1): a vllm curve with two runs (222, the latest, at DASH_SHA
+/// with image vllm/vllm:2; 111, an older sequence), its -mtp variant and an ATOM curve.
+/// The snapshot has the mid-2026 layout, configs under .github/; the sandbox's clone is
+/// removed, so nothing can come from it.
+fn dashboard(sb: &Sandbox) -> Vec<(&'static str, String)> {
+    let dash = sb.root.join("dash");
+    let put = |rel: &str, text: &str| {
+        let p = dash.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+    };
+    put("options.json", r#"{"models": [{"name": "M1-120B", "dbKeys": ["m1"]}]}"#);
+    let avail = |fw: &str, spec: &str, isl: u32, date: &str| {
+        format!(
+            r#"{{"model": "m1", "isl": {isl}, "osl": 1024, "precision": "fp4", "hardware": "mi355x", "framework": "{fw}",
+                "spec_method": "{spec}", "disagg": false, "benchmark_type": "single_turn", "date": "{date}"}}"#
+        )
+    };
+    put(
+        "availability.json",
+        &format!(
+            "[{}, {}, {}, {}]",
+            avail("vllm", "none", 1024, "2026-06-05"),
+            avail("vllm", "none", 8192, "2026-03-09"),
+            avail("vllm", "mtp", 1024, "2026-06-05"),
+            avail("atom", "none", 1024, "2026-06-05")
+        ),
+    );
+    let row = |id: &str, run: &str, date: &str, image: &str, isl: u32, tp: u32, conc: u32| {
+        format!(
+            r#"{{"id": "{id}", "hardware": "mi355x", "framework": "vllm", "model": "m1", "precision": "fp4",
+                "spec_method": "none", "disagg": false, "benchmark_type": "single_turn", "isl": {isl}, "osl": 1024,
+                "decode_tp": {tp}, "decode_ep": 1, "decode_dp_attention": false, "num_decode_gpu": {tp}, "conc": {conc},
+                "image": "{image}", "date": "{date}", "curve_run_started_at": "{date} 18:00:00+00",
+                "run_url": "https://github.com/o/InferenceX/actions/runs/{run}/attempts/1",
+                "metrics": {{"output_tput_per_gpu": {}, "median_ttft": 0.04, "median_tpot": 0.005}}}}"#,
+            200 * conc / tp
+        )
+    };
+    put(
+        "benchmarks.json",
+        &format!(
+            "[{}, {}, {}, {}]",
+            row("12", "222", "2026-06-05", "vllm/vllm:2", 1024, 1, 8),
+            row("11", "222", "2026-06-05", "vllm/vllm:2", 1024, 1, 4),
+            row("13", "222", "2026-06-05", "vllm/vllm:2", 1024, 8, 4),
+            row("21", "111", "2026-03-09", "vllm/vllm:1", 8192, 1, 4)
+        ),
+    );
+    put(
+        "workflow.json",
+        &format!(
+            r#"{{"runs": [{{"github_run_id": "222", "name": "Run Sweep - m1 bump"}}],
+                "changelogs": [{{"workflow_run_id": "222", "config_keys": ["m1-fp4-mi355x-vllm"],
+                                 "description": "Bump M1 vLLM", "pr_link": "https://github.com/o/InferenceX/pull/7"}}],
+                "configs": [],
+                "runConfigs": [{{"github_run_id": "222", "hardware": "mi355x", "head_sha": "{DASH_SHA}"}}]}}"#
+        ),
+    );
+    put(
+        "log_11.txt",
+        "banner\n(APIServer pid=1) INFO non-default args: {'max_model_len': 2304}\n",
+    );
+    put(
+        "log_13.txt",
+        "(APIServer pid=1) INFO non-default args: {'max_model_len': 2304, 'tensor_parallel_size': 8}\n",
+    );
+    let snap = format!("snap/InferenceX-{DASH_SHA}");
+    put(
+        &format!("{snap}/.github/configs/amd-master.yaml"),
+        &MASTER
+            .replace("m1-fp4-mi355x-atom", "m1-fp4-mi355x-vllm")
+            .replace("rocm/atom:1", "vllm/vllm:old")
+            .replace("framework: atom", "framework: vllm"),
+    );
+    put(
+        &format!("{snap}/benchmarks/single_node/fixed_seq_len/m1_fp4_mi355x.sh"),
+        "export VLLM_ROCM_USE_AITER=1\nvllm serve $MODEL --max-model-len $MAX_MODEL_LEN\n",
+    );
+    put(
+        &format!("{snap}/benchmarks/benchmark_lib.sh"),
+        "run_benchmark_serving() { :; }\n",
+    );
+    let bin = sb.root.join("bin/curl");
+    fs::write(&bin, FAKE_CURL).unwrap();
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut cfg = fs::read_to_string(sb.root.join("state/config.toml")).unwrap();
+    cfg += "infx_dashboard = 'https://dash.example'\ninfx_snapshot = 'https://dash.example/snap/{sha}'\n";
+    fs::write(sb.root.join("state/config.toml"), cfg).unwrap();
+    fs::remove_dir_all(sb.root.join("infx")).unwrap();
+    vec![("FAKE_DASH", dash.display().to_string())]
+}
+
+#[test]
+fn dashboard_mirror_previews_what_was_measured() {
+    let sb = Sandbox::new("dash-preview");
+    let env = dashboard(&sb);
+    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let (code, out) = sb.mirror(&["--dashboard", "--conf", "m1,vllm"], &env);
+    assert_eq!(code, 0, "{out}");
+    for want in [
+        "also matched (name another part to pick one of them):\n  m1-fp4-mi355x-vllm-mtp",
+        "curve m1-fp4-mi355x-vllm (M1-120B), latest 2026-06-05",
+        "run 222 (2026-06-05, image vllm/vllm:2): 3 points, 1024/1024",
+        "also on the dashboard: run 111 (2026-03-09, image vllm/vllm:1): 1 points, 8192/1024 (--run 111 for it)",
+        // The run's own commit, as a snapshot in the .github/configs layout.
+        &format!("GET https://dash.example/snap/{DASH_SHA}"),
+        &format!("entry m1-fp4-mi355x-vllm in .github/configs/amd-master.yaml at {}", &DASH_SHA[..12]),
+        "| run | [222](https://github.com/o/InferenceX/actions/runs/222/attempts/1) Run Sweep - m1 bump |",
+        "| change | Bump M1 vLLM (https://github.com/o/InferenceX/pull/7) |",
+        "| image | `vllm/vllm:2` (what ran; the config says `vllm/vllm:old`) |",
+        // Every point with its numbers; out tok/s is per GPU times the GPUs.
+        "| 1024/1024 | 1 | 1 | - | 1 | 4 | 800.0 | 800.0 | 40.0 | 5.00 | 11 |",
+        "| 1024/1024 | 1 | 1 | - | 1 | 8 | 1600.0 | 1600.0 | 40.0 | 5.00 | 12 |",
+        "| 1024/1024 | 8 | 1 | - | 8 | 4 | 800.0 | 100.0 | 40.0 | 5.00 | 13 |",
+        // One server log per distinct server, its lowest concurrency.
+        "1024/1024 tp 1 ep 1 (`dashboard/server_1024-1024_tp1_c4_11.log`):\n\n```\nnon-default args: {'max_model_len': 2304}\n```",
+        "non-default args: {'max_model_len': 2304, 'tensor_parallel_size': 8}",
+        "- `recipes/benchmarks/single_node/fixed_seq_len/m1_fp4_mi355x.sh`",
+        "report each of yours next to the dashboard's number above",
+    ] {
+        assert!(out.contains(want), "{want:?} not in {out}");
+    }
+    let urls = fs::read_to_string(sb.root.join("dash/urls")).unwrap();
+    assert!(urls.contains("/api/v1/benchmarks?model=M1-120B\n"), "{urls}");
+    assert!(urls.contains("/api/v1/workflow-info?date=2026-06-05\n"), "{urls}");
+    assert!(!urls.contains("log?id=12"), "one log per server: {urls}");
+    assert!(
+        urls.contains("server-log?id=11&file=results%2Fserver.log&download=1"),
+        "{urls}"
+    );
+
+    // Two curves of the fewest parts: every match listed, nothing picked.
+    let (code, out) = sb.mirror(&["--dashboard", "--conf", "m1,mi355"], &env);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("3 dashboard curves match; add a term"), "{out}");
+    assert!(!out.contains("benchmarks?"), "{out}");
+}
+
+#[test]
+fn dashboard_mirror_brings_up_the_image_that_ran() {
+    let sb = Sandbox::new("dash-up");
+    let env = dashboard(&sb);
+    let mut env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    env.push(("FAKE_GFX", "90500 90500"));
+    let args = [
+        "fakebox",
+        "vllm_mirror",
+        "--dashboard",
+        "--conf",
+        "m1,mi355,vllm",
+        "--week",
+        "ww07",
+        "--dry-run",
+    ];
+    let (code, out) = sb.mirror(&args, &env);
+    assert_eq!(code, 0, "{out}");
+    let root = format!("/{}/ww07/vllm_mirror", chrono_year());
+    for want in [
+        "fakebox: 2 x gfx950 as mi355x needs".to_string(),
+        "--name=akao_vllm_mirror".to_string(),
+        "vllm/vllm:2 sleep infinity".to_string(),
+        format!(
+            "done. the worker's brief: {root}/mirror/m1-fp4-mi355x-vllm@{}/MIRROR.md",
+            &DASH_SHA[..12]
+        ),
+    ] {
+        assert!(out.contains(&want), "{want:?} not in {out}");
+    }
+
+    // Another run: the dashboard names no commit for it, so nothing is touched.
+    let mut other = args.to_vec();
+    other.extend(["--run", "111"]);
+    let (code, out) = sb.mirror(&other, &env);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("names no InferenceX commit for run 111"), "{out}");
+    assert!(!out.contains("mkdir"), "{out}");
+    let mut other = args.to_vec();
+    other.extend(["--run", "999"]);
+    let (code, out) = sb.mirror(&other, &env);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("run 999 is not among m1-fp4-mi355x-vllm's runs"), "{out}");
+    // A host with several matching curves: refused, not guessed.
+    let (code, out) = sb.mirror(&["fakebox", "--dashboard", "--conf", "m1", "--dry-run"], &env);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("matches several dashboard curves"), "{out}");
+    assert!(!out.contains("mkdir"), "{out}");
+    // The dashboard is one source, --rev the other.
+    let (code, out) = sb.mirror(&["--dashboard", "--rev", "x", "--conf", "m1"], &env);
+    assert_eq!(code, 2, "{out}");
+    let (code, out) = sb.mirror(&["--date", "2026-06-05", "--conf", "m1"], &env);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("--dashboard"), "{out}");
+}
+
 /// The ISO year akao uses (its work year), without a date crate in the test.
 fn chrono_year() -> String {
     let out = Command::new("date").arg("+%G").output().unwrap();
