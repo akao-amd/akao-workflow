@@ -9,6 +9,8 @@ use anyhow::{bail, Context, Result};
 use std::path::Path;
 
 /// The fixed part of every `docker run`; per-host mounts and rest args follow it.
+/// `docker run` before the mounts, per [`Gpu`]: AMD's devices, or NVIDIA's `--gpus all`
+/// (the flags of a hand-run GB300 container, ww42).
 const DOCKER_RUN_SKELETON: &[&str] = &[
     "run",
     "--rm",
@@ -35,6 +37,38 @@ const DOCKER_RUN_SKELETON: &[&str] = &[
     "--ipc=host",
     "--shm-size=32g",
 ];
+const NVIDIA_RUN_SKELETON: &[&str] = &[
+    "run",
+    "--rm",
+    "-d",
+    "--gpus",
+    "all",
+    "--ipc=host",
+    "--shm-size=32g",
+    "--ulimit",
+    "memlock=-1",
+    "--ulimit",
+    "stack=67108864",
+    "--cap-add",
+    "SYS_NICE",
+    "-e",
+    "PYTHONPATH=",
+    "-e",
+    "LANG=C.UTF-8",
+    "-e",
+    "LC_ALL=C.UTF-8",
+    "-e",
+    "TERM=tmux-256color",
+];
+
+/// The GPUs of a host, told by its device nodes in step 1.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Gpu {
+    /// `/dev/kfd`
+    Amd,
+    /// `/dev/nvidiactl`; oaka does not drive these (it reads the KFD topology).
+    Nvidia,
+}
 
 const APT_PACKAGES: &[&str] = &["vim", "less", "tmux", "docker.io", "git"];
 
@@ -60,6 +94,8 @@ pub struct Plan {
     /// akao_<name>
     pub container: String,
     pub image: String,
+    /// Whose GPUs the host has; AMD until step 1 has looked.
+    pub gpu: Gpu,
     pub year: String,
     /// The worker's artifact root, /<year>/<week>/<name> unless given: its working directory
     /// and $AKAO_ARTIFACT_ROOT in the container; the same path under <host_home> on the host.
@@ -101,6 +137,7 @@ impl Plan {
             host_container_home: format!("{}/container_home/{container}", host.home()),
             container,
             image,
+            gpu: Gpu::Amd,
             year,
             host,
         })
@@ -117,7 +154,10 @@ impl Plan {
     }
 
     pub fn docker_run_argv(&self) -> Result<Vec<String>> {
-        let mut argv = self.docker(DOCKER_RUN_SKELETON);
+        let mut argv = self.docker(match self.gpu {
+            Gpu::Amd => DOCKER_RUN_SKELETON,
+            Gpu::Nvidia => NVIDIA_RUN_SKELETON,
+        });
         let h = &self.host;
         argv.push(format!("--name={}", self.container));
         for (src, dst) in [
@@ -382,6 +422,15 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
     let cfg = r.query(&r.ssh_config_argv(nick))?;
     let hostname = cfg.lines().find_map(|l| l.strip_prefix("hostname ")).unwrap_or(nick);
     println!("  {nick} -> {hostname}");
+    let has = |dev: &str| -> Result<bool> { Ok(r.probe(&r.ssh_argv(nick, &format!("test -e {dev}")))?.is_some()) };
+    p.gpu = if has("/dev/kfd")? {
+        Gpu::Amd
+    } else if has("/dev/nvidiactl")? {
+        println!("  NVIDIA GPUs (/dev/nvidiactl, no /dev/kfd): --gpus all; oaka's GPU checks will fail here");
+        Gpu::Nvidia
+    } else {
+        bail!("{nick} has neither /dev/kfd (AMD) nor /dev/nvidiactl (NVIDIA): no GPUs for a worker");
+    };
     // Before anything changes on the host: docker must answer (through the endpoint: no
     // context yet), and an existing container decides the image and the artifact root.
     let endpoint = format!("ssh://{nick}");
@@ -660,6 +709,7 @@ mod tests {
             context: "f19-11".into(),
             container: "akao_exp".into(),
             image: "img:tag".into(),
+            gpu: Gpu::Amd,
             year: "2026".into(),
             artifact_root: "/2026/ww41/exp".into(),
             host_container_home: "/root/akao/container_home/akao_exp".into(),
@@ -680,6 +730,25 @@ mod tests {
         // rest args come after the skeleton but before the image.
         assert!(argv.ends_with(&["--shm-size=64g", "-e", "FOO=a b", "img:tag", "sleep", "infinity"].map(String::from)));
         assert!(argv.contains(&"PYTHONPATH=".to_string()));
+    }
+
+    #[test]
+    fn docker_run_on_nvidia() {
+        let p = Plan {
+            gpu: Gpu::Nvidia,
+            ..plan()
+        };
+        let argv = p.docker_run_argv().unwrap();
+        let s = argv.join(" ");
+        assert!(s.starts_with(
+            "docker --context f19-11 run --rm -d --gpus all --ipc=host --shm-size=32g \
+             --ulimit memlock=-1 --ulimit stack=67108864 --cap-add SYS_NICE"
+        ));
+        assert!(!s.contains("kfd") && !s.contains("--privileged") && !s.contains("--network=host"));
+        // Mounts, root and rest as on AMD.
+        assert!(s.contains("-v /mnt/raid/models:/model") && s.contains("-v /root/akao/container_home/akao_exp:/root"));
+        assert!(s.contains("-w /2026/ww41/exp"));
+        assert!(argv.ends_with(&["--shm-size=64g", "-e", "FOO=a b", "img:tag", "sleep", "infinity"].map(String::from)));
     }
 
     fn opts() -> Options {

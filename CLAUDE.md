@@ -248,7 +248,8 @@ they are appended after the fixed skeleton but before the image in `init`.
 Twelve ordered steps, each idempotent (checks before acting).  Unless `--skip-setup`, the
 repo checkout (`$AKAO_REPO_ROOT`, `state::shippable_repo`) is checked before step 1.
 
-1. Resolve nick via `ssh -G` (verifies ssh connectivity); `docker -H ssh://<nick> version`
+1. Resolve nick via `ssh -G` (verifies ssh connectivity); the GPU vendor (`Gpu`) from the
+   host's `/dev/kfd` (AMD) or `/dev/nvidiactl` (NVIDIA), neither fails; `docker -H ssh://<nick> version`
    (fails loudly: the `ssh` wrapper, see Design notes); `ps -a` tells a missing container
    from an unreadable one; an existing `akao_<name>` is inspected (`Existing`: id, image,
    workdir, mounts, env): it keeps its image and artifact root (`adopt`), and anything it
@@ -288,7 +289,11 @@ Steps 3, 7, 8 and 9 are skipped together by `--skip-setup`.
 **docker run skeleton**: `--rm -d --privileged --ulimit nofile=1048576 --network=host
 --device=/dev/kfd --device=/dev/dri --group-add video --cap-add=SYS_PTRACE
 --security-opt seccomp=unconfined -e PYTHONPATH= -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8
--e TERM=tmux-256color --ipc=host --shm-size=32g`.
+-e TERM=tmux-256color --ipc=host --shm-size=32g`.  On NVIDIA (`NVIDIA_RUN_SKELETON`, the
+flags of a hand-run GB300 container): `--rm -d --gpus all --ipc=host --shm-size=32g
+--ulimit memlock=-1 --ulimit stack=67108864 --cap-add SYS_NICE` and the same four `-e`;
+mounts, workdir and env below are the same.  oaka reads the KFD topology, so on NVIDIA its
+GPU checks fail (step 12 reports it; never fatal).
 Host's `rest` field appends after this, before the image.
 
 Mounts: `model_path:/model`, `docker_sock:/var/run/docker.sock`,

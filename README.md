@@ -75,7 +75,8 @@ akao host rm h21-4
 ```
 
 `rest` is appended to the fixed `docker run` skeleton (`--rm -d --privileged`, devices,
-host network/IPC, `--shm-size=32g`, ...); it never replaces it.
+host network/IPC, `--shm-size=32g`, ...; on an NVIDIA box `--gpus all`, IPC, `--shm-size=32g`,
+memlock/stack ulimits, `SYS_NICE`); it never replaces it.
 
 ## `akao init <nick> <name>`
 
@@ -83,7 +84,8 @@ Brings up `akao_<name>` on `<nick>`, from `--image` if given, else the host's im
 hosts.tsv, else `default_image` (an existing container running another image than
 `--image` fails):
 
-1. resolve the nick through `ssh -G` and reach the box's docker; if `akao_<name>` already
+1. resolve the nick through `ssh -G`, tell AMD (`/dev/kfd`) from NVIDIA (`/dev/nvidiactl`)
+   GPUs, and reach the box's docker; if `akao_<name>` already
    exists, it keeps its image and artifact root, and must mount `/<year>` and `/root` from
    where hosts.tsv says (a request it cannot satisfy fails here, before the host is touched)
 2. create the artifact root under `<host_home>` and `<host_home>/container_home` on the host

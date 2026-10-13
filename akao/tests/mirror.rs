@@ -22,14 +22,16 @@ const MASTER: &str = "m1-fp4-mi355x-atom:
       - { tp: 1, conc-start: 4, conc-end: 8 }
 ";
 
-/// ssh: `-G` resolves; the KFD read answers $FAKE_GFX; `test -d` (the container home) fails.
+/// ssh: `-G` resolves; the KFD read answers $FAKE_GFX; `test -d` (the container home) fails;
+/// with $FAKE_NVIDIA set the box has no /dev/kfd (its /dev/nvidiactl answers like any probe).
 const FAKE_SSH: &str = r#"#!/bin/sh
 if [ "$1" = -G ]; then echo "hostname fakebox.example"; exit 0; fi
 case "$*" in
     *kfd/topology*) echo "Welcome to fakebox 2026"; for v in $FAKE_GFX; do echo "OAKA_GFX=$v"; done ;;
     *"test -d"*) exit 1 ;;
+    *"test -e /dev/kfd"*) [ -z "$FAKE_NVIDIA" ] ;;
 esac
-exit 0
+exit $?
 "#;
 
 /// docker: unreachable when $FAKE_DOCKER_DOWN is set; $FAKE_EXISTING describes an existing
@@ -171,6 +173,20 @@ fn init_image_overrides_the_hosts_and_must_match_an_existing_container() {
     let (code, out) = sb.akao("init", &args, &[("FAKE_EXISTING", &old)]);
     assert_ne!(code, 0, "{out}");
     assert!(out.contains("runs img:old, not the requested img:new"), "{out}");
+}
+
+#[test]
+fn init_runs_nvidia_boxes_with_gpus_all() {
+    let sb = Sandbox::new("init-nvidia");
+    let args = ["fakebox", "gb", "--dry-run"];
+    let (code, out) = sb.akao("init", &args, &[("FAKE_NVIDIA", "1")]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("NVIDIA GPUs"), "{out}");
+    assert!(out.contains(" run --rm -d --gpus all '--ipc=host'"), "{out}");
+    assert!(!out.contains("--device=/dev/kfd"), "{out}");
+    let (code, out) = sb.akao("init", &args, &[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains(" run --rm -d --privileged"), "{out}");
 }
 
 #[test]
