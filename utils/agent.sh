@@ -252,13 +252,7 @@ setup_codex_model_catalog() {
     # gpt-5-codex-2025-09-15"), while the gpt-6.x deployments accept it, so the
     # built-in entries stay as they are.
 
-    # npm installs only this machine's platform package (arm64 on a GB300 tray).
-    local pkg
-    case "$(uname -m)" in
-        aarch64 | arm64) pkg="codex-linux-arm64/vendor/aarch64-unknown-linux-musl" ;;
-        *) pkg="codex-linux-x64/vendor/x86_64-unknown-linux-musl" ;;
-    esac
-    local codex_bin="${INSTALL_DIR}/node_modules/@openai/${pkg}/bin/codex"
+    local codex_bin="${INSTALL_DIR}/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
     local catalog_file="$HOME/.codex/model_catalog.json"
 
     if [[ ! -f "$codex_bin" ]]; then
