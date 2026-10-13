@@ -77,9 +77,10 @@ Where the how lives: worker reference (commands, plan and profile fields)
   ww42 with hermetic tests (a stand-in package in a scratch git repo); only sglang has a
   recipe so far (AITER/Triton recipes wait for the user).
 - Mirror and engines (ww42 weekend): `akao mirror`, profiles for vllm and ATOM, pinned
-  artifact roots.  Hermetic tests only (stand-in vllm/ATOM servers, a scratch InferenceX
-  repo, stand-in ssh/docker); the dry run against real boxes resolved hosts, GPUs and
-  commands; no mirrored image has been started yet.
+  artifact roots.  Hermetic tests (stand-in vllm/ATOM servers, a scratch InferenceX repo,
+  stand-in ssh/docker/curl).  First real mirror 2026-10-13: `--dashboard` brought up the
+  dashboard's gpt-oss-120b MI355X vllm run on n10-17 (vllm/vllm-openai-rocm:v0.22.0; it
+  needed the entrypoint override); no plan has run in a mirror yet.
 
 ### Decisions
 
