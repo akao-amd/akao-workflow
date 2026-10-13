@@ -5,9 +5,10 @@ use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-/// Shell prelude: escalate with passwordless sudo if the login is not root.
+/// Shell prelude: escalate with passwordless sudo if the login is not root and has it;
+/// otherwise write as the login (a box whose dirs it owns; elsewhere the write fails loudly).
 /// Prepend to remote scripts; use `$S cmd` afterwards.
-pub const ESCALATE: &str = r#"if [ "$(id -u)" -eq 0 ]; then S=; else S="sudo -n"; fi; "#;
+pub const ESCALATE: &str = r#"if [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null; then S="sudo -n"; else S=; fi; "#;
 
 /// Shell-quote a single token. Falls back to the raw string if quoting fails.
 pub fn q(s: &str) -> String {
@@ -151,6 +152,33 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `$S` under ESCALATE for a login of uid `uid` whose `sudo -n` exits `sudo`.
+    fn escalate_as(uid: u32, sudo: i32) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = std::env::temp_dir().join(format!("akao-escalate-{uid}-{sudo}-{}", std::process::id()));
+        std::fs::create_dir_all(&bin).unwrap();
+        for (name, body) in [("id", format!("echo {uid}")), ("sudo", format!("exit {sudo}"))] {
+            let f = bin.join(name);
+            std::fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let out = Command::new("sh")
+            .args(["-c", &format!("{ESCALATE}echo \"[$S]\"")])
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&bin);
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn escalate_uses_sudo_only_when_it_works() {
+        assert_eq!(escalate_as(0, 0), "[]");
+        assert_eq!(escalate_as(1000, 0), "[sudo -n]");
+        // No passwordless sudo (a GB300 box): write as the login.
+        assert_eq!(escalate_as(1000, 1), "[]");
+    }
 
     #[test]
     fn ssh_script_is_one_quoted_arg() {

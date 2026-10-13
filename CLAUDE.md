@@ -212,7 +212,7 @@ Central primitive: wraps subprocess execution.  Every command is echoed before i
 Under `--dry-run`, mutating commands are printed only; probes (`?`) still run.
 
 ```rust
-pub const ESCALATE: &str = ...;  // sudo -n when not root; use as "$S cmd"
+pub const ESCALATE: &str = ...;  // sudo -n when not root and it works; use as "$S cmd"
 pub fn q(s: &str) -> String      // shell-quote one token
 pub fn show(argv: &[String])     // shell-quote an argv for display
 
@@ -341,8 +341,9 @@ in the container).
 - **Merge, never mirror**: no `--delete` anywhere.  Remote `/2026` dirs are subsets of
   the local superset; deleting would wipe work from other boxes.
 - **Escalation**: remote `/2026` and `container_home` are root-owned (written by root
-  containers).  A non-root ssh login (e.g. `akao`) uses `sudo -n` — passwordless or it
-  fails loudly.  Boxes where the login is already root skip sudo automatically.
+  containers).  A non-root ssh login (e.g. `akao`) uses `sudo -n` when it is passwordless;
+  without it, writes run as the login (a box where it owns `<host_home>`, e.g. the GB300
+  trays) and fail loudly where it does not.  A root login skips sudo.
 - **docker sees ssh only through PATH**: docker's `ssh://` contexts run plain `ssh` from
   PATH and cannot be given `-F`, so with a custom config directory docker would silently
   use `~/.ssh/config` (wrong login user, unknown hosts).  The fix is a wrapper named `ssh`

@@ -119,7 +119,8 @@ before this has no variable: its working directory is its root (to pin one, `doc
 survive, anything installed into the image's own filesystem does not).
 
 Every step reuses what exists, so re-running init resumes a half-done worker.
-Host-side writes use `sudo -n` when the ssh login is not root.
+Host-side writes use `sudo -n` when the ssh login is not root and has passwordless sudo,
+else run as the login (fine where it owns `<host_home>`).
 
 Flags: `--dry-run` (probes run, changes are only printed), `--skip-setup` (skip steps 3, 7, 8 and 9),
 `--week wwNN` or `--artifact-root <dir>`.
@@ -175,7 +176,7 @@ akao cp n10-17:ww42/hello/0001_probe /tmp/                      # -> /tmp/0001_p
 - Like `cp -a`: the source's basename lands *inside* the destination directory, which is
   created if missing.  Files are overwritten; nothing is deleted (merge, never mirror).
 - `tar | ssh tar`; written files are owned root:root, through `sudo -n` on a box whose ssh
-  login is not root.  `--dry-run` prints the commands only.
+  login is not root (without passwordless sudo: as the login, owned by it).  `--dry-run` prints the commands only.
 
 `$AKAO_SSH` overrides the ssh command akao uses (e.g. `ssh -F ~/.ssh/other_config`); docker's
 own ssh transport for the context still uses plain `ssh`.

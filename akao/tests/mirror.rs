@@ -223,7 +223,10 @@ fn mirror_brings_up_the_entrys_image_with_a_brief() {
         "ln -sf /root/akao-workflow/oaka/bin/oaka /usr/local/bin/oaka".to_string(),
         "rocm/atom:1 sleep infinity".to_string(),
         "[mirror] brief".to_string(),
-        format!("[fakebox] if [ \"$(id -u)\" -eq 0 ]; then S=; else S=\"sudo -n\"; fi; $S mkdir -p /h{root}"),
+        format!(
+            "[fakebox] if [ \"$(id -u)\" -ne 0 ] && sudo -n true 2>/dev/null; then S=\"sudo -n\"; else S=; fi; \
+             $S mkdir -p /h{root}"
+        ),
         format!(
             "done. the worker's brief: {root}/mirror/m1-fp4-mi355x-atom@{}/MIRROR.md",
             &sb.rev[..12]
