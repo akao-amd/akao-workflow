@@ -265,8 +265,7 @@ repo checkout (`$AKAO_REPO_ROOT`, `state::shippable_repo`) is checked before ste
    `ssh` wrapper (see Design notes).
 6. `docker run` the container (reuses if running; starts if stopped; fails on other states,
    and when its id is not the one step 1 judged: created, removed or replaced meanwhile)
-7. Install apt packages (incl. git, which step 8 needs), skipped if all present; fatal only
-   when git or tmux is still missing (`APT_NEEDED`), the rest warn (a box without apt mirrors)
+7. Install apt packages (incl. git, which step 8 needs), skipped if all present
 8. The worker's clone of this repo at `/root/akao-workflow` (`state::WORKER_REPO`; the
    container gets `AKAO_REPO_ROOT` pointing there): `git bundle create - --branches --tags`
    on the console piped into the container, then `repo_sync_script`: clone the first time

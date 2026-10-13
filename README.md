@@ -95,8 +95,7 @@ hosts.tsv, else `default_image` (an existing container running another image tha
 4. copy the home template, unless that container's home already exists
 5. create docker context `<nick>` (`host=ssh://<nick>`) if missing, then `docker context use` it
 6. `docker run` the container, unless it already runs
-7. in the container: `apt install vim less tmux docker.io git`, unless all are there; when
-   apt fails, only a missing git or tmux stops init (the others are warned about)
+7. in the container: `apt install vim less tmux docker.io git`, unless all are there
 8. the worker's own clone of this repo at `/root/akao-workflow` (`$AKAO_REPO_ROOT` in the
    container): the console's branches go over as a git bundle (no network, unpushed
    commits included); the first time it is cloned, later fetched as `console/main` and
