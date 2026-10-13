@@ -18,7 +18,6 @@ The following subsections define subcommands that akao supports.  Ideally it fol
 - Purpose: Initialize a remote container (as a worker) with basic setups.
 - State
   - Strings
-    - **default docker image tag**
     - **current working year**. e.g. "2026".
     - **current working week in the year**. e.g. "ww39".
   - Skills for agents: `skills/` in this repo, read from the repo
