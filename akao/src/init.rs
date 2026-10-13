@@ -321,6 +321,13 @@ impl Existing {
     }
 }
 
+/// Whether a path starts with a /<year>/ directory, e.g. /2025/ww52/x.
+fn looks_like_year_root(root: &str) -> bool {
+    root.split('/')
+        .nth(1)
+        .is_some_and(|y| y.len() == 4 && y.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// Make the plan agree with an existing container: it must run the requested image, and its
 /// artifact root stays what it was.  A request it cannot satisfy fails before anything changes.
 fn adopt(p: &mut Plan, e: &Existing, opts: &Options) -> Result<()> {
@@ -333,6 +340,17 @@ fn adopt(p: &mut Plan, e: &Existing, opts: &Options) -> Result<()> {
             e.image,
             p.image,
             e.image
+        );
+    }
+    // A container of this name that akao init did not make (started by hand: no pinned root,
+    // the image's own working directory) has no artifact root to adopt.
+    if !e.pinned && !e.root.starts_with(&format!("/{}/", p.year)) && !looks_like_year_root(&e.root) {
+        bail!(
+            "{} was not made by akao init (no {}, working directory {}); leave it be, or remove it first ({remove}) \
+             and init again",
+            p.container,
+            state::ARTIFACT_ROOT_ENV,
+            e.root
         );
     }
     let year = e.root.split('/').nth(1).unwrap_or_default();
@@ -878,6 +896,15 @@ mod tests {
         let err = adopt(&mut plan(), &moved, &opts()).unwrap_err().to_string();
         assert!(
             err.contains("mounts /h1/2026 at /2026, but hosts.tsv now puts it at /root/akao/2026"),
+            "{err}"
+        );
+        // Started by hand under akao's name: the image's working directory, nothing pinned.
+        let by_hand = Existing::parse(&inspect("img:tag", "/sgl-workspace", None)).unwrap();
+        let err = adopt(&mut plan(), &by_hand, &opts()).unwrap_err().to_string();
+        assert!(
+            err.contains(
+                "akao_exp was not made by akao init (no AKAO_ARTIFACT_ROOT, working directory /sgl-workspace)"
+            ),
             "{err}"
         );
         // A mount of its own over the root: what akao writes under /<year> would be hidden.
