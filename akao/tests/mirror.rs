@@ -22,10 +22,11 @@ const MASTER: &str = "m1-fp4-mi355x-atom:
       - { tp: 1, conc-start: 4, conc-end: 8 }
 ";
 
-/// ssh: `-G` resolves; the KFD read answers $FAKE_GFX; `test -d` (the container home) fails;
+/// ssh: `-G` resolves; with $FAKE_SSH_DENIED every login is refused; the KFD read answers $FAKE_GFX; `test -d` (the container home) fails;
 /// with $FAKE_NVIDIA set the box has no /dev/kfd (its /dev/nvidiactl answers like any probe).
 const FAKE_SSH: &str = r#"#!/bin/sh
 if [ "$1" = -G ]; then echo "hostname fakebox.example"; exit 0; fi
+if [ -n "$FAKE_SSH_DENIED" ]; then echo "root@fakebox: Permission denied (publickey,password)." >&2; exit 255; fi
 case "$*" in
     *kfd/topology*) echo "Welcome to fakebox 2026"; for v in $FAKE_GFX; do echo "OAKA_GFX=$v"; done ;;
     *"test -d"*) exit 1 ;;
@@ -177,6 +178,13 @@ fn init_takes_its_image_which_an_existing_container_must_run() {
         out.contains("runs img:old, not the requested img:new; pass --image img:old"),
         "{out}"
     );
+
+    // A refused login is named as such, not read as a box without GPUs.
+    let (code, out) = sb.akao("init", &args, &[("FAKE_SSH_DENIED", "1")]);
+    assert_ne!(code, 0, "{out}");
+    assert!(out.contains("Permission denied"), "{out}");
+    assert!(out.contains("cannot run a command on fakebox over ssh"), "{out}");
+    assert!(!out.contains("no GPUs"), "{out}");
 
     // No image, no default to fall back on.
     let (code, out) = sb.akao("init", &["fakebox", "x", "--dry-run"], &[]);

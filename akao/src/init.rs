@@ -420,6 +420,10 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
     let cfg = r.query(&r.ssh_config_argv(nick))?;
     let hostname = cfg.lines().find_map(|l| l.strip_prefix("hostname ")).unwrap_or(nick);
     println!("  {nick} -> {hostname}");
+    // The probes below read any failure as "absent": first prove the login works, so a key
+    // the box refuses fails here, with ssh's own message, not as "no GPUs".
+    r.query(&r.ssh_argv(nick, "true"))
+        .with_context(|| format!("cannot run a command on {nick} over ssh (its message is above)"))?;
     let has = |dev: &str| -> Result<bool> { Ok(r.probe(&r.ssh_argv(nick, &format!("test -e {dev}")))?.is_some()) };
     p.gpu = if has("/dev/kfd")? {
         Gpu::Amd
