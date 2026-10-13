@@ -136,7 +136,8 @@ AGENTS.md             -> CLAUDE.md
 skills/<name>/        role manuals (controller, worker) and bring-codex-back; read in place
                       from $AKAO_REPO_ROOT, which init clones into every worker
 utils/                agent.sh (claude + codex via the AMD gateway), install_gh.sh (init step 9
-                      runs both from the worker's clone), controller/Dockerfile (console image)
+                      runs both from the worker's clone), controller/Dockerfile (console image),
+                      ssh (the PATH wrapper docker's ssh transport goes through; see Design notes)
 TEST.md               test layers: cargo test, real GPU smoke, environment doctors
 .githooks/post-commit builds akao (release) and a static oaka into oaka/bin
 akao/
@@ -188,7 +189,7 @@ $AKAO_CONFIG_ROOT/
                       infx_repo, infx_local, infx_dashboard, infx_snapshot
   hosts.tsv           one row per remote box (TSV, 4–5 cols)
   container_home/     home template, copied once per akao_<name>
-    .local/bin/ssh    ssh wrapper adding -F $AKAO_CONFIG_ROOT/.ssh/config (see Design notes)
+    .local/bin/ssh    ssh wrapper adding -F $AKAO_CONFIG_ROOT/.ssh/config (utils/ssh; see Design notes)
   .ssh/config         optional; when present, -F is added to every ssh call
 ```
 
@@ -367,10 +368,16 @@ in the container).
   use `~/.ssh/config` (wrong login user, unknown hosts).  The fix is a wrapper named `ssh`
   in `~/.local/bin` (ahead of `/usr/bin` on PATH) that execs `/usr/bin/ssh -F
   $AKAO_CONFIG_ROOT/.ssh/config "$@"`, falling back to plain ssh when that file is absent.
-  It ships in `container_home/.local/bin/ssh` and must also exist wherever akao itself
-  runs, with `AKAO_CONFIG_ROOT` exported.  Shell aliases do not work: docker never sees them.
+  Its source is `utils/ssh`; install it as `container_home/.local/bin/ssh` and wherever akao
+  itself runs, with `AKAO_CONFIG_ROOT` exported.  Shell aliases do not work: docker never sees them.
   Init step 1 checks `docker -H ssh://<nick> version` so a missing wrapper fails loudly;
   `akao doctor` checks the wrapper without touching the network.
+- **A host entry may be a login shell** (`RemoteCommand`, `RequestTTY force`: f19-11's exports
+  `HOME=/root/akao` for the shared root account).  ssh refuses any call that brings its own
+  command then, so akao's ssh (`exec::NO_LOGIN_SHELL`) and the wrapper, for every call with a
+  command (docker's `dial-stdio`), add `-o RemoteCommand=none`, and no tty.  Those commands
+  then run with the account's own HOME, not the login shell's: akao's remote scripts never
+  rely on `$HOME` or `~`; every host path comes from hosts.tsv's `host_home`.  Keep it so.
 - **Idempotent init**: every step checks what exists and reuses it, so re-running init
   on a half-done worker resumes instead of failing.
 

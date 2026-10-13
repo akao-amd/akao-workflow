@@ -6,8 +6,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-/// The PATH wrapper from the home template (container_home/.local/bin/ssh).
-const SSH_WRAPPER: &str = r#"#!/bin/bash
+/// The PATH wrapper (utils/ssh), as installed in ~/.local/bin and the home template.
+const SSH_WRAPPER: &str = include_str!("../../utils/ssh");
+
+/// The wrapper before it turned off a host's RemoteCommand for calls with a command.
+const OLD_SSH_WRAPPER: &str = r#"#!/bin/bash
 cfg="${AKAO_CONFIG_ROOT:+$AKAO_CONFIG_ROOT/.ssh/config}"
 if [ -n "$cfg" ] && [ -f "$cfg" ]; then
     exec /usr/bin/ssh -F "$cfg" "$@"
@@ -131,6 +134,76 @@ fn ssh_without_the_wrapper_fails() {
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("FAIL  ssh            /usr/bin/ssh ignores"), "{out}");
     assert!(out.contains("for fakebox"), "{out}");
+}
+
+#[test]
+fn a_login_shell_host_needs_the_wrapper_that_turns_it_off() {
+    if !have_ssh() {
+        return;
+    }
+    // f19-11's entry: a login shell with another HOME, a forced tty.
+    let sb = Sandbox::new("loginshell");
+    sb.write(
+        "state/.ssh/config",
+        "Host fakebox\n    HostName 10.9.8.7\n    User root\n    RemoteCommand export HOME=/root/akao; exec bash -l\n    \
+         RequestTTY force\n",
+    );
+    let (code, out) = sb.doctor("bin", Some(&sb.state()));
+    assert_eq!(code, 0, "{out}");
+    sb.exe("bin/ssh", OLD_SSH_WRAPPER);
+    let (code, out) = sb.doctor("bin", Some(&sb.state()));
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("FAIL  ssh            fakebox has a RemoteCommand that"),
+        "{out}"
+    );
+    assert!(out.contains("utils/ssh"), "{out}");
+}
+
+#[test]
+fn the_wrapper_keeps_a_login_shell_only_without_a_command() {
+    if !have_ssh() {
+        return;
+    }
+    let sb = Sandbox::new("wrapper");
+    sb.write(
+        "state/.ssh/config",
+        "Host fakebox\n    HostName 10.9.8.7\n    RemoteCommand exec bash -l\n    RequestTTY force\n",
+    );
+    let g = |args: &[&str]| {
+        let out = Command::new(sb.root.join("bin/ssh"))
+            .args(args)
+            .env("AKAO_CONFIG_ROOT", sb.state())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let login = |args: &[&str]| g(args).lines().any(|l| l.starts_with("remotecommand "));
+    assert!(login(&["-G", "fakebox"]), "an interactive login keeps it");
+    assert!(
+        login(&["-G", "-l", "root", "fakebox"]),
+        "an option's value is not a command"
+    );
+    // docker's transport and akao's calls carry a command: no login shell, no forced tty.
+    for args in [
+        &[
+            "-G",
+            "-o",
+            "ConnectTimeout=30",
+            "-T",
+            "--",
+            "fakebox",
+            "docker",
+            "system",
+            "dial-stdio",
+        ][..],
+        &["-G", "fakebox", "--", "sh", "-c", "true"],
+        &["-G", "-p", "22", "fakebox", "true"],
+    ] {
+        let out = g(args);
+        assert!(!out.lines().any(|l| l.starts_with("remotecommand ")), "{args:?}: {out}");
+        assert!(!out.contains("requesttty force"), "{args:?}: {out}");
+    }
 }
 
 #[test]

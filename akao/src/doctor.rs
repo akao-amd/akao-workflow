@@ -209,6 +209,30 @@ fn check_ssh(r: &mut Report, state: &State, nicks: &[String]) {
         })
         .map(String::as_str)
         .collect();
+    // A host entry with a RemoteCommand (a login shell) refuses every ssh that carries a
+    // command, docker's transport included, unless the wrapper turns it off for such calls.
+    let login_shell: Vec<&str> = nicks
+        .iter()
+        .filter(|n| {
+            let plain = output(&[REAL_SSH, "-F", &cfg_s, "-G", n]).unwrap_or_default();
+            // With a command, ssh -G either prints the config or, keeping the RemoteCommand,
+            // refuses like the real call would.
+            let with_cmd = output(&[&path_s, "-G", n, "true"]);
+            remote_command(&plain) && with_cmd.is_none_or(|g| remote_command(&g))
+        })
+        .map(String::as_str)
+        .collect();
+    if !login_shell.is_empty() {
+        r.fail(
+            "ssh",
+            format!(
+                "{} has a RemoteCommand that {path_s} keeps for calls with a command: docker and akao \
+                 would be refused.  Install $AKAO_REPO_ROOT/utils/ssh as {path_s} and \
+                 container_home/.local/bin/ssh",
+                login_shell.join(" ")
+            ),
+        );
+    }
     if ignored.is_empty() {
         r.ok("ssh", format!("{} resolves every host through {}", path_s, cfg_s));
     } else {
@@ -221,6 +245,12 @@ fn check_ssh(r: &mut Report, state: &State, nicks: &[String]) {
             ),
         );
     }
+}
+
+/// Whether `ssh -G` output sets a RemoteCommand.
+fn remote_command(g: &str) -> bool {
+    g.lines()
+        .any(|l| l.strip_prefix("remotecommand ").is_some_and(|v| v.trim() != "none"))
 }
 
 fn check_template(r: &mut Report, state: &State) {

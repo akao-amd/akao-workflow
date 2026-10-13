@@ -1,0 +1,42 @@
+#!/bin/bash
+# Redirector: every plain `ssh` reads the akao ssh config when
+# $AKAO_CONFIG_ROOT/.ssh/config exists; otherwise it behaves like /usr/bin/ssh.
+# Install it as ~/.local/bin/ssh on the console and as container_home/.local/bin/ssh in
+# $AKAO_CONFIG_ROOT (`akao doctor` checks both behaviours below).
+#
+# Why: docker's ssh:// contexts (and scp, git, ...) run `ssh` found through PATH
+# and cannot be given -F, so with a custom config directory they would silently
+# use ~/.ssh/config instead (wrong login user, missing hosts). Keep this file
+# ahead of /usr/bin on PATH (~/.local/bin) and AKAO_CONFIG_ROOT exported.
+#
+# A call that carries its own remote command (docker's `docker system dial-stdio`, akao's
+# `sh -c ...`) gets RemoteCommand=none and RequestTTY=auto: ssh refuses a command when the
+# host entry has a RemoteCommand ("Cannot execute command-line and remote command"; f19-11's
+# exports HOME=/root/akao for a login shell), and RequestTTY force would put a tty under
+# binary pipes.  Such a command then runs with the account's own HOME (e.g. /root), not the
+# RemoteCommand's: akao names every host path from hosts.tsv's host_home instead.  A plain
+# `ssh <host>`, without a command, keeps the entry's RemoteCommand.
+
+# Whether the arguments name a remote command after the destination (ssh(1)'s options:
+# those in the first pattern take a value).
+has_command() {
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --) shift; [ $# -ge 2 ]; return ;;
+            -[BbcDEeFIiJLlmOoPpQRSWw]) shift 2 ;;
+            -*) shift ;;
+            *) [ $# -ge 2 ]; return ;;
+        esac
+    done
+    return 1
+}
+
+extra=()
+if has_command "$@"; then
+    extra=(-o RemoteCommand=none -o RequestTTY=auto)
+fi
+cfg="${AKAO_CONFIG_ROOT:+$AKAO_CONFIG_ROOT/.ssh/config}"
+if [ -n "$cfg" ] && [ -f "$cfg" ]; then
+    exec /usr/bin/ssh -F "$cfg" "${extra[@]}" "$@"
+fi
+exec /usr/bin/ssh "${extra[@]}" "$@"

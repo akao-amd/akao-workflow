@@ -17,6 +17,12 @@ pub fn q(s: &str) -> String {
         .unwrap_or_else(|_| s.to_string())
 }
 
+/// Every ssh of akao's carries a command: a host entry's RemoteCommand (a login shell that
+/// exports another HOME) would make ssh refuse it, and its RequestTTY force would put a tty
+/// under binary pipes.  So akao's scripts never rely on the login's HOME: host paths come
+/// from hosts.tsv (host_home).
+pub const NO_LOGIN_SHELL: [&str; 4] = ["-o", "RemoteCommand=none", "-o", "RequestTTY=no"];
+
 pub struct Runner {
     pub dry_run: bool,
     /// ssh argv prefix, from $AKAO_SSH (default "ssh").
@@ -57,6 +63,7 @@ impl Runner {
     /// argv for running a POSIX shell script on `nick`.
     pub fn ssh_argv(&self, nick: &str, script: &str) -> Vec<String> {
         let mut argv = self.ssh.clone();
+        argv.extend(NO_LOGIN_SHELL.map(String::from));
         argv.extend([nick.into(), "--".into()]);
         argv.push(show(&["sh".into(), "-c".into(), script.into()]));
         argv
@@ -71,12 +78,16 @@ impl Runner {
     /// Human-readable form of a command: ssh commands built by ssh_argv print as
     /// `[nick] <script>`, everything else shell-quoted.
     pub fn display(&self, argv: &[String]) -> String {
-        let n = self.ssh.len();
-        if argv.len() == n + 3 && argv[..n] == self.ssh[..] && argv[n + 1] == "--" {
-            if let Some(words) = shlex::split(&argv[n + 2]) {
+        let (n, o) = (self.ssh.len(), NO_LOGIN_SHELL.len());
+        if argv.len() == n + o + 3
+            && argv[..n] == self.ssh[..]
+            && argv[n..n + o] == NO_LOGIN_SHELL
+            && argv[n + o + 1] == "--"
+        {
+            if let Some(words) = shlex::split(&argv[n + o + 2]) {
                 if let [sh, c, script] = &words[..] {
                     if sh == "sh" && c == "-c" {
-                        return format!("[{}] {script}", argv[n]);
+                        return format!("[{}] {script}", argv[n + o]);
                     }
                 }
             }
@@ -187,9 +198,13 @@ mod tests {
             ssh: vec!["ssh".into()],
         };
         let argv = r.ssh_argv("h", "mkdir -p '/a b'");
-        assert_eq!(argv[..3], ["ssh", "h", "--"]);
+        // A host's RemoteCommand (a login shell) never replaces akao's command.
+        assert_eq!(
+            argv[..7],
+            ["ssh", "-o", "RemoteCommand=none", "-o", "RequestTTY=no", "h", "--"]
+        );
         // What the remote shell sees must split back into exactly sh -c <script>.
-        assert_eq!(shlex::split(&argv[3]).unwrap(), ["sh", "-c", "mkdir -p '/a b'"]);
+        assert_eq!(shlex::split(&argv[7]).unwrap(), ["sh", "-c", "mkdir -p '/a b'"]);
         assert_eq!(r.display(&argv), "[h] mkdir -p '/a b'");
     }
 }

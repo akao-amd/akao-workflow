@@ -203,6 +203,11 @@ akao cp n10-17:ww42/hello/0001_probe /tmp/                      # -> /tmp/0001_p
 `$AKAO_SSH` overrides the ssh command akao uses (e.g. `ssh -F ~/.ssh/other_config`); docker's
 own ssh transport for the context still uses plain `ssh`.
 
+A host entry in akao's ssh config may be a login shell (`RemoteCommand`, `RequestTTY force`,
+e.g. one exporting another `HOME` on a shared account): `ssh <nick>` keeps it, but akao's
+calls and docker's transport (through the `utils/ssh` wrapper) turn it off, since ssh refuses
+a command alongside it.  They use `host_home` from hosts.tsv, never the login's `HOME`.
+
 ## Deploying a controller
 
 A controller is an agent (claude) that drives workers through akao: it runs `akao`, opens
@@ -233,7 +238,7 @@ without one), so remove them, after bringing back any profile saved there (`akao
 **3. State.**  `export AKAO_CONFIG_ROOT=<dir>` in the shell profile, then in it:
 `config.toml` (`akao config set ...`, all keys have defaults), `hosts.tsv` (`akao host add ...`), the
 home template `container_home/` (dotfiles every worker gets; it must hold the `ssh` wrapper
-`.local/bin/ssh`), and `.ssh/config` with the keys it names, if the boxes need their own ssh
+`.local/bin/ssh`, a copy of this repo's `utils/ssh`), and `.ssh/config` with the keys it names, if the boxes need their own ssh
 settings.  TODO(user): how keys reach a new console.
 
 **4. akao on PATH**, with the `ssh` wrapper ahead of `/usr/bin` (docker's ssh transport finds
@@ -243,7 +248,7 @@ ssh through PATH only):
 git clone <this repo> && cd akao-workflow
 git config core.hooksPath .githooks
 cargo build --release -p akao && ln -sf "$PWD/target/release/akao" ~/.local/bin/akao
-cp "$AKAO_CONFIG_ROOT/container_home/.local/bin/ssh" ~/.local/bin/ssh
+cp utils/ssh ~/.local/bin/ssh && cp utils/ssh "$AKAO_CONFIG_ROOT/container_home/.local/bin/ssh"
 ```
 
 **5. InferenceX** for `akao mirror`: a clone at `infx_local` (default

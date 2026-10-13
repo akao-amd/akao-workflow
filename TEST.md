@@ -87,7 +87,8 @@ cargo tests).  Each prints
 
 - `akao doctor` (console): `AKAO_CONFIG_ROOT` exported, `hosts.tsv`, the
   `ssh` first on PATH honours `$AKAO_CONFIG_ROOT/.ssh/config` (compared with
-  `ssh -F <config> -G` for every host, so docker contexts get the same config), home
+  `ssh -F <config> -G` for every host, so docker contexts get the same config; a host entry
+  with a RemoteCommand fails unless that `ssh` turns it off for calls with a command), home
   template, deploy sources incl. a runnable `oaka/bin/oaka`, docker CLI, the repo checkout
   init ships (`$AKAO_REPO_ROOT`: FAIL if missing, warn if dirty); for a controller (warn
   only): its artifact
