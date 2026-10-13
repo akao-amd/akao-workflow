@@ -6,7 +6,7 @@ Two CLI tools for driving worker containers on remote boxes from the local conso
 - `akao` — local driver (this README).
 - `oaka` — inside a worker: plan generator and script compiler (see below).
 
-Testing: `cargo test` (hermetic, ~10 s); real-GPU smoke in [TEST.md](TEST.md).
+Testing: `cargo test` (hermetic, ~30 s); real-GPU smoke in [TEST.md](TEST.md).
 `akao doctor` (console) and `oaka doctor` (worker) check a machine's prerequisites.
 
 ## Dev environment (the console)

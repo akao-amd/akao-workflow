@@ -104,7 +104,7 @@ cargo build                    # dev build → target/debug/{akao,oaka}
 cargo build --release          # release   → target/release/{akao,oaka}
 cargo fmt                      # rustfmt.toml: max_width = 120
 cargo clippy --all-targets -- -D warnings
-cargo test                     # unit tests + oaka/tests/run_all.rs (~10 s, hermetic)
+cargo test                     # unit tests + oaka/tests/run_all.rs (~30 s, hermetic)
 ```
 
 Before every commit: `cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test`.
