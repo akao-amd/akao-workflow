@@ -298,7 +298,9 @@ flags of a hand-run GB300 container): `--rm -d --gpus all --ipc=host --shm-size=
 --ulimit memlock=-1 --ulimit stack=67108864 --cap-add SYS_NICE` and the same four `-e`;
 mounts, workdir and env below are the same.  An NVIDIA container is only launched: init
 stops after step 6 (the later steps set up oaka, which reads the KFD topology: AMD only).
-Host's `rest` field appends after this, before the image.
+Host's `rest` field appends after this, then `--entrypoint sleep <image> infinity`: the
+container only waits for `docker exec`, whatever the image starts (vllm's images have
+ENTRYPOINT `vllm serve`, which would take `sleep` for a model and exit, `--rm` removing it).
 
 Mounts: `model_path:/model`, `docker_sock:/var/run/docker.sock`,
 `host_home/<year>:/<year>`, `host_home/container_home/akao_<name>:/root`.

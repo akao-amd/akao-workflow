@@ -173,7 +173,14 @@ impl Plan {
         ]);
         argv.extend(["-w".into(), self.artifact_root.clone()]);
         argv.extend(h.rest_args()?);
-        argv.extend([self.image.clone(), "sleep".into(), "infinity".into()]);
+        // The container only waits for `docker exec`, whatever the image would start: images
+        // like vllm's have ENTRYPOINT `vllm serve`, which would serve a model named "sleep".
+        argv.extend([
+            "--entrypoint".into(),
+            "sleep".into(),
+            self.image.clone(),
+            "infinity".into(),
+        ]);
         Ok(argv)
     }
 
@@ -724,7 +731,18 @@ mod tests {
         assert!(s.contains("-v /root/akao/container_home/akao_exp:/root"));
         assert!(s.contains("-w /2026/ww41/exp"));
         // rest args come after the skeleton but before the image.
-        assert!(argv.ends_with(&["--shm-size=64g", "-e", "FOO=a b", "img:tag", "sleep", "infinity"].map(String::from)));
+        assert!(argv.ends_with(
+            &[
+                "--shm-size=64g",
+                "-e",
+                "FOO=a b",
+                "--entrypoint",
+                "sleep",
+                "img:tag",
+                "infinity"
+            ]
+            .map(String::from)
+        ));
         assert!(argv.contains(&"PYTHONPATH=".to_string()));
     }
 
@@ -744,7 +762,18 @@ mod tests {
         // Mounts, root and rest as on AMD.
         assert!(s.contains("-v /mnt/raid/models:/model") && s.contains("-v /root/akao/container_home/akao_exp:/root"));
         assert!(s.contains("-w /2026/ww41/exp"));
-        assert!(argv.ends_with(&["--shm-size=64g", "-e", "FOO=a b", "img:tag", "sleep", "infinity"].map(String::from)));
+        assert!(argv.ends_with(
+            &[
+                "--shm-size=64g",
+                "-e",
+                "FOO=a b",
+                "--entrypoint",
+                "sleep",
+                "img:tag",
+                "infinity"
+            ]
+            .map(String::from)
+        ));
     }
 
     fn opts() -> Options {

@@ -166,7 +166,7 @@ fn init_takes_its_image_which_an_existing_container_must_run() {
     let (code, out) = sb.akao("init", &args, &[]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("\n  image img:new\n"), "{out}");
-    assert!(out.contains(" img:new sleep infinity"), "{out}");
+    assert!(out.contains(" --entrypoint sleep img:new infinity"), "{out}");
 
     let year = chrono_year();
     let old = existing("img:old", &format!("/{year}/ww07/m1-fp4-mi355x-atom"));
@@ -233,7 +233,7 @@ fn mirror_brings_up_the_entrys_image_with_a_brief() {
         // The hook's static oaka, beside the bundle (git-ignored), into the clone's oaka/bin.
         "oaka/bin/oaka | docker --context fakebox exec -i akao_m1-fp4-mi355x-atom".to_string(),
         "ln -sf /root/akao-workflow/oaka/bin/oaka /usr/local/bin/oaka".to_string(),
-        "rocm/atom:1 sleep infinity".to_string(),
+        "--entrypoint sleep rocm/atom:1 infinity".to_string(),
         "[mirror] brief".to_string(),
         format!(
             "[fakebox] if [ \"$(id -u)\" -ne 0 ] && sudo -n true 2>/dev/null; then S=\"sudo -n\"; else S=; fi; \
@@ -527,7 +527,7 @@ fn dashboard_mirror_brings_up_the_image_that_ran() {
     for want in [
         "fakebox: 2 x gfx950 as mi355x needs".to_string(),
         "--name=akao_vllm_mirror".to_string(),
-        "vllm/vllm:2 sleep infinity".to_string(),
+        "--entrypoint sleep vllm/vllm:2 infinity".to_string(),
         format!(
             "done. the worker's brief: {root}/mirror/m1-fp4-mi355x-vllm@{}/MIRROR.md",
             &DASH_SHA[..12]
