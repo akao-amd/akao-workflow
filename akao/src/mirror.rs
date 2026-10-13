@@ -97,7 +97,8 @@ pub struct Entry {
     pub name: String,
     /// The master config it is in, repo-relative.
     pub file: String,
-    /// Where paths in the entry are relative to: "" or "inferencex-e2e/" (the dir above configs/).
+    /// Where paths in the entry are relative to: "" or "inferencex-e2e/" (the dir above
+    /// configs/, or above .github/configs/ as in mid-2026).
     pub root: String,
     /// The entry as written, comments included.
     pub raw: String,
@@ -221,6 +222,12 @@ fn raw_entry(text: &str, name: &str) -> String {
     lines[start..end].join("\n") + "\n"
 }
 
+/// The tree's root for a config under `<above>configs/`: benchmarks/ sits beside configs/,
+/// except when the configs live in .github/ (the layout of mid-2026).
+fn entry_root(above: &str) -> String {
+    above.strip_suffix(".github/").unwrap_or(above).to_string()
+}
+
 /// Every entry of every `*master.yaml` under a `configs/` dir at this revision.  A file
 /// that does not parse is reported, not fatal.
 pub fn entries(repo: &Repo) -> Result<(Vec<Entry>, Vec<String>)> {
@@ -249,7 +256,7 @@ pub fn entries(repo: &Repo) -> Result<(Vec<Entry>, Vec<String>)> {
                 raw: raw_entry(&text, name),
                 name: name.to_string(),
                 file: file.clone(),
-                root: file[..at].to_string(),
+                root: entry_root(&file[..at]),
                 fields,
             });
         }
@@ -1295,6 +1302,13 @@ m2-fp8-mi355x-sglang-disagg:
         let repo = f.repo(&new);
         let (all, _) = entries(&repo).unwrap();
         assert_eq!(all[0].file, "inferencex-e2e/configs/deprecated/amd-master.yaml");
+    }
+
+    #[test]
+    fn configs_under_github_root_at_the_top() {
+        assert_eq!(entry_root(""), "");
+        assert_eq!(entry_root("inferencex-e2e/"), "inferencex-e2e/");
+        assert_eq!(entry_root(".github/"), "", "mid-2026: benchmarks/ beside .github/");
     }
 
     #[test]
