@@ -1,5 +1,5 @@
 # Packages oaka may swap: a plan's [stack.<name>] installs <name> from a git tree at a commit
-# (or several commits, for A-B-A and bisect).  Reference: /<year>/oaka/README.md.
+# (or several commits, for A-B-A and bisect).  Reference: $AKAO_REPO_ROOT/oaka/README.md.
 #
 # Per package: `repo` (the plan's trees are worktrees of it), `module` (must import from
 # inside the tree after the install), `restore` (tracked files the install edits in place),
