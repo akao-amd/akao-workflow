@@ -1,18 +1,24 @@
-# gpt-oss-120b on MI355X (gfx950), TP8: SGLang's own MI35x nightly recipe, copied as is.
+# gpt-oss-120b on MI355X (gfx950): SGLang's own MI35x nightly recipe, copied as is, but at TP1
+# (upstream runs it at TP8; `tp = 1` since 2026-10-12, 9848e10).
 #
 # Source: sgl-project/sglang main,
 #   test/registered/amd/perf/mi35x/test_gpt_oss_perf_mi35x.py (last changed d91c3682b0,
 #   2026-08-16, "[AMD][CI] Add GPT-OSS perf benchmarks to the ROCm 7.2 nightly", #34645),
 #   whose SERVER_ARGS/ENV_VARS match test/registered/amd/accuracy/mi35x/test_gpt_oss_eval_mi35x.py.
-# Read 2026-10-12.  Not yet measured by us; the point of copying it verbatim is that a
-# throughput change against SGLang's nightly then points at the stack, not at the recipe.
+# Read 2026-10-12.  The point of copying it verbatim is that a throughput change against
+# SGLang's nightly then points at the stack, not at the recipe.
+#
+# Measured at TP1, 2026-10-13, n10-17 (rocm/sgl-dev:v0.5.21-rocm10-mi35x-20261012, one GPU),
+# ww42 1013_update_mi355/2001_gptoss_70k300_gpu7: GSM8K 0.955; 1024/1024 conc 16 2164 out tok/s;
+# 70000/300 conc 4..64 ~39 out tok/s flat (prefill-bound, ~9.1k total tok/s), median TTFT
+# 6.8 s at conc 4 to 146 s at conc 64 (KV cache full at 64).
 #
 # Checkpoint: openai/gpt-oss-120b, the MXFP4 release (MI35x serves it directly; MI30x uses a
-# bf16 conversion).  NOT the AMD Quark W4A8 checkpoint gpt-oss-120b/base uses.  No box had
-# it on 2026-10-12 (m15-21's /raid/models has none); `model` below assumes it is downloaded
-# to <model_path>/gpt-oss-120b.  Elsewhere, override `model` in the plan.
+# bf16 conversion).  NOT the AMD Quark W4A8 checkpoint gpt-oss-120b/base uses.  `model` below
+# is <model_path>/gpt-oss-120b, as on m15-21 (since 2026-10-13); on n10-17 it is
+# /data2/openai/gpt-oss-120b: override `model` in the plan there.
 #
-# Flags (upstream SERVER_ARGS; --tp 8 is pinned as `tp`, oaka owns the flag):
+# Flags (upstream SERVER_ARGS, --tp 8 aside: tp is pinned to 1 below, oaka owns the flag):
 #   --attention-backend triton, --chunked-prefill-size 130172, --max-running-requests 128,
 #   --mem-fraction-static 0.85, --trust-remote-code.
 # Env (upstream ENV_VARS): SGLANG_USE_AITER=1; SGLANG_USE_AITER_MOE_GU_ITLV=1, upstream's
@@ -27,7 +33,7 @@
 #   benchmark, not a one-batch run: compare trends with the nightly, not absolute numbers.
 # Accuracy gate upstream: GSM8K few-shot completion, 200 questions, threshold 0.79 (120b).
 
-description = "gpt-oss-120b MXFP4 (openai), MI355X TP8: SGLang's MI35x nightly perf/accuracy recipe"
+description = "gpt-oss-120b MXFP4 (openai), MI355X at TP1: SGLang's MI35x nightly perf/accuracy recipe (upstream TP8)"
 arch = ["gfx950"]
 model = "/model/gpt-oss-120b"
 tp = 1
