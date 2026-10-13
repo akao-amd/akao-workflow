@@ -71,6 +71,41 @@ pub enum Gpu {
 }
 
 const APT_PACKAGES: &[&str] = &["vim", "less", "tmux", "docker.io", "git"];
+/// What later steps run (git: step 8, tmux: step 11); the rest are conveniences an image
+/// without reachable apt mirrors (e.g. a GB300 tray: no outbound HTTP) may lack.
+const APT_NEEDED: &[&str] = &["git", "tmux"];
+
+/// Bash for step 7: apt-install the packages unless all their commands are there; fails only
+/// when a needed one is still missing, warns about the others.
+fn apt_script() -> String {
+    let cmd = |p: &str| {
+        if p == "docker.io" {
+            "docker".to_string()
+        } else {
+            p.to_string()
+        }
+    };
+    let have_all = APT_PACKAGES
+        .iter()
+        .map(|p| format!("have {}", cmd(p)))
+        .collect::<Vec<_>>()
+        .join(" && ");
+    let optional: Vec<String> = APT_PACKAGES
+        .iter()
+        .map(|p| cmd(p))
+        .filter(|c| !APT_NEEDED.contains(&c.as_str()))
+        .collect();
+    format!(
+        "have() {{ command -v \"$1\" >/dev/null; }}\n\
+         {have_all} || {{ export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y {}; }}\n\
+         for c in {}; do have $c || {{ echo \"$c is missing and apt could not install it\" >&2; exit 1; }}; done\n\
+         for c in {}; do have $c || echo \"  warning: no $c in the container (apt failed); going on without it\"; done\n\
+         true",
+        APT_PACKAGES.join(" "),
+        APT_NEEDED.join(" "),
+        optional.join(" ")
+    )
+}
 
 /// Excluded from the control-plane deploy.
 const DEPLOY_EXCLUDES: &[&str] = &[".git", "__pycache__", "*.pyc", ".claude"];
@@ -568,16 +603,7 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
     if opts.skip_setup {
         println!("  skipped (--skip-setup)");
     } else {
-        let have_all = APT_PACKAGES
-            .iter()
-            .map(|p| format!("command -v {} >/dev/null", if *p == "docker.io" { "docker" } else { p }))
-            .collect::<Vec<_>>()
-            .join(" && ");
-        let script = format!(
-            "{have_all} || {{ export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y {}; }}",
-            APT_PACKAGES.join(" ")
-        );
-        r.run(&p.exec(&[], &script))?;
+        r.run(&p.exec(&[], &apt_script()))?;
     }
 
     s.next("akao-workflow clone");
@@ -730,6 +756,45 @@ mod tests {
         // rest args come after the skeleton but before the image.
         assert!(argv.ends_with(&["--shm-size=64g", "-e", "FOO=a b", "img:tag", "sleep", "infinity"].map(String::from)));
         assert!(argv.contains(&"PYTHONPATH=".to_string()));
+    }
+
+    /// apt_script in a PATH holding only stand-ins for `cmds` and an `apt-get` that fails
+    /// (no reachable mirrors): its exit code and output.
+    fn apt_without_mirrors(cmds: &[&str]) -> (i32, String) {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = std::env::temp_dir().join(format!("akao-apt-{}-{}", cmds.join("-"), std::process::id()));
+        std::fs::create_dir_all(&bin).unwrap();
+        for c in cmds.iter().chain(&["apt-get"]) {
+            let f = bin.join(c);
+            std::fs::write(&f, "#!/bin/sh\nexit 1\n").unwrap();
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let out = std::process::Command::new("/bin/bash")
+            .args(["-c", &apt_script()])
+            .env("PATH", &bin)
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&bin);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code().unwrap_or(-1), text)
+    }
+
+    #[test]
+    fn apt_failing_is_fatal_only_for_what_later_steps_need() {
+        let (code, out) = apt_without_mirrors(&["git", "tmux", "vim", "less"]);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("warning: no docker in the container"), "{out}");
+        assert!(!out.contains("no vim"), "{out}");
+        let (code, out) = apt_without_mirrors(&["git", "vim", "less"]);
+        assert_eq!(code, 1, "{out}");
+        assert!(out.contains("tmux is missing and apt could not install it"), "{out}");
+        // Everything there: apt is not called (its stand-in would fail).
+        let (code, out) = apt_without_mirrors(&["git", "tmux", "vim", "less", "docker"]);
+        assert_eq!((code, out.as_str()), (0, ""));
     }
 
     #[test]
