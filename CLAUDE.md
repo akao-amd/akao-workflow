@@ -282,8 +282,10 @@ repo checkout (`$AKAO_REPO_ROOT`, `state::shippable_repo`) is checked before ste
 9. From the clone's `utils/`: gh, the claude agent; then sgl-eval (each skipped if already
    present; sgl-eval failing only warns: mirrored images may refuse pip); link
    the clone's `oaka/bin/oaka` to `/usr/local/bin/oaka`
-10. Clone `infx_repo` into `/<year>/nocopy/InferenceX` unless a checkout exists (never pulled;
-   not skipped by `--skip-setup`: oaka's benchmark client needs it)
+10. `/<year>/nocopy/InferenceX` (`infx_sync_script`): clone `infx_repo` the first time, later
+   fetch and check out origin's latest `main` from any branch or commit, unless that would
+   lose work (uncommitted changes, commits of a local `main` origin lacks: left, warned; a
+   failed fetch only warns).  Not skipped by `--skip-setup`: oaka's benchmark client needs it
 11. Start tmux session with window `controller` running `claude --add-dir /root/akao-workflow`
    (the clone is the agent's manual, outside its working directory; skipped if tmux already runs)
 12. Worker doctor: the clone's `oaka/bin/oaka doctor` (the legacy `/<year>/oaka/bin/oaka` in

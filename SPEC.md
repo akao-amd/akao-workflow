@@ -47,8 +47,12 @@ The following subsections define subcommands that akao supports.  Ideally it fol
   - In the container
     - Install necessary packages for my workflow. The containers are mostly Ubuntu-based, so `apt update && apt install vim less tmux docker.io` mostly does the trick.  Some more complicated stuff to be installed are `gh` (by `utils/install_gh.sh`) and Claude/Codex agents (by `utils/agent.sh`).
     - Get tmux running.  Name the first window as `controller`, and launch Claude.
-    - Check out InferenceX into `/<work year>/nocopy/InferenceX` (once, never pulled) and put
-      `oaka` on PATH; both are what `oaka` needs inside the worker.
+    - Check out InferenceX into `/<work year>/nocopy/InferenceX`, brought to origin's latest
+      `main` at every init (and so every mirror), and put `oaka` on PATH; both are what `oaka`
+      needs inside the worker.  Why latest: the checkout is one per box, shared by its
+      workers; cloned once and never pulled, each box stayed at its first init's commit, so
+      boxes ran different benchmark clients without saying so.  Never at the cost of work: a
+      checkout with uncommitted changes or commits of its own `main` is left, with a warning.
     - Install `sgl-eval` (`pip install sgl-eval`, never `sglang[test]`) for `oaka`'s GSM8K client.
 
 ## Worker-side plan generator and script compiler: `oaka`

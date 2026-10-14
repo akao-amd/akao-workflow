@@ -33,7 +33,7 @@ pub const KEYS: &[(&str, Option<&str>, &str)] = &[
     (
         "infx_repo",
         Some("https://github.com/SemiAnalysisAI/InferenceX.git"),
-        "InferenceX repository init clones into /<year>/nocopy/InferenceX (oaka's benchmark client)",
+        "InferenceX repository init clones into /<year>/nocopy/InferenceX and keeps at its latest main (oaka's benchmark client)",
     ),
     (
         "infx_local",

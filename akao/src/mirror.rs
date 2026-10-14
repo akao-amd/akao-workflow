@@ -827,8 +827,8 @@ pub fn brief(
         );
     }
     caveats.push(format!(
-        "the client is this box's own InferenceX checkout (each fixed-seq run logs its sha), not {}: \
-         the configs come from this revision, the benchmark code may be newer",
+        "the client is this box's own InferenceX checkout, which init brings to origin's latest main \
+         (each fixed-seq run logs its sha), not {}: the configs come from this revision, the benchmark code may be newer",
         &repo.sha[..12.min(repo.sha.len())]
     ));
     m += "\n";

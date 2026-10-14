@@ -246,6 +246,39 @@ rm -f "$B""#
     )
 }
 
+/// Bash, run in the worker: clone InferenceX (`repo`) into `dir` the first time; later bring
+/// it to origin's latest `main`, from whatever branch or commit it is on, unless that would
+/// lose work (uncommitted changes, or commits of a local `main` that origin's lacks): then it
+/// is left as is and says so.  Fatal only when it cannot clone, or `dir` is not a checkout.
+pub fn infx_sync_script(dir: &str, repo: &str) -> String {
+    let (x, u) = (q(dir), q(repo));
+    format!(
+        r#"X={x}; say() {{ echo "  $*"; }}
+at() {{ git -C "$X" log -1 --format='%h %cs %s' "$1"; }}
+if [ ! -e "$X/.git" ]; then
+    if [ -e "$X" ]; then echo "$X exists but is not a git checkout; resolve it by hand" >&2; exit 1; fi
+    git clone -q --filter=blob:none {u} "$X" || exit 1
+    say "cloned $X at $(at HEAD)"
+    exit 0
+fi
+was="$(git -C "$X" symbolic-ref -q --short HEAD || echo 'a detached HEAD')"
+if ! git -C "$X" fetch -q origin main; then
+    say "warning: cannot fetch origin main; $X left on $was at $(at HEAD)"
+elif [ "$(git -C "$X" rev-parse HEAD)" = "$(git -C "$X" rev-parse origin/main)" ] && [ "$was" = main ]; then
+    say "$X is at origin/main ($(at HEAD))"
+elif [ -n "$(git -C "$X" status --porcelain --untracked-files=no)" ]; then
+    say "warning: $X has uncommitted changes; left on $was at $(at HEAD), origin/main is $(at origin/main)"
+elif git -C "$X" rev-parse -q --verify refs/heads/main >/dev/null &&
+    ! git -C "$X" merge-base --is-ancestor main origin/main; then
+    say "warning: $X's main has commits origin/main lacks; left on $was at $(at HEAD), origin/main is $(at origin/main)"
+elif git -C "$X" checkout -q -B main origin/main; then
+    say "$X updated to origin/main ($(at HEAD)), was on $was"
+else
+    say "warning: $X could not check out origin/main; left on $was at $(at HEAD)"
+fi"#
+    )
+}
+
 struct Steps {
     n: usize,
     total: usize,
@@ -668,21 +701,11 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
     }
 
     s.next("InferenceX checkout");
-    // oaka's benchmark client runs InferenceX's own code, so every worker needs it.
-    // Cloned once and never pulled: an existing checkout may carry local work.
+    // oaka's benchmark client runs InferenceX's own code, so every worker needs it, and at
+    // origin's latest main: the box's one checkout is shared by its workers, and left alone
+    // it stays at whatever commit the box's first init cloned.
     let infx = format!("/{}/nocopy/InferenceX", p.year);
-    match r.probe(&p.exec(&[], &format!("git -C {infx} log -1 --format='%h %cs %s'")))? {
-        Some(head) => println!("  reusing {infx} at {}", head.trim()),
-        None => {
-            let repo = state.require("infx_repo")?;
-            let script = format!(
-                "if [ -e {infx} ]; then echo '{infx} exists but is not a git checkout; resolve it by hand' >&2; exit 1; fi; \
-                 git clone --filter=blob:none {} {infx}",
-                q(&repo)
-            );
-            r.run(&p.exec(&[], &script))?
-        }
-    }
+    r.run(&p.exec(&[], &infx_sync_script(&infx, &state.require("infx_repo")?)))?;
 
     s.next("tmux controller window");
     if r.probe(&p.exec(&[], "tmux has-session"))?.is_some() {
@@ -1001,6 +1024,99 @@ mod tests {
         git(&clone, &["checkout", "-q", "--", "c1"]);
         git(&clone, &["checkout", "-q", "-b", "topic"]);
         assert!(sync().contains("is on topic"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inferencex_is_brought_to_origin_main_unless_work_would_be_lost() {
+        let dir = std::env::temp_dir().join(format!("akao-infxsync-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("upstream")).unwrap();
+        let git = |cwd: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "init.defaultBranch=main",
+                ])
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let (upstream, infx) = (dir.join("upstream"), dir.join("InferenceX"));
+        let commit = |cwd: &Path, file: &str| {
+            std::fs::write(cwd.join(file), file).unwrap();
+            git(cwd, &["add", "-A"]);
+            git(cwd, &["commit", "-q", "-m", file]);
+        };
+        git(&upstream, &["init", "-q"]);
+        commit(&upstream, "u1");
+        let url = format!("file://{}", upstream.display());
+        let sync = |ok: bool| {
+            let out = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(infx_sync_script(infx.to_str().unwrap(), &url))
+                .output()
+                .unwrap();
+            assert_eq!(out.status.success(), ok, "{}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let head = || git(&infx, &["rev-parse", "HEAD"]);
+        let up = || git(&upstream, &["rev-parse", "HEAD"]);
+
+        assert!(sync(true).contains("cloned"));
+        assert!(sync(true).contains("is at origin/main"));
+        commit(&upstream, "u2");
+        assert!(sync(true).contains("updated to origin/main"));
+        assert_eq!(head(), up());
+        // Another branch or a detached HEAD, clean: back on main at origin's latest; the branch stays.
+        git(&infx, &["checkout", "-q", "-b", "topic", "HEAD~1"]);
+        commit(&upstream, "u3");
+        let out = sync(true);
+        assert!(
+            out.contains("updated to origin/main") && out.contains("was on topic"),
+            "{out}"
+        );
+        assert_eq!(
+            (head(), git(&infx, &["branch", "--show-current"])),
+            (up(), "main".into())
+        );
+        git(&infx, &["rev-parse", "--verify", "topic"]);
+        git(&infx, &["checkout", "-q", "--detach", "HEAD~1"]);
+        assert!(sync(true).contains("was on a detached HEAD"));
+        assert_eq!(head(), up());
+        // Uncommitted changes, or commits of main's own: left where they are.
+        commit(&upstream, "u4");
+        std::fs::write(infx.join("u1"), "edited").unwrap();
+        let before = head();
+        assert!(sync(true).contains("has uncommitted changes"));
+        assert_eq!(head(), before);
+        git(&infx, &["checkout", "-q", "--", "u1"]);
+        commit(&infx, "w1");
+        let mine = head();
+        assert!(sync(true).contains("main has commits origin/main lacks"));
+        assert_eq!(head(), mine);
+        git(&infx, &["reset", "-q", "--hard", "origin/main"]);
+        // No network: a warning, not a failure.
+        git(
+            &infx,
+            &["remote", "set-url", "origin", "file:///nonexistent/InferenceX"],
+        );
+        assert!(sync(true).contains("warning: cannot fetch origin main"));
+        // Something else at the path: refused.
+        std::fs::remove_dir_all(&infx).unwrap();
+        std::fs::create_dir_all(&infx).unwrap();
+        sync(false);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

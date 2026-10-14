@@ -103,7 +103,9 @@ and names the one it runs):
 9. from that clone's `utils/`: `install_gh.sh`, `agent.sh --yes`; then `pip install sgl-eval`
    (a failure only warns) — each skipped when already present; link `oaka` into
    `/usr/local/bin`
-10. clone InferenceX into `/<year>/nocopy/InferenceX`, unless a checkout is there (never pulled)
+10. clone InferenceX into `/<year>/nocopy/InferenceX`, or bring the box's checkout to origin's
+    latest `main` (left as is, with a warning, when that would lose uncommitted changes or
+    commits of its own `main`)
 11. start tmux with window `controller` running `claude` (with the clone as an extra working
     directory, `--add-dir`, so reading the skills never prompts), unless tmux already runs
 12. run `oaka doctor` in the worker and show its report: GPU arch and ROCm version (what
