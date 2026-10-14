@@ -4,9 +4,9 @@ description: The worker role's manual — an agent in a worker container (akao_<
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.2.0"
+  version: "2.3.0"
   category: development
-  tags: ["worker", "sglang", "oaka", "bisect", "benchmark", "git"]
+  tags: ["worker", "sglang", "oaka", "bisect", "benchmark", "profiling", "git"]
 compatibility:
   universal: true
 ---
@@ -52,6 +52,62 @@ read an A-B-A, the bisect journey). The rules that are yours to keep:
   HIP does; amd-smi may number the same cards differently (n10-17, m15-21: plan GPU 7 is
   amd-smi GPU 5). `oaka doctor`'s `gpu index` line gives the map: check a GPU by its amd-smi
   number.
+
+## Profiling — capturing GPU traces of a point
+
+**When:** the task wants a Chrome/Perfetto trace (prefill and/or decode kernels) of a served
+workload, not just its throughput. Note the word clash: here *profile* means the SGLang GPU
+profiler (`/start_profile`), not an oaka server recipe.
+
+**The one rule: capture the measured burst, not the warm-up.** SGLang's by-stage
+`/start_profile` begins at the *next* prefill (then decode) after it is armed. InferenceX runs
+`2 × conc` warm-up copies of a *single* prompt before the measured burst (with the radix cache,
+only the first warm-up prefill computes). So the timing of the arm is everything:
+- Arming `/start_profile` *before* the point captures the **warm-up** — one prompt, identical
+  sequences, MoE routing collapsed onto few experts, shortest KV. Wrong traffic, even though the
+  trace looks valid.
+- Arm it through **benchmark_serving's own `--profile` hook**, which fires *after* the warm-ups
+  and just before the measured burst (in `infx/bench_serving/benchmark_serving.py` the warm-ups
+  are awaited, then `if profile:` sends `/start_profile`). This is the only case where you add to
+  the client — so do it, but keep it out of `scripts/`.
+
+**How to augment without touching `scripts/`.** Copy the generated
+`scripts/client_NN_fixed-seq_<server>.sh` into the task dir, send its results to a side dir, and
+in place of `python3 -m infx.bench fixed-seq point` run a small `profile_point.py` that:
+- builds the same argv with InferenceX's own `infx.bench.fixed_seq.client_argv(Point)` and adds
+  only `--profile` (the client policy stays InferenceX's — never hand-build `bench_serving` argv);
+- intercepts the two calls `--profile` makes and sends its own: (1) at the hook,
+  `{"profile_by_stage": true, "profile_stages": ["prefill"], "num_steps": N, "output_dir": ...,
+  "profile_prefix": ...}`; (2) from a thread, once the prefill trace is on disk **and** the
+  server log shows `Decode batch, #running-req: >= conc`, the same with `"profile_stages":
+  ["decode"]`; (3) drops `--profile`'s `/stop_profile` (by-stage captures stop themselves).
+Keep the client copy, `profile_point.py`, and a `*.profile_record.json` (what was sent, and when)
+in the task dir — they are the rerunnable artifact.
+
+**Server env.** Overlay `SGLANG_PROFILE_V2=1` in the plan (`[server.env]`). The default (v1)
+by-stage profiler ignores `profile_stages`, and when a prefill lands inside its decode capture it
+stops that capture and writes it under the prefill name (`-EXTEND`), overwriting the prefill
+trace. V2 honours `profile_stages` and names traces `-prefill` / `-decode`. The accepted body
+fields differ by SGLang revision — probe `/start_profile` first and keep the probe.
+
+**Verify the phase from the trace; do not trust the file name.** With `range_ratio < 1` the
+measured prompts vary in length while the warm-up's are all identical, so the phase is readable
+off the step annotations:
+
+```bash
+zcat <point>-TP-0-*.trace.json.gz | grep -oE 'step\[EXTEND bs=[0-9]+ toks=[0-9]+\]' | sort | uniq -c
+```
+
+Identical token counts (e.g. all 991; `2973 = 3 × 991`) = warm-up; varied counts = the measured
+burst. A `bs=1 toks=1` step is the warm-up prompt reused as the first measured request (a cache
+hit) — expected, not an error.
+
+**Always say this in the report — a profiled run is not a measurement.**
+- Writing a trace stalls the scheduler several seconds mid-burst, so this point's throughput and
+  TTFT are distorted. Quote GPU kernel times from the trace; take tok/s from an unprofiled run.
+- A by-stage decode capture triggered at the first full batch is *start-of-wave*: KV ≈ ISL
+  (shortest), no prefill interleaved — not steady state. For steady-state decode, send a plain
+  `/start_profile` with `num_steps` mid-point instead.
 
 ## Mirror workers — reproduce an InferenceX config
 
