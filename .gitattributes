@@ -1,0 +1,27 @@
+# This project is developed on Linux. Keep every text file LF in the repo and on
+# checkout, so edits made from Windows/macOS do not introduce CRLF churn or break the
+# shell scripts and Jinja templates that are executed as-is.
+* text=auto eol=lf
+
+# Executed / generated-from scripts and code — force LF, never auto-detect.
+*.sh    text eol=lf
+*.j2    text eol=lf
+*.py    text eol=lf
+*.rs    text eol=lf
+
+# Config and docs.
+*.toml  text eol=lf
+*.lock  text eol=lf
+*.md    text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.json  text eol=lf
+
+# Binaries — never normalize or diff as text (defensive, for anything added later).
+*.png   binary
+*.jpg   binary
+*.gz    binary
+*.zip   binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary
