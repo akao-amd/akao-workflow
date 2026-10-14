@@ -4,7 +4,7 @@ description: The worker role's manual — an agent in a worker container (akao_<
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.3.0"
+  version: "2.4.0"
   category: development
   tags: ["worker", "sglang", "oaka", "bisect", "benchmark", "profiling", "git"]
 compatibility:
@@ -66,48 +66,78 @@ only the first warm-up prefill computes). So the timing of the arm is everything
 - Arming `/start_profile` *before* the point captures the **warm-up** — one prompt, identical
   sequences, MoE routing collapsed onto few experts, shortest KV. Wrong traffic, even though the
   trace looks valid.
-- Arm it through **benchmark_serving's own `--profile` hook**, which fires *after* the warm-ups
+- Time it from **benchmark_serving's own `--profile` hook**, which fires *after* the warm-ups
   and just before the measured burst (in `infx/bench_serving/benchmark_serving.py` the warm-ups
   are awaited, then `if profile:` sends `/start_profile`). This is the only case where you add to
   the client — so do it, but keep it out of `scripts/`.
+
+**The standard capture** — what to take unless the request says otherwise (settled with the
+user, ww42 2026-10-14; the reasoning is in that week's `1014_prof_mi355/3029_profiling_practice_v2`):
+- **Warm run first.** On the same server run the point once unprofiled (as compiled: its numbers
+  are the point's tok/s), then `POST /flush_cache`, then the profiled pass. The flush is
+  required: benchmark_serving seeds its prompts with `--seed 0`, so the profiled pass sends the
+  warm run's prompts, and with the radix cache on every prefill would be a cache hit (`toks≈1`).
+- **Steady state = 50% of the measured requests done**, counted by the client. Not a fixed delay
+  (it differs per point and drifts with every trace's stall); not "after the first wave" (with
+  `range_ratio = 0.8` the second wave still starts nearly in step).
+- **Separate prefill and decode traces, 10 steps each.** One decode capture of 10 consecutive
+  decode steps, re-armed if a prefill cuts it short. Then prefill captures one at a time: in
+  steady state each holds one newly admitted request (`bs=1`, about ISL tokens), so 10 prefills
+  are 10 captures. Stop arming at 90% done and report how many you got — low concurrency at long
+  ISL admits a request only every second or so.
+- gsm8k is not needed when the same recipe and image already passed it; say which run did.
 
 **How to augment without touching `scripts/`.** Copy the generated
 `scripts/client_NN_fixed-seq_<server>.sh` into the task dir, send its results to a side dir, and
 in place of `python3 -m infx.bench fixed-seq point` run a small `profile_point.py` that:
 - builds the same argv with InferenceX's own `infx.bench.fixed_seq.client_argv(Point)` and adds
-  only `--profile` (the client policy stays InferenceX's — never hand-build `bench_serving` argv);
-- intercepts the two calls `--profile` makes and sends its own: (1) at the hook,
-  `{"profile_by_stage": true, "profile_stages": ["prefill"], "num_steps": N, "output_dir": ...,
-  "profile_prefix": ...}`; (2) from a thread, once the prefill trace is on disk **and** the
-  server log shows `Decode batch, #running-req: >= conc`, the same with `"profile_stages":
-  ["decode"]`; (3) drops `--profile`'s `/stop_profile` (by-stage captures stop themselves).
-Keep the client copy, `profile_point.py`, and a `*.profile_record.json` (what was sent, and when)
-in the task dir — they are the rerunnable artifact.
+  only `--profile` (the client policy stays InferenceX's — never hand-build `bench_serving` argv),
+  and runs it in-process with the backend's request function wrapped;
+- does **not** forward the hook's `/start_profile` (it sends `merge_profiles: true`, which V2
+  rejects): the hook only marks the start of the measured burst, from which completions are
+  counted; it drops the hook's `/stop_profile` (by-stage captures stop themselves);
+- from a thread, at 50% done, arms `{"profile_by_stage": true, "profile_stages": ["decode"],
+  "num_steps": 9, "output_dir": ..., "profile_prefix": ...}`, then the prefill captures the same
+  way with `["prefill"]` — each armed only after the previous trace is on disk.
+Keep the client copy, `profile_point.py`, and a `*.profile_record.json` (what was sent, when, at
+how many completions) in the task dir — they are the rerunnable artifact.
 
-**Server env.** Overlay `SGLANG_PROFILE_V2=1` in the plan (`[server.env]`). The default (v1)
-by-stage profiler ignores `profile_stages`, and when a prefill lands inside its decode capture it
-stops that capture and writes it under the prefill name (`-EXTEND`), overwriting the prefill
-trace. V2 honours `profile_stages` and names traces `-prefill` / `-decode`. The accepted body
-fields differ by SGLang revision — probe `/start_profile` first and keep the probe.
+**Server env: `SGLANG_PROFILE_V2=1`** in the plan (`[server.env]`). The default (v1) by-stage
+profiler ignores `profile_stages`, and when a prefill lands inside its decode capture it stops
+that capture and writes it under the prefill name (`-EXTEND`), overwriting the prefill trace. V2
+(`ProfileManager`, `srt/utils/profile_utils.py`; read at SGLang d1357bf87b) has its own rules:
+- **by-stage only**: `profile_by_stage` must be true, `start_step` and `merge_profiles` unset
+  (asserted); a plain `/start_profile` raises `NotImplementedError`. No mixed prefill+decode
+  window, no plain mid-burst capture;
+- **a capture ends at the first change of stage**: a prefill capture stops at the next decode
+  step, a decode capture at the next prefill (a step is one or the other unless the server runs
+  `--enable-mixed-chunk`);
+- **`num_steps = N` records N + 1 steps** (the trigger runs before each batch and stops once the
+  count exceeds N): send 9 for 10, and count them in the trace;
+- **never arm while a capture runs**: `configure()` asserts nothing is running, inside the
+  scheduler. Wait until the previous trace file is written;
+- files are `<profile_prefix>-<profile_id>-TP-0-<stage>.trace.json.gz` (`-prefill` /
+  `-decode`); `detailed_annotations: true` adds per-step sums to each step span (`g_sk`, a decode
+  step's total KV), which shows a decode capture really is mid-burst.
+Body fields and these rules differ by SGLang revision — read the source or probe
+`/start_profile` first, and keep the probe.
 
-**Verify the phase from the trace; do not trust the file name.** With `range_ratio < 1` the
-measured prompts vary in length while the warm-up's are all identical, so the phase is readable
-off the step annotations:
+**Verify the phase from the trace; do not trust the file name.**
 
 ```bash
-zcat <point>-TP-0-*.trace.json.gz | grep -oE 'step\[EXTEND bs=[0-9]+ toks=[0-9]+\]' | sort | uniq -c
+zcat <trace>.trace.json.gz | grep -oE 'step\[(EXTEND|DECODE) bs=[0-9]+( toks=[0-9]+)?' | sort | uniq -c
 ```
 
-Identical token counts (e.g. all 991; `2973 = 3 × 991`) = warm-up; varied counts = the measured
-burst. A `bs=1 toks=1` step is the warm-up prompt reused as the first measured request (a cache
-hit) — expected, not an error.
+A steady-state prefill trace has `EXTEND bs=1` (rarely 2) with `toks` between `range_ratio`·ISL and
+ISL, varied across captures; identical counts across steps (e.g. all 991; `2973 = 3 × 991`) are the
+warm-up's single prompt, and `toks=1` is a cache hit (the flush did not happen). A decode trace has
+10 `DECODE` steps at `bs = conc`.
 
 **Always say this in the report — a profiled run is not a measurement.**
-- Writing a trace stalls the scheduler several seconds mid-burst, so this point's throughput and
-  TTFT are distorted. Quote GPU kernel times from the trace; take tok/s from an unprofiled run.
-- A by-stage decode capture triggered at the first full batch is *start-of-wave*: KV ≈ ISL
-  (shortest), no prefill interleaved — not steady state. For steady-state decode, send a plain
-  `/start_profile` with `num_steps` mid-point instead.
+- Writing a trace stalls the scheduler several seconds mid-burst, so the profiled pass's
+  throughput and TTFT are distorted. Quote GPU kernel times from the traces; take tok/s from the
+  warm run.
+- How many prefill captures you got, and whether the decode capture had to be re-armed.
 
 ## Mirror workers — reproduce an InferenceX config
 
