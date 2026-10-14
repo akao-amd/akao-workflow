@@ -4,7 +4,7 @@ description: The worker role's manual — an agent in a worker container (akao_<
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.4.0"
+  version: "2.5.0"
   category: development
   tags: ["worker", "sglang", "oaka", "bisect", "benchmark", "profiling", "git"]
 compatibility:
@@ -80,11 +80,20 @@ user, ww42 2026-10-14; the reasoning is in that week's `1014_prof_mi355/3029_pro
 - **Steady state = 50% of the measured requests done**, counted by the client. Not a fixed delay
   (it differs per point and drifts with every trace's stall); not "after the first wave" (with
   `range_ratio = 0.8` the second wave still starts nearly in step).
-- **Separate prefill and decode traces, 10 steps each.** One decode capture of 10 consecutive
-  decode steps, re-armed if a prefill cuts it short. Then prefill captures one at a time: in
-  steady state each holds one newly admitted request (`bs=1`, about ISL tokens), so 10 prefills
-  are 10 captures. Stop arming at 90% done and report how many you got — low concurrency at long
-  ISL admits a request only every second or so.
+- **Separate prefill and decode traces, 10 steps each.**
+  - Decode: **re-arm until one capture holds a clean 10** consecutive `DECODE` steps at
+    `bs = conc`. A prefill ends a capture early; keep the short ones on disk, marked short in the
+    record, and do not use them.
+  - Prefill: **re-arm until the captures hold >= 10 `EXTEND` steps in total**. A steady-state
+    prefill capture holds only 1-3 steps (newly admitted requests, `bs=1`, about ISL tokens), so
+    this takes several captures, armed one after another. Do not patch the profiler to get longer
+    ones.
+  - If the burst nears its end (90% done) before both are complete, flush the cache and run
+    another profiled pass, again from 50%, and carry on counting. Low concurrency at long ISL
+    admits a request only every second or so, and every capture adds a stall.
+- **Collect, do not analyse.** The deliverable is the traces, checked to be the right phase and
+  step count (below), with their record. No kernel breakdowns or comparisons unless the request
+  asks, or something stands out — then report it briefly.
 - gsm8k is not needed when the same recipe and image already passed it; say which run did.
 
 **How to augment without touching `scripts/`.** Copy the generated
@@ -97,8 +106,9 @@ in place of `python3 -m infx.bench fixed-seq point` run a small `profile_point.p
   rejects): the hook only marks the start of the measured burst, from which completions are
   counted; it drops the hook's `/stop_profile` (by-stage captures stop themselves);
 - from a thread, at 50% done, arms `{"profile_by_stage": true, "profile_stages": ["decode"],
-  "num_steps": 9, "output_dir": ..., "profile_prefix": ...}`, then the prefill captures the same
-  way with `["prefill"]` — each armed only after the previous trace is on disk.
+  "num_steps": 9, "output_dir": ..., "profile_prefix": ...}` until a clean 10 lands, then the
+  prefill captures the same way with `["prefill"]` until they total >= 10 steps — each armed only
+  after the previous trace is on disk, its steps counted from the trace before the next arm.
 Keep the client copy, `profile_point.py`, and a `*.profile_record.json` (what was sent, when, at
 how many completions) in the task dir — they are the rerunnable artifact.
 
@@ -130,14 +140,15 @@ zcat <trace>.trace.json.gz | grep -oE 'step\[(EXTEND|DECODE) bs=[0-9]+( toks=[0-
 
 A steady-state prefill trace has `EXTEND bs=1` (rarely 2) with `toks` between `range_ratio`·ISL and
 ISL, varied across captures; identical counts across steps (e.g. all 991; `2973 = 3 × 991`) are the
-warm-up's single prompt, and `toks=1` is a cache hit (the flush did not happen). A decode trace has
-10 `DECODE` steps at `bs = conc`.
+warm-up's single prompt, and `toks=1` is a cache hit (the flush did not happen). The kept decode
+trace has 10 `DECODE` steps at `bs = conc`.
 
 **Always say this in the report — a profiled run is not a measurement.**
 - Writing a trace stalls the scheduler several seconds mid-burst, so the profiled pass's
   throughput and TTFT are distorted. Quote GPU kernel times from the traces; take tok/s from the
   warm run.
-- How many prefill captures you got, and whether the decode capture had to be re-armed.
+- How many prefill captures and steps you got, how many decode captures came back short, and
+  whether a second profiled pass was needed.
 
 ## Mirror workers — reproduce an InferenceX config
 
