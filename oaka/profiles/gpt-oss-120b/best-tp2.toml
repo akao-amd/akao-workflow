@@ -1,0 +1,28 @@
+# gpt-oss-120b/best at TP2.  Created 2026-10-16 for ww42 1016_new_mc_hammer_rocm101, task 5109.
+#
+# Derived from gpt-oss-120b/best the way gpt-oss-120b/tp2 is derived from base: the same recipe
+# (inherited via extends: base's flags + best's env), with the tp pin 1 -> 2 and tp2's
+# --disable-custom-all-reduce.  best inherits base's tp = 1, so a plan giving it two GPUs is
+# rejected; hence this child profile.
+#
+# Stands alone like best: on stock aiter/SGLang its switches are inert (base at TP2 without
+# HIP_FORCE_DEV_KERNARG=0); on trees that implement them, the full best recipe at TP2.  Which one
+# ran: see best.toml.
+#
+# --disable-custom-all-reduce: carried over from gpt-oss-120b/tp2, where AiterCustomAllreduce
+#   hung TP2 on GPUs 6+7 in DPX mode (ROCm 10.0.0).  Not re-tested here; kept so this profile
+#   differs from tp2 only by best's env.
+#
+# Untested at TP2: the tuned gfx1250 Triton table that the aiter switch ships was swept for the
+# TP1 shapes (GEMM 1 n5760_k2880, GEMM 2 n2880_k2880).  At TP2 the expert intermediate is split,
+# so GEMM 1 becomes N = 2880 (K 2880) and GEMM 2 K = 1440: GEMM 1 then picks up the n2880_k2880
+# entries tuned for TP1's GEMM 2, and GEMM 2 falls back to gfx950's table.  Re-tune before
+# reading the TP2 numbers as the recipe's best.
+
+description = "gpt-oss-120b W4A8 best gfx1250 recipe at TP2, RCCL all-reduce (switches act where aiter/SGLang implement them)"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/best"
+tp = 2
+
+[args]
+disable-custom-all-reduce = true
