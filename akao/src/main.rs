@@ -26,7 +26,14 @@ enum Cmd {
     ///
     /// Addresses are `nick:rel-path` (relative to <host_home>/<year>) or a bare
     /// local path.  The source basename is placed inside the destination directory.
-    /// Files are always overwritten.
+    /// Files are always overwritten; nothing is deleted.
+    ///
+    /// Keep the source's path, so the boxes' trees still merge when rsync'd together:
+    /// name the destination from the receiving worker's root with a trailing `..`.
+    ///
+    ///   a root:      akao cp h21-5:ww42/a0 f19-17:ww42/b0/..             # -> f19-17:ww42/a0
+    ///
+    ///   a task dir:  akao cp h21-5:ww42/a0/0003_x f19-17:ww42/b0/../a0   # -> f19-17:ww42/a0/0003_x
     Cp {
         /// Source address: `nick:rel-path` or a local path
         src: String,

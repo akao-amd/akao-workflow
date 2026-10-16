@@ -5,7 +5,9 @@
 //!
 //! Semantics: `cp -a` style — the source **basename** is placed **inside** the
 //! destination directory.  The destination is always created if absent.
-//! Files are overwritten; there is no `--delete`.
+//! Files are overwritten; there is no `--delete`.  `..` is passed through as
+//! given: `<dst-worker>/..` (a root) or `<dst-worker>/../<src-worker>` (a task
+//! dir) keeps the source's path, so the boxes' rsync'd trees still merge.
 //!
 //! Implementation: `tar -C <src-parent> -czf - <src-base>  |  tar -xzf - -C <dst>`,
 //! where each side is wrapped in `ssh nick -- sh -c '...'` when remote.

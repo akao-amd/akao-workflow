@@ -353,6 +353,10 @@ Row ids arrive as strings, numbers as either (`dashboard::n`).  Mid-2026 trees k
 
 **Semantics**: `cp -a` — source basename is placed *inside* the destination directory.
 `akao cp m15-21:ww41/foo f19-11:ww41/bar` → `bar/foo/` on f19-11.  Always overwrites.
+`..` in an address is passed through as given, and that is the intended use: the user rsyncs
+every box's `/<year>` into one superset, so a copy should keep its source path, written from
+the receiving worker's root: `<dst-worker>/..` for a whole root, `<dst-worker>/../<src-worker>`
+for a task dir.  Keep the texts (README, `--help`, controller skill) saying so.
 
 **Implementation**: `tar -C <src-parent> -czf - <src-base>  |  tar --owner=0 --group=0 -xzf - -C <dst>`.
 Each side is wrapped in `ssh nick -- sh -c '...'` when remote, or `sh -c '...'` when local.

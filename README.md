@@ -188,15 +188,24 @@ akao mirror n10-17 vllm_mirror --dashboard --conf gptoss,mi355,vllm      # bring
 ## `akao cp <src> <dst>`
 
 Copies a path between boxes, or between a box and this machine, e.g. one worker's results
-for another to refer to:
+for another to refer to.  Every box's `/<year>` tree is later rsync'd into one superset, so a
+copy must land at **the same path it has on its source box**: workers' artifact roots stay
+siblings, and the copy merges with its original instead of nesting inside another worker's
+dir.  Name the destination from the receiving worker's root plus a trailing `..`:
 
 ```bash
-akao cp m15-21:ww42/dsv4_exp/0003_baseline f19-11:ww42/dsv4_b   # -> f19-11:ww42/dsv4_b/0003_baseline
-akao cp n10-17:ww42/hello/0001_probe /tmp/                      # -> /tmp/0001_probe on this machine
+# a whole worker root: <dst-worker>/..
+akao cp h21-5:ww42/a0 f19-17:ww42/b0/..              # -> f19-17:ww42/a0
+# a task dir: <dst-worker>/../<src-worker>
+akao cp h21-5:ww42/a0/0003_baseline f19-17:ww42/b0/../a0   # -> f19-17:ww42/a0/0003_baseline
+akao cp n10-17:ww42/hello/0001_probe /tmp/           # -> /tmp/0001_probe on this machine
 ```
 
+The worker `b0` then reads it at `../a0/...` from its root.  A destination without the `..`
+(`f19-17:ww42/b0`) works, but plants `a0`'s files inside `b0`'s root, where no rsync puts them.
+
 - An address is `nick:rel-path`, relative to that box's `<host_home>/<year>`, or a bare path
-  (no colon) on this machine.
+  (no colon) on this machine.  `..` is taken as given.
 - Like `cp -a`: the source's basename lands *inside* the destination directory, which is
   created if missing.  Files are overwritten; nothing is deleted (merge, never mirror).
 - `tar | ssh tar`; written files are owned root:root, through `sudo -n` on a box whose ssh
