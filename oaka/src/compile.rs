@@ -167,13 +167,18 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
             .map(|w| w.join(" "))
             .collect();
         let gpus: Vec<String> = s.gpus.iter().map(u32::to_string).collect();
+        // Each cache variable gets its own empty dir below the server's cache root.
+        let caches: Vec<(&str, &str)> = [("TRITON_CACHE_DIR", "triton"), ("XDG_CACHE_HOME", "xdg")]
+            .into_iter()
+            .chain(s.effective.engine.cache_env().map(|v| (v, s.effective.engine.as_str())))
+            .collect();
         let text = env.get_template("server.sh")?.render(context! {
             marker, name => s.name, profile => s.base.name, description => s.base.description,
             overrides => overrides(s), self_path => format!("{SCRIPTS}/{file}"),
             port => port_of(&s.name), gpus => gpus.join(","), env => s.effective.env,
             model => s.model, tp => s.tp, fixed, args, packages => PROVENANCE_PACKAGES,
             engine => s.effective.engine.as_str(), command => s.effective.engine.command(),
-            pythonpath => pythonpath.join(":"),
+            pythonpath => pythonpath.join(":"), caches,
             targets => s.base.arch.iter().map(|t| format!("({:?}, {:?})", t.arch(), t.rocm())).collect::<Vec<_>>().join(", "),
             targets_text => crate::profile::targets_text(&s.base.arch),
         })?;

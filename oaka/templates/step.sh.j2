@@ -43,14 +43,17 @@ stop_servers() {
     done
     for pid in "${PIDS[@]}"; do kill -KILL -- "-$pid" 2>/dev/null; done
     PIDS=()
+    # The servers' compile caches (up to a GB each) are of no use once they are gone.
+    rm -rf "$LOGS"/cache_*
 }
 trap stop_servers EXIT
 trap 'exit 130' INT TERM
 
-# start_server <name>: own process group, so stopping it also stops its workers.
+# start_server <name>: own process group, so stopping it also stops its workers; its empty
+# compile caches in this step's logs/.
 start_server() {
     : >"$LOGS/server_$1.log"
-    setsid bash "$HERE/server_$1.sh" >"$LOGS/server_$1.log" 2>&1 &
+    OAKA_SERVER_CACHE="$LOGS/cache_$1" setsid bash "$HERE/server_$1.sh" >"$LOGS/server_$1.log" 2>&1 &
     PIDS+=($!)
     disown
     say "server $1 started (pid $!), log ${LOGS#"$WORKDIR"/}/server_$1.log"

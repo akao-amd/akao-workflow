@@ -99,6 +99,14 @@ Where the how lives: worker reference (commands, plan and profile fields)
   `off_spec`, which marks results `OFFSPEC`.  Why: in ww41 three scripts calling themselves
   "InferenceX methodology" used 4x vs 10x prompts per concurrency and range ratios 0.8 vs
   1.0; templates an agent cannot edit end that drift.
+- **Every server starts on empty compile caches of its own** (Triton, XDG, the engine's),
+  unless the plan or profile points them elsewhere.  Why: InferenceX's client warms each
+  point with one repeated prompt, so the random-length requests still compile kernels while
+  measured; InferenceX keeps configs comparable by giving each job empty caches (its
+  runners' `TRITON_CACHE_DIR`/`XDG_CACHE_HOME`).  In ww42 (1016 update_bench) servers shared
+  one `SGLANG_CACHE_DIR`: TP1x2, run after TP1, reused its kernels and beat it by 26% at
+  8k/1k c4, which no TP1x2 can do.  Cold for all is the comparable state; warm is a choice
+  the plan makes visibly.
 - **Profiles are named `<model>/<recipe>` (`<model>` alone = `<model>/base`), `<model>` being
   the model family as the user names it; the GPU arch is a multiple-choice field in the
   file, not part of the name.**  Recipes overlay one another (`extends`; `false` removes),

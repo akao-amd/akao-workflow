@@ -47,7 +47,15 @@ try:
     pkg = os.path.realpath(fakepkg.__file__)
 except ImportError:
     pkg = None
-json.dump({"argv": args, "gpus": os.environ.get("HIP_VISIBLE_DEVICES"), "fakepkg": pkg},
+# What each compile cache held at start; then "compile" a kernel into it, as sglang would.
+caches = {}
+for var in ("TRITON_CACHE_DIR", "XDG_CACHE_HOME", "SGLANG_CACHE_DIR"):
+    path = os.environ.get(var)
+    caches[var] = [path, sorted(os.listdir(path)) if path and os.path.isdir(path) else None]
+    if path:
+        os.makedirs(path, exist_ok=True)
+        open(os.path.join(path, "kernel.bin"), "w").close()
+json.dump({"argv": args, "gpus": os.environ.get("HIP_VISIBLE_DEVICES"), "fakepkg": pkg, "caches": caches},
           open(os.path.join(state, f"server_{port}.json"), "w"))
 s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(("127.0.0.1", port)); s.listen(); s.settimeout(0.2)
@@ -427,6 +435,73 @@ fn full_plan_runs_and_cleans_up() {
     let (code, out) = sb.run(&plan, &[]);
     assert_eq!(code, 0, "{out}");
     assert_eq!(sb.read("plan.lock.toml"), lock);
+    sb.assert_no_leftovers();
+}
+
+/// Every server starts on empty compile caches of its own, in the step's logs/, gone after
+/// the step; a plan that points a cache elsewhere keeps it across runs.
+#[test]
+fn servers_start_with_empty_compile_caches() {
+    let _servers = servers_shared();
+    let sb = Sandbox::new("caches");
+    let shared = sb.root.join("shared-triton");
+    let caches_of = |name: &str| -> serde_json::Value {
+        let port: u16 = sb
+            .read("plan.lock.toml")
+            .lines()
+            .find_map(|l| l.strip_prefix(&format!("{name} = ")).map(|p| p.trim().parse().unwrap()))
+            .unwrap_or_else(|| panic!("no port for {name}"));
+        let rec = fs::read(sb.root.join(format!("state/server_{port}.json"))).unwrap();
+        serde_json::from_slice::<serde_json::Value>(&rec).unwrap()["caches"].clone()
+    };
+    let a = "[[server]]\nname = 'a'\nprofile = 'm/base'\ngpus = [0]\n";
+    let b = "[[server]]\nname = 'b'\nprofile = 'm/base'\ngpus = [1]\n";
+    let logs = sb.work().join("logs");
+    // Twice: the second run's servers must not see the kernels the first run's compiled.
+    for _ in 0..2 {
+        let (code, out) = sb.run(&format!("{a}{b}{FIXED_SEQ}"), &[]);
+        assert_eq!(code, 0, "{out}");
+        for name in ["a", "b"] {
+            let c = caches_of(name);
+            for (var, sub) in [
+                ("TRITON_CACHE_DIR", "triton"),
+                ("XDG_CACHE_HOME", "xdg"),
+                ("SGLANG_CACHE_DIR", "sglang"),
+            ] {
+                let want = logs.join(format!("cache_{name}/{sub}"));
+                assert_eq!(c[var][0], want.to_str().unwrap(), "{var} of {name}: {c}");
+                assert_eq!(
+                    c[var][1],
+                    serde_json::json!([]),
+                    "{var} of {name} not empty at start: {c}"
+                );
+            }
+        }
+        assert!(sb
+            .read("logs/server_a.log")
+            .contains("[server a] env TRITON_CACHE_DIR="));
+        let left: Vec<_> = fs::read_dir(&logs)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("cache_"))
+            .collect();
+        assert!(left.is_empty(), "caches left after the step: {left:?}");
+    }
+    // The plan's env wins: a's Triton cache is shared and keeps its kernels; the rest stay fresh.
+    let a_shared = format!("{a}[server.env]\nTRITON_CACHE_DIR = '{}'\n", shared.display());
+    for run in 0..2 {
+        let (code, out) = sb.run(&format!("{a_shared}{b}{FIXED_SEQ}"), &[]);
+        assert_eq!(code, 0, "{out}");
+        let c = caches_of("a");
+        assert_eq!(c["TRITON_CACHE_DIR"][0], shared.to_str().unwrap(), "{c}");
+        let want = if run == 0 {
+            serde_json::json!(null)
+        } else {
+            serde_json::json!(["kernel.bin"])
+        };
+        assert_eq!(c["TRITON_CACHE_DIR"][1], want, "{c}");
+        assert_eq!(c["XDG_CACHE_HOME"][1], serde_json::json!([]), "{c}");
+    }
     sb.assert_no_leftovers();
 }
 

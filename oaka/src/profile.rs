@@ -78,6 +78,16 @@ impl Engine {
         }
     }
 
+    /// The variable naming the engine's own cache root, if it has one.  SGLang's holds the
+    /// Triton kernels it compiles (it points TRITON_CACHE_DIR there unless that is set).
+    pub fn cache_env(self) -> Option<&'static str> {
+        match self {
+            Engine::Sglang => Some("SGLANG_CACHE_DIR"),
+            Engine::Vllm => Some("VLLM_CACHE_ROOT"),
+            Engine::Atom => None,
+        }
+    }
+
     /// SGLang says it is ready in its log once its warmup request went through; the others
     /// are ready when `GET /health` answers 200, as InferenceX's own scripts wait.
     pub fn ready_by_log(self) -> bool {

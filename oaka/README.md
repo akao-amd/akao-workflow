@@ -45,7 +45,7 @@ oaka profile ls | show <p> | diff <a> <b> | save <server> --as <model>/<recipe>
 
   | Script | Does |
   |---|---|
-  | `server_<name>.sh` | one server, in the foreground |
+  | `server_<name>.sh` | one server, in the foreground, on empty compile caches of its own: `TRITON_CACHE_DIR`, `XDG_CACHE_HOME` and the engine's (SGLang `SGLANG_CACHE_DIR`, vllm `VLLM_CACHE_ROOT`) under `logs/cache_<name>/`, emptied at every start (`step.sh`: in the step's logs, removed when it stops the servers).  The plan's or profile's env may point any of them elsewhere, e.g. to a shared warm cache |
   | `client_<NN>_<kind>_<server>.sh` | one client against its running server |
   | `step.sh [<label>]` | one measurement: start every server, wait until it is ready (SGLang: its ready line; vllm, ATOM: `GET /health` answers 200; a crash marker, exit or 30 min timeout fails it), the clients in plan order, stop the servers (also on failure and Ctrl-C) |
   | `run_all.sh` | the whole plan; what `oaka run` executes |
@@ -138,9 +138,10 @@ it.  It always installs; there is no "already installed" shortcut.
 `clean = "never"`.  The table adds B/A1 (the effect) and A2/A1, which must come back to ~1,
 or something survived the swap (a JIT cache, an install).  Trust B/A1 only when it is
 larger than the noise: with one run per step, 1-2% is run-to-run spread (ww42: B/A1 = 1.014
-between two commits that differ only in diffusion code), so use `repeats` >= 3.  Do not
-compare against the first server after a fresh install either: its kernels compile while
-it is measured (ww42: 666 vs 730 tok/s on identical code).
+between two commits that differ only in diffusion code), so use `repeats` >= 3.  Every
+server compiles its kernels while it is measured (ww42: 666 vs 730 tok/s on identical code
+between a cold and a warm server); since each starts on empty caches, every step pays that
+alike.
 
 **Bisect** answers "which commit regressed?" (`bisect = { good, bad }`).  The journey:
 (1) the good and bad commits come from the two runs' server logs (`[server ...] pip` lines);

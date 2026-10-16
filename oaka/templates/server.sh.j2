@@ -79,6 +79,21 @@ for d in sys.argv[1].split(","):
                  f"{' on ' + a if a else ''}, but profile {{ profile }} is for {WANT}")
 PY
 {% endif %}
+
+# Empty compile caches at every start, as InferenceX's runners give each job its own: every
+# server compiles its kernels from nothing, so servers measured one after another start
+# alike instead of the later ones reusing the earlier ones' kernels.  step.sh puts them in
+# the step's logs/; the plan's or profile's env below may still point any of them elsewhere.
+CACHE="${OAKA_SERVER_CACHE:-$(dirname "$(dirname "$(realpath "$0")")")/logs/cache_{{ name }}}"
+case "$CACHE" in
+    /*/cache_{{ name }}) ;;
+    *) say "FATAL: OAKA_SERVER_CACHE=$CACHE must be an absolute path ending in /cache_{{ name }}"; exit 1 ;;
+esac
+rm -rf "$CACHE"
+{% for c in caches %}
+export {{ c[0] }}="$CACHE/{{ c[1] }}"
+mkdir -p "${{ c[0] }}"
+{% endfor %}
 {% if pythonpath %}
 # The plan's stack trees go first: the image puts its own checkouts on PYTHONPATH too.
 export PYTHONPATH={{ pythonpath | q }}${PYTHONPATH:+:$PYTHONPATH}
@@ -102,7 +117,7 @@ MODEL={{ model | q }}
 say "profile {{ profile }}  model $MODEL  tp {{ tp }}  gpus $HIP_VISIBLE_DEVICES  port $PORT"
 python3 -m pip show {{ packages }} 2>/dev/null \
     | grep -E '^(Name|Version|Location|Editable project location):' | sed 's/^/[server {{ name }}] pip /' || true
-env | grep -E '^(HIP|HSA|ROCM|AITER|SGLANG|VLLM|ATOM|TRITON|ENABLE_CK|NCCL|RCCL|TORCH|PYTORCH)' | sort | sed 's/^/[server {{ name }}] env /'
+env | grep -E '^(HIP|HSA|ROCM|AITER|SGLANG|VLLM|ATOM|TRITON|XDG_CACHE|ENABLE_CK|NCCL|RCCL|TORCH|PYTORCH)' | sort | sed 's/^/[server {{ name }}] env /'
 say "cmd {{ command }} ${ARGS[*]}"
 
 exec {{ command }} "${ARGS[@]}"
