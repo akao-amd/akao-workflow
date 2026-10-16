@@ -5,9 +5,11 @@
 //!
 //! Semantics: `cp -a` style — the source **basename** is placed **inside** the
 //! destination directory.  The destination is always created if absent.
-//! Files are overwritten; there is no `--delete`.  `..` is passed through as
-//! given: `<dst-worker>/..` (a root) or `<dst-worker>/../<src-worker>` (a task
-//! dir) keeps the source's path, so the boxes' rsync'd trees still merge.
+//! Files are overwritten; there is no `--delete`.
+//!
+//! A destination of `nick:` (no path) keeps the source's path: it becomes the source's
+//! parent (`same_path_parent`), so the boxes' trees still merge when the user rsyncs them
+//! together.  An explicit path is taken as given, `..` included.
 //!
 //! Implementation: `tar -C <src-parent> -czf - <src-base>  |  tar -xzf - -C <dst>`,
 //! where each side is wrapped in `ssh nick -- sh -c '...'` when remote.
@@ -71,14 +73,48 @@ impl Addr {
     }
 }
 
+/// The destination path, relative to `<host_home>/<year>`, that keeps the source's path:
+/// its parent, since the copy lands inside the destination.  A remote source gives its own
+/// path; a local one must lie under this machine's `/<year>/`, the tree the boxes are
+/// rsync'd into.
+fn same_path_parent(src: &Addr, year: &str) -> Result<String> {
+    let rel = match &src.nick {
+        Some(_) => src.rel.trim_matches('/').to_string(),
+        None => {
+            let abs = std::path::absolute(&src.rel)?;
+            let abs = abs.to_string_lossy();
+            match abs.strip_prefix(&format!("/{year}/")) {
+                Some(rel) => rel.trim_end_matches('/').to_string(),
+                None => bail!(
+                    "{abs} is not under /{year}/, so it has no path on a box to keep; \
+                     name the destination path (nick:<path>)"
+                ),
+            }
+        }
+    };
+    if rel.is_empty() {
+        bail!("the whole /{year} tree has no parent to keep; name the destination path (nick:<path>)");
+    }
+    Ok(rel.rfind('/').map_or(String::new(), |i| rel[..i].to_string()))
+}
+
 pub fn run(state: &State, r: &Runner, src_str: &str, dst_str: &str) -> Result<()> {
     let src = Addr::parse(src_str);
-    let dst = Addr::parse(dst_str);
+    let mut dst = Addr::parse(dst_str);
+
+    let same_path = dst.nick.is_some() && dst.rel.is_empty();
+    if same_path {
+        if dst.nick == src.nick {
+            bail!("{src_str} is already at that path on {}", dst_str.trim_end_matches(':'));
+        }
+        dst.rel = same_path_parent(&src, &state::work_year())?;
+    }
 
     let (src_parent, src_base) = src.split_path(state)?;
     let dst_full = dst.full_path(state)?;
 
-    println!("akao cp: {} -> {}", src.label(state)?, dst.label(state)?);
+    let note = if same_path { "  (the source's path)" } else { "" };
+    println!("akao cp: {} -> {}{note}", src.label(state)?, dst.label(state)?);
 
     // --- source: tar the basename out of its parent ---
     // Reading doesn't need escalation — world-readable is the norm.
@@ -129,6 +165,29 @@ mod tests {
         // A nick without a colon is ambiguous but treated as local.
         let a = Addr::parse("relative/path");
         assert!(a.nick.is_none());
+    }
+
+    fn kept(src: &str) -> Result<String> {
+        same_path_parent(&Addr::parse(src), "2026")
+    }
+
+    #[test]
+    fn same_path_is_the_sources_parent() {
+        assert_eq!(kept("f19-17:ww42/b0/8115_best").unwrap(), "ww42/b0");
+        assert_eq!(kept("f19-17:/ww42/b0/8115_best/").unwrap(), "ww42/b0");
+        assert_eq!(kept("f19-17:ww42/b0").unwrap(), "ww42");
+        assert_eq!(kept("f19-17:ww42").unwrap(), "");
+        assert_eq!(kept("/2026/ww42/a0/0003_x").unwrap(), "ww42/a0");
+        assert_eq!(kept("/2026/ww42/a0/0003_x/").unwrap(), "ww42/a0");
+    }
+
+    #[test]
+    fn same_path_refuses_what_has_no_place_on_a_box() {
+        let e = kept("/tmp/0001_probe").unwrap_err().to_string();
+        assert!(e.contains("not under /2026/"), "{e}");
+        assert!(kept("/2026").is_err());
+        let e = kept("f19-17:").unwrap_err().to_string();
+        assert!(e.contains("whole /2026 tree"), "{e}");
     }
 
     #[test]

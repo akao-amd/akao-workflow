@@ -159,6 +159,7 @@ akao/
     cp.rs             `akao cp`  — cross-host path copy via tar | ssh
     doctor.rs         `akao doctor` — console prerequisites (ssh wrapper, state, deploy,
                       controller: artifact root, tmux, claude, InferenceX clone)
+  tests/cp.rs         akao cp between two scratch boxes (homes in a sandbox), stand-in ssh run locally
   tests/doctor.rs     akao doctor against a scratch AKAO_CONFIG_ROOT
   tests/mirror.rs     akao mirror --dry-run vs. a scratch InferenceX repo, stand-in ssh/docker;
                       --dashboard vs. a stand-in curl serving the API and a commit's tarball
@@ -353,10 +354,11 @@ Row ids arrive as strings, numbers as either (`dashboard::n`).  Mid-2026 trees k
 
 **Semantics**: `cp -a` — source basename is placed *inside* the destination directory.
 `akao cp m15-21:ww41/foo f19-11:ww41/bar` → `bar/foo/` on f19-11.  Always overwrites.
-`..` in an address is passed through as given, and that is the intended use: the user rsyncs
-every box's `/<year>` into one superset, so a copy should keep its source path, written from
-the receiving worker's root: `<dst-worker>/..` for a whole root, `<dst-worker>/../<src-worker>`
-for a task dir.  Keep the texts (README, `--help`, controller skill) saying so.
+The user rsyncs every box's `/<year>` into one superset, so a copy should keep its source
+path: a destination of `nick:` alone does (`same_path_parent`: the source's parent; a local
+source must lie under `/<year>/`; the source's own box is refused, tar would read what it
+overwrites).  That is the normal form; keep the texts (README, `--help`, controller skill)
+leading with it.  An explicit path, `..` included, is passed through as given.
 
 **Implementation**: `tar -C <src-parent> -czf - <src-base>  |  tar --owner=0 --group=0 -xzf - -C <dst>`.
 Each side is wrapped in `ssh nick -- sh -c '...'` when remote, or `sh -c '...'` when local.

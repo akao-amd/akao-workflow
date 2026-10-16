@@ -191,21 +191,22 @@ Copies a path between boxes, or between a box and this machine, e.g. one worker'
 for another to refer to.  Every box's `/<year>` tree is later rsync'd into one superset, so a
 copy must land at **the same path it has on its source box**: workers' artifact roots stay
 siblings, and the copy merges with its original instead of nesting inside another worker's
-dir.  Name the destination from the receiving worker's root plus a trailing `..`:
+dir.  A destination of `nick:` alone, with no path, does exactly that:
 
 ```bash
-# a whole worker root: <dst-worker>/..
-akao cp h21-5:ww42/a0 f19-17:ww42/b0/..              # -> f19-17:ww42/a0
-# a task dir: <dst-worker>/../<src-worker>
-akao cp h21-5:ww42/a0/0003_baseline f19-17:ww42/b0/../a0   # -> f19-17:ww42/a0/0003_baseline
-akao cp n10-17:ww42/hello/0001_probe /tmp/           # -> /tmp/0001_probe on this machine
+akao cp h21-5:ww42/a0/0003_baseline f19-17:   # -> f19-17:ww42/a0/0003_baseline
+akao cp h21-5:ww42/a0 f19-17:                 # -> f19-17:ww42/a0, beside f19-17's own roots
+akao cp /2026/ww42/a0/0003_baseline f19-17:   # from this machine's /2026 superset, likewise
+akao cp n10-17:ww42/hello/0001_probe /tmp/    # -> /tmp/0001_probe on this machine
 ```
 
-The worker `b0` then reads it at `../a0/...` from its root.  A destination without the `..`
-(`f19-17:ww42/b0`) works, but plants `a0`'s files inside `b0`'s root, where no rsync puts them.
+A worker `b0` on f19-17 then reads it at `../a0/...` from its root.  `nick:` refuses a local
+source outside `/<year>/` and the source's own box (it is already there).
 
 - An address is `nick:rel-path`, relative to that box's `<host_home>/<year>`, or a bare path
-  (no colon) on this machine.  `..` is taken as given.
+  (no colon) on this machine.  An explicit path is taken as given, `..` included; one that
+  names another worker's root (`f19-17:ww42/b0`) plants the copy inside it, where no rsync
+  puts it.
 - Like `cp -a`: the source's basename lands *inside* the destination directory, which is
   created if missing.  Files are overwritten; nothing is deleted (merge, never mirror).
 - `tar | ssh tar`; written files are owned root:root, through `sudo -n` on a box whose ssh

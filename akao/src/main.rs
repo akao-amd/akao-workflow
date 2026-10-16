@@ -28,16 +28,19 @@ enum Cmd {
     /// local path.  The source basename is placed inside the destination directory.
     /// Files are always overwritten; nothing is deleted.
     ///
-    /// Keep the source's path, so the boxes' trees still merge when rsync'd together:
-    /// name the destination from the receiving worker's root with a trailing `..`.
+    /// A destination of `nick:` alone keeps the source's path, so the boxes' trees still merge
+    /// when rsync'd together.  That is the normal use:
     ///
-    ///   a root:      akao cp h21-5:ww42/a0 f19-17:ww42/b0/..             # -> f19-17:ww42/a0
+    ///   akao cp h21-5:ww42/a0/0003_x f19-17:      # -> f19-17:ww42/a0/0003_x
     ///
-    ///   a task dir:  akao cp h21-5:ww42/a0/0003_x f19-17:ww42/b0/../a0   # -> f19-17:ww42/a0/0003_x
+    ///   akao cp h21-5:ww42/a0 f19-17:             # -> f19-17:ww42/a0
+    ///
+    /// A local source must then lie under /<year>/.  An explicit destination path is taken as
+    /// given (`..` included); the copy lands inside it.
     Cp {
         /// Source address: `nick:rel-path` or a local path
         src: String,
-        /// Destination address: `nick:rel-path` or a local path
+        /// Destination address: `nick:` (the source's path), `nick:rel-path` or a local path
         dst: String,
         /// Print the commands without running them
         #[arg(long)]
