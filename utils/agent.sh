@@ -172,13 +172,16 @@ ensure_jq() {
     fi
 
     print_warning "jq not found; attempting to install..."
+    # sudo only when not root: worker images run as root and some ship no sudo.
+    local S=()
+    [[ "$(id -u)" -eq 0 ]] || S=(sudo)
     if command -v apt-get >/dev/null 2>&1; then
-        sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq jq
+        "${S[@]}" env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+        "${S[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq jq
     elif command -v yum >/dev/null 2>&1; then
-        sudo yum install -y jq
+        "${S[@]}" yum install -y jq
     elif command -v dnf >/dev/null 2>&1; then
-        sudo dnf install -y jq
+        "${S[@]}" dnf install -y jq
     else
         print_error "jq is required to configure Claude Code. Please install jq and re-run."
         exit 1
