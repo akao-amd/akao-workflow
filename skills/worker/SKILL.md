@@ -4,7 +4,7 @@ description: The worker role's manual — an agent in a worker container (akao_<
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.6.0"
+  version: "2.7.0"
   category: development
   tags: ["worker", "sglang", "oaka", "bisect", "benchmark", "profiling", "git"]
 compatibility:
@@ -172,22 +172,46 @@ in the profile's provenance.
    setup script you did not run — say so next to the number; never adjust the plan to hide
    it. A setup script or a missing package: stop and ask, do not improvise.
 6. **Keep the profile**: `oaka profile save` wrote it into your clone's `oaka/profiles/`;
-   commit it and hand it over as a patch ("Fixing the tools" below).
+   commit it and hand it over ("Fixing the tools" below: a patch, or a push if the user asks).
 
 ## Fixing the tools — your clone of the repo
 
 `$AKAO_REPO_ROOT/CLAUDE.md`, "Fixing the tools", says when. Your clone is `$AKAO_REPO_ROOT`
-(`/root/akao-workflow`, yours alone; `akao init` keeps it fed from the console as
-`console/main`). Change it per its `CLAUDE.md`, commit on `main`, then put the patch where
-the task's artifacts are and name it in your report:
+(`/root/akao-workflow`, yours alone). `akao init` keeps it fed from the console as
+`console/main`, and its `origin` is the GitHub repo (akao-amd/akao-workflow). Change it per
+its `CLAUDE.md` and commit on `main` as `Alan Kao <akao@amd.com>`. Then hand the change over
+one of two ways, and name the commit(s) or the patch in your report.
+
+**Push it yourself, when the user asks.** You need GitHub access: `GH_TOKEN` in the
+environment, with `gh` as git's credential helper. Never put the token on a command line.
+
+```bash
+cd "$AKAO_REPO_ROOT"
+gh auth setup-git                      # once per container: git asks gh, gh reads GH_TOKEN
+git fetch origin
+git rebase origin/main                 # others push too; your commits go on top
+git log --oneline origin/main..main    # exactly your commits, nothing else
+git push origin main                   # fast-forward only: never --force on main
+```
+
+- Rebase conflicts in someone else's text: keep their wording and re-apply yours. If a
+  conflict touches meaning you cannot judge, stop and ask.
+- The push is refused (someone pushed meanwhile): fetch, rebase, push again.
+- The console does not see your push until the controller pulls `origin/main` there. Say in
+  your report that the change is on GitHub, with the commit ids.
+- Rust code you could not build and test (`cargo`, `clippy`, `cargo test`: CLAUDE.md, "Build &
+  test") is not pushed: hand it over as a patch and leave the tests to the controller. Docs and
+  skills need no build; check a profile with `oaka profile show <model>/<recipe>` and an
+  `oaka check` of a plan using it. Say in the report which tests did not run.
+
+**Otherwise, as a patch** (the user did not ask, or the box has no GitHub access). Put the
+patch where the task's artifacts are; the controller applies it on the console:
 
 ```bash
 git -C "$AKAO_REPO_ROOT" format-patch -o "$PWD" console/main..main   # into the task dir
 ```
 
-Never push it yourself; the controller applies it on the console. Building and testing need
-Rust (`cargo`); if this image has none, say so in the report and leave the tests to the
-controller.
+Building and testing need Rust (`cargo`); if this image has none, say so in the report.
 
 ## Commit + push safely — `scripts/commit_safely.sh`, `scripts/safe_push.sh`
 

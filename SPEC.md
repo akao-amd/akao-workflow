@@ -230,8 +230,13 @@ Where the how lives: worker reference (commands, plan and profile fields)
   worker means no two edit the same checkout, the console's commits are often unpushed and
   boxes may have no network, and a fetch into `console/*` never moves a worker's own work.
 - **A worker's fix reaches the console as a patch in its task dir, applied by the
-  controller with `git am`.**  Why: review before delivery, the patch stays with the task's
-  artifacts, and no push credential has to leave the console.
+  controller with `git am` -- or, when the worker's user asks, the worker pushes it to
+  `origin/main` itself.**  Why the patch is the default: review before delivery, the patch
+  stays with the task's artifacts, and it works on boxes with no network.  Why the push is
+  allowed (2026-10-16): a user working with a worker directly wanted its doc/profile changes
+  on GitHub without a controller round trip; workers already hold `GH_TOKEN` for fork pushes.
+  Guard rails: only on the user's request, rebase onto `origin/main` and fast-forward only,
+  no untested Rust (a worker image may lack `cargo`); the controller pulls instead of `git am`.
 - **oaka's library is the repo's `oaka/` directory** (`profiles/`, `stacks.toml` tracked;
   `bin/` git-ignored, built by the hook).  Why: a saved profile is then a change in the
   saving worker's clone and travels like any fix (commit, patch, `git am`), with review and

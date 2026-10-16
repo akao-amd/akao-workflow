@@ -75,10 +75,15 @@ tests to run before every commit). One focused commit per fix, on `main`, with i
 
 - **Controller** (the console's checkout): commit; the post-commit hook delivers akao and
   oaka. Push only when the user asks.
-- **Worker** (your clone): commit, then `git format-patch -1` (or `console/main..`) into
-  your task dir and say so in your report; the controller reviews it and applies it with
-  `git am` on the console. After the next `akao init`, `git rebase console/main` drops
-  what was applied. Never push from a worker.
+- **Worker** (your clone): commit. Then hand the change over in one of two ways, and say in
+  your report which one you used:
+  - **Push it yourself**, only when the user asks and the box reaches GitHub. Rebase onto
+    `origin/main`, then do a plain fast-forward `git push origin main` (never force). The
+    worker skill, "Fixing the tools", gives the steps. Do not push Rust changes you could not
+    build and test (`cargo` missing): hand those over as a patch.
+  - **Otherwise, as a patch:** `git format-patch -1` (or `console/main..`) into your task dir.
+    The controller reviews it and applies it with `git am` on the console. After the next
+    `akao init`, `git rebase console/main` drops what was applied.
 - **A recipe worth keeping** (`oaka profile save`): the library is the repo's `oaka/`, so a
   saved or edited profile is a change in your checkout; commit it like any other fix.
 - Small and unrelated to the task? Note it in your report instead, and go on with the task.

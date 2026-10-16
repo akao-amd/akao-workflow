@@ -4,7 +4,7 @@ description: The controller role's manual — the agent on the console (where `a
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.2.0"
+  version: "2.3.0"
   category: development
   tags: ["controller", "akao", "worker", "tmux"]
 compatibility:
@@ -130,6 +130,10 @@ is mid-decision, and your keystroke would choose for them.
   their box's old `/<year>/oaka/profiles`: bring such a file over with `akao cp` into
   `$AKAO_REPO_ROOT/oaka/profiles/<model>/` (with any profile it `extends` that the repo
   lacks) and commit it.
+- A worker may also have pushed its commits to `origin/main` itself (its user asked; worker
+  skill, "Fixing the tools"). Its report then names commit ids instead of a patch. Bring
+  them in with `git -C "$AKAO_REPO_ROOT" pull --rebase origin main` and run the tests the
+  worker could not run (it pushes no untested Rust, but say so if a test fails).
 - Push only when the user asks.
 
 ## Teach the user English — `scripts/collect_english.sh`
