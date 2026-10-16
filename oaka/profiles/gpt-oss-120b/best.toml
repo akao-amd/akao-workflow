@@ -1,0 +1,69 @@
+# gpt-oss-120b (AMD Quark W4A8, amd/gpt-oss-120b-w-mxfp4-a-fp8), best recipe on gfx1250 as of
+# ww42 2026-10-16. Created for ww42 1015_b0_study_moe_before_upgrade, tasks 8100-8115 (b0 worker,
+# GPU 0, SGLang bab9c81fea, triton-custom 76940ad3, aiter a6d2b564f + staged MoE rollback to
+# e8b4507e5, ROCm 10.0.0). Same flags as gpt-oss-120b/base (inherited via extends) plus the env below.
+#
+# NEEDS PATCHED aiter AND SGLang. The four switches below exist only in the b0 study patches
+# (8104/8105/8109 patches/, env-gated); unpatched code ignores them. Until they are upstream, a plan
+# using this profile must put the patched trees first on the server's PYTHONPATH, e.g.
+#   [server.env]
+#   PYTHONPATH = "<sglang tree>/python:<aiter tree>:/sgl-workspace/mori:/sgl-workspace/aiter"
+# (ww42 b0: /2026/nocopy/sglang-b0-moe, /2026/nocopy/aiter-b0-gemm). That path is a plan field on
+# purpose: a profile must not point outside the library. Without the trees this profile is
+# base minus HIP_FORCE_DEV_KERNARG=0 (8100 arm 02), which already beats base at 8k.
+#
+# ---------------------------------------------------------------------------------------
+# What it is worth (output tok/s, warm repeats, gsm8k gate; vs base = mean of two base servers
+# the same night; median TPOT / TTFT in ms):
+#
+#                    1k/1k c16            8k/1k c4                  8k/1k c16
+#   base             1709  TPOT 9.08      535  TPOT 6.57 TTFT 534    868  TPOT 17.06 TTFT 534
+#   best (8114)      2046  TPOT 7.67      758  TPOT 4.85 TTFT 219   1419  TPOT 10.85 TTFT 229
+#                    +20%                 +42%                      +64%
+#
+#   GSM8K 0.9575 (every server that night: 0.956-0.965; base 0.9636/0.9629). Measured only at
+#   conc <= 16, ISL <= 8k, TP1. 8114 passed the tuned table as AITER_A8W4_TUNED_JSON; this file
+#   relies on the aiter patch's built-in copy instead (8115 probe: identical configs for all 88
+#   shape/size cases). Re-measured AS COMMITTED in 8115: GSM8K 0.9629; 2014 / 765 / 1413 tok/s,
+#   TPOT 7.75 / 4.86 / 10.91 ms -- same as 8114 within noise.
+#
+# ---------------------------------------------------------------------------------------
+# Why each line is here
+#
+#   HIP_FORCE_DEV_KERNARG = false      (drops base's "0"; the image exports 1)
+#       With kernel arguments in host memory some torch kernels run 4-117x slower on b0 (8107:
+#       a sorted-index gather of 12288x2880 bf16 takes 12.1 ms vs 0.10 ms). That was the 2 ms
+#       per layer MoE-dispatch "gather" of the ww42 8000 trace. Alone worth +27% / +39% at
+#       8k c4 / c16 and half the TTFT (8100 arm 02). No errors, no failed requests, GSM8K
+#       0.9575-0.9644 on four servers without it (W4A8 and openai). A bug with the =1 default is
+#       reported for this image (symptom not known to this study); it did not show in these runs.
+#
+#   AITER_A8W4_BACKEND = "triton"      (aiter patch 8104/0001 + 8115/0002)
+#       Expert GEMMs on aiter's plain-Triton _moe_gemm_a8w4 instead of the gluon kernels, which
+#       the stock wrapper always picks on gfx1250. Same fp8 x mxfp4 math; unit: 13-18% faster
+#       at decode, 12% at a 3072-token chunk (8101), and bit-reproducible -- the gluon prefill
+#       kernel is not (8102). Tuned configs for the unpadded gpt-oss shapes ship in the patch
+#       (configs/moe/gfx1250-A8W4-triton.json, from the 8102 sweep).
+#
+#   SGLANG_GFX1250_W4A8_KERNEL_GATHER = "1"   (sglang patch 8105/0001)
+#       Downcast the num_tokens activation rows to fp8 first and let GEMM 1 gather them, instead
+#       of a torch gather of num_tokens*topk bf16 rows + a downcast of all of them. Requires the
+#       Triton backend above (the gluon gather needs TDM, which does not compile on gfx1250).
+#       Prefill step 200 -> 80 ms of kernel time at 3072 tokens (8108).
+#
+#   SGLANG_LM_HEAD_AITER_TGEMM = "1"   (sglang patch 8109/0001)
+#       LM head via aiter tgemm instead of F.linear (untuned hipBLASLt MT32x16x32: 349 vs 157 us
+#       at M=16). TPOT -0.6 to -1.3% served.
+#
+# Deliberately NOT set: AITER_TRITON_USE_HERD (8113: +21% at 1k/1k c16, GSM8K 0.9583, but it
+# approximates the model's expert routing -- needs broader evals first).
+
+description = "gpt-oss-120b W4A8, best gfx1250 recipe: Triton expert GEMMs (tuned), in-kernel MoE gather, aiter LM head, no HIP_FORCE_DEV_KERNARG=0; needs the ww42 b0 aiter/SGLang patches on PYTHONPATH"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/base"
+
+[env]
+HIP_FORCE_DEV_KERNARG = false
+AITER_A8W4_BACKEND = "triton"
+SGLANG_GFX1250_W4A8_KERNEL_GATHER = "1"
+SGLANG_LM_HEAD_AITER_TGEMM = "1"
