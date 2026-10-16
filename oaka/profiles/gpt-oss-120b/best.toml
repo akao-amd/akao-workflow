@@ -3,14 +3,17 @@
 # GPU 0, SGLang bab9c81fea, triton-custom 76940ad3, aiter a6d2b564f + staged MoE rollback to
 # e8b4507e5, ROCm 10.0.0). Same flags as gpt-oss-120b/base (inherited via extends) plus the env below.
 #
-# NEEDS PATCHED aiter AND SGLang. The four switches below exist only in the b0 study patches
-# (8104/8105/8109 patches/, env-gated); unpatched code ignores them. Until they are upstream, a plan
-# using this profile must put the patched trees first on the server's PYTHONPATH, e.g.
-#   [server.env]
-#   PYTHONPATH = "<sglang tree>/python:<aiter tree>:/sgl-workspace/mori:/sgl-workspace/aiter"
-# (ww42 b0: /2026/nocopy/sglang-b0-moe, /2026/nocopy/aiter-b0-gemm). That path is a plan field on
-# purpose: a profile must not point outside the library. Without the trees this profile is
-# base minus HIP_FORCE_DEV_KERNARG=0 (8100 arm 02), which already beats base at 8k.
+# Stands alone: every line below is valid on the stock image, nothing points outside the library.
+# What it does depends on the aiter/SGLang it is served with:
+#   - stock aiter/SGLang: the three switches below are env vars nobody reads, so they are inert;
+#     the recipe is then base without HIP_FORCE_DEV_KERNARG=0, measured (same night, same points
+#     as below): 1742 / 677 / 1207 tok/s, TPOT 8.82 / 5.47 / 12.22 ms (+2% / +27% / +39%).
+#   - aiter/SGLang that implement the switches (aiter: AITER_A8W4_BACKEND=triton plus its built-in
+#     tuned gfx1250 Triton table; SGLang: SGLANG_GFX1250_W4A8_KERNEL_GATHER and
+#     SGLANG_LM_HEAD_AITER_TGEMM): the full gain below. These changes were delivered as a patch
+#     pack ("gpt-oss-120b W4A8 best recipe"); serve trees that carry them however your stack does.
+# Which one ran: the server log's env lines, and the MoE kernel in a trace (`_moe_gemm_a8w4`
+# = switches active; `_moe_gemm_a8w4_decode` / `_prefill` = stock gluon path).
 #
 # ---------------------------------------------------------------------------------------
 # What it is worth (output tok/s, warm repeats, gsm8k gate; vs base = mean of two base servers
@@ -58,7 +61,7 @@
 # Deliberately NOT set: AITER_TRITON_USE_HERD (8113: +21% at 1k/1k c16, GSM8K 0.9583, but it
 # approximates the model's expert routing -- needs broader evals first).
 
-description = "gpt-oss-120b W4A8, best gfx1250 recipe: Triton expert GEMMs (tuned), in-kernel MoE gather, aiter LM head, no HIP_FORCE_DEV_KERNARG=0; needs the ww42 b0 aiter/SGLang patches on PYTHONPATH"
+description = "gpt-oss-120b W4A8, best gfx1250 recipe: base without HIP_FORCE_DEV_KERNARG=0, plus switches (Triton expert GEMMs, in-kernel MoE gather, aiter LM head) that act where aiter/SGLang implement them"
 arch = ["gfx1250"]
 extends = "gpt-oss-120b/base"
 
