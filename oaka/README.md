@@ -89,6 +89,7 @@ range_ratio = 0.8
 repeats = 1
 # off_spec = { prompts_per_conc = 4 }   # results get OFFSPEC in their names
 # min_output_tok_s = 3000  # gate: each point's median output tok/s over its repeats must reach it
+# lockstep = "pair"        # run with the other fixed-seq clients named "pair" (see below)
 
 [stack.sglang]             # optional: install a package of stacks.toml first (see Stack)
 tree = "/2026/nocopy/sglang-mytask"
@@ -101,6 +102,15 @@ The client policy is fixed; the plan only picks what is meant to vary:
   `--ignore-eos`, request rate and percentiles are InferenceX's.
 - `gsm8k` runs `sgl-eval run gsm8k` with temperature 1.0, top-p 1.0, seed 42, 8192 max
   tokens, 64 threads.
+
+Clients run one after another, in plan order.  To measure servers under each other's load
+(two TP1 servers on one box, each with its own client), give their fixed-seq clients the
+same `lockstep` name: `step.sh` runs them at the same time, where the first of them stands
+in the plan, and every run of every point starts on all of them together (a client waits
+in `logs/lockstep_<name>/` for the others; a fast server idles until the slow one's run
+ends).  They need the same `isl_osl`, `conc` and `repeats`, one client per server.  When
+one fails, the others stop before their next run.  Each client keeps its own results and
+`summary.csv`; run by hand, a client script does not wait.
 
 ## Stack (`[stack.<package>]`, `stacks.toml`)
 

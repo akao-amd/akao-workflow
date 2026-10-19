@@ -229,8 +229,20 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
                 })?
             }
         };
-        clients.push(file.clone());
+        clients.push((cl.lockstep(), file.clone()));
         files.push((file, text));
+    }
+    // step.sh's order: each client alone, or a lockstep's clients together where its first is.
+    let mut runs: Vec<minijinja::Value> = Vec::new();
+    for (i, (lockstep, file)) in clients.iter().enumerate() {
+        match lockstep {
+            None => runs.push(context! { lockstep => None::<String>, files => vec![file] }),
+            Some(l) if clients[..i].iter().all(|(o, _)| o != lockstep) => {
+                let files: Vec<&String> = clients.iter().filter(|(o, _)| o == lockstep).map(|(_, f)| f).collect();
+                runs.push(context! { lockstep => l, files });
+            }
+            Some(_) => {}
+        }
     }
 
     // How step.sh knows a server is ready: its log line, or `GET /health` on its port.
@@ -247,7 +259,7 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
         })
         .collect();
     let text = env.get_template("step.sh")?.render(context! {
-        marker, self_path => format!("{SCRIPTS}/step.sh"), servers, clients,
+        marker, self_path => format!("{SCRIPTS}/step.sh"), servers, runs,
         ready_timeout_s => READY_TIMEOUT_S,
     })?;
     files.push(("step.sh".into(), text));

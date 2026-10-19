@@ -32,6 +32,24 @@ fi
 say "InferenceX $(git -C "$INFX" rev-parse --short HEAD 2>/dev/null || echo '?') at $INFX"
 mkdir -p "$OUT"
 
+# lockstep <run>: when step.sh runs this client in a lockstep (OAKA_LOCKSTEP_DIR, with
+# OAKA_LOCKSTEP_N clients), start the run only once every client of it is ready to start
+# the same run; stop when one of them has failed.  Run by hand: no waiting.
+lockstep() {
+    [ -n "${OAKA_LOCKSTEP_DIR:-}" ] || return 0
+    local run=$1
+    : >"$OAKA_LOCKSTEP_DIR/$run.{{ index }}"
+    while true; do
+        if [ -e "$OAKA_LOCKSTEP_DIR/abort" ]; then
+            say "another client of the lockstep failed; stopping"
+            exit 1
+        fi
+        set -- "$OAKA_LOCKSTEP_DIR/$run".*
+        [ $# -ge "$OAKA_LOCKSTEP_N" ] && return 0
+        sleep 0.1
+    done
+}
+
 # isl osl conc
 POINTS=(
 {% for p in points %}
@@ -44,6 +62,7 @@ for point in "${POINTS[@]}"; do
     read -r ISL OSL CONC <<<"$point"
     for RUN in $(seq 1 {{ repeats }}); do
         NAME="{{ server }}_isl${ISL}_osl${OSL}_c${CONC}_r${RUN}{{ suffix }}"
+        lockstep "isl${ISL}_osl${OSL}_c${CONC}_r${RUN}"
         say "$(date +%H:%M:%S) isl=$ISL osl=$OSL conc=$CONC run $RUN/{{ repeats }} -> $NAME"
         PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$INFX${PYTHONPATH:+:$PYTHONPATH}" \
         python3 -m infx.bench fixed-seq point \

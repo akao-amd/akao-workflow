@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # {{ marker }}
 # One measurement with whatever stack is installed: start every server, wait until each
-# is ready, run the clients in plan order, then stop the servers (also on failure or
-# Ctrl-C).  Each part is its own script and can be run by hand instead.
+# is ready, run the clients in plan order (a lockstep's together, where its first is), then
+# stop the servers (also on failure or Ctrl-C).  Each part is its own script and can be run by hand instead.
 #   bash {{ self_path }} [<label>]     # logs/<label>/ and results/<label>/ (emptied first);
 #                                      # no label: logs/ and results/, overwriting same-named points
 # Exits 0, 3 when a client's gate failed (score or throughput below its minimum), 1 for
@@ -46,7 +46,12 @@ stop_servers() {
     # The servers' compile caches (up to a GB each) are of no use once they are gone.
     rm -rf "$LOGS"/cache_*
 }
-trap stop_servers EXIT
+CLIENT_PIDS=()
+stop_clients() {
+    for pid in "${CLIENT_PIDS[@]}"; do kill -TERM -- "-$pid" 2>/dev/null; done
+    CLIENT_PIDS=()
+}
+trap 'stop_clients; stop_servers' EXIT
 trap 'exit 130' INT TERM
 
 # start_server <name>: own process group, so stopping it also stops its workers; its empty
@@ -104,6 +109,46 @@ run_client() {
     exit $rc
 }
 
+# run_lockstep <name> <script>...: the clients at the same time, each in its own process
+# group, every run of every point started together (the clients wait for each other in
+# logs/lockstep_<name>/).  A client that fails marks it aborted, so the others stop before
+# their next run.  Exit codes as run_client's; Ctrl-C (130) beats a failure (1), which
+# beats a gate (3).
+run_lockstep() {
+    local name=$1 dir="$LOGS/lockstep_$1" rc worst=0 pid
+    shift
+    rm -rf "$dir"
+    mkdir -p "$dir"
+    say "lockstep $name: $*"
+    local -A file_of=()
+    for c in "$@"; do
+        OAKA_LOCKSTEP_DIR="$dir" OAKA_LOCKSTEP_N=$# setsid bash "$HERE/$c" &
+        CLIENT_PIDS+=($!)
+        file_of[$!]=$c
+    done
+    while [ -n "${file_of[*]}" ]; do
+        wait -n -p pid "${!file_of[@]}"
+        rc=$?
+        [ -z "$pid" ] && continue
+        case $rc in
+            0) ;;
+            3) say "client ${file_of[$pid]}: gate failed"; [ $worst -eq 0 ] && worst=3 ;;
+            130) worst=130 ;;
+            *) say "client ${file_of[$pid]} failed (exit $rc)"; [ $worst -ne 130 ] && worst=1 ;;
+        esac
+        [ $rc -ne 0 ] && : >"$dir/abort"
+        unset "file_of[$pid]"
+    done
+    CLIENT_PIDS=()
+    case $worst in
+        0) return 0 ;;
+        3) say "lockstep $name: gate failed; stopping" ;;
+        130) exit 130 ;;
+        *) say "lockstep $name failed; stopping" ;;
+    esac
+    exit $worst
+}
+
 {% for s in servers %}
 start_server {{ s.name }}
 {% endfor %}
@@ -111,7 +156,11 @@ start_server {{ s.name }}
 wait_ready {{ s.name }} "${PIDS[{{ loop.index0 }}]}" {{ s.health }} || exit 1
 {% endfor %}
 
-{% for c in clients %}
-run_client {{ c }}
+{% for r in runs %}
+{% if r.lockstep %}
+run_lockstep {{ r.lockstep }} {{ r.files | join(" ") }}
+{% else %}
+run_client {{ r.files[0] }}
+{% endif %}
 {% endfor %}
 say "done"

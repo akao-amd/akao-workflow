@@ -199,7 +199,7 @@ fn checked_json(c: &plan::Checked) -> serde_json::Value {
             "port": s.port, "overrides": compile::overrides(s),
         })).collect::<Vec<_>>(),
         "clients": c.plan.clients.iter().enumerate().map(|(i, cl)| json!({
-            "index": i + 1, "kind": cl.kind(), "server": cl.server(),
+            "index": i + 1, "kind": cl.kind(), "server": cl.server(), "lockstep": cl.lockstep(),
         })).collect::<Vec<_>>(),
         "stack": c.stack.iter().map(|p| json!({
             "package": p.name, "tree": p.tree, "commit": p.commit, "clean": p.clean.as_str(),
@@ -221,7 +221,10 @@ fn describe(c: &plan::Checked) {
         }
     }
     for (i, cl) in c.plan.clients.iter().enumerate() {
-        println!("client {:02}: {} on {}", i + 1, cl.kind(), cl.server());
+        match cl.lockstep() {
+            Some(l) => println!("client {:02}: {} on {}, lockstep {l}", i + 1, cl.kind(), cl.server()),
+            None => println!("client {:02}: {} on {}", i + 1, cl.kind(), cl.server()),
+        }
     }
     for p in &c.stack {
         let what = match &c.vary {

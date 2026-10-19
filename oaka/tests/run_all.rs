@@ -97,8 +97,11 @@ http.server.HTTPServer(("127.0.0.1", port), Health).serve_forever()
 
 /// `python3 -m infx.bench fixed-seq point --k v ...`: writes a result JSON that echoes argv.
 /// Output tok/s is conc times the installed stand-in package's SPEED (100 without one).
+/// Each point appends `<result file> <start> <end>` to state/points; FAKE_INFX_SLOW
+/// (`<port>:<seconds>`) makes the points against one server take that long, FAKE_INFX_FAIL
+/// (`<port>:<conc>`) fails that server's points at that concurrency.
 const FAKE_INFX: &str = r#"
-import json, sys
+import json, os, sys, time
 try:
     import fakepkg
     speed = float(fakepkg.SPEED)
@@ -108,6 +111,17 @@ a = sys.argv[1:]
 assert a[:2] == ["fixed-seq", "point"], a
 o = {a[i][2:]: a[i + 1] for i in range(2, len(a), 2)}
 c = int(o["conc"])
+port = o["base-url"].rsplit(":", 1)[1]
+start = time.time()
+with open(os.path.join(os.environ["FAKE_STATE"], "pids"), "a") as f:
+    f.write(f"{os.getpid()}\n")
+slow = os.environ.get("FAKE_INFX_SLOW", ":").split(":")
+if slow[0] == port:
+    time.sleep(float(slow[1]))
+if os.environ.get("FAKE_INFX_FAIL") == f"{port}:{c}":
+    sys.exit("fake infx: failing as asked")
+with open(os.path.join(os.environ["FAKE_STATE"], "points"), "a") as f:
+    f.write(f"{os.path.basename(o['result'])} {start} {time.time()}\n")
 json.dump({"output_throughput": speed * c, "total_token_throughput": 200.0 * c, "mean_ttft_ms": 10.0,
            "mean_tpot_ms": 1.0, "completed": int(o["num-prompts"]), "argv": a}, open(o["result"], "w"))
 "#;
@@ -438,6 +452,85 @@ fn full_plan_runs_and_cleans_up() {
     sb.assert_no_leftovers();
 }
 
+/// A lockstep's clients run at the same time, every run started together: the fast server's
+/// next run waits for the slow one's.  One failing stops the other before its next run.
+#[test]
+fn lockstep_clients_run_together() {
+    let _servers = servers_shared();
+    let sb = Sandbox::new("lockstep");
+    let (a, port_a) = server_of("a", "m/base", 0, "");
+    let (b, port_b) = server_of("b", "m/base", 1, "");
+    let fixed = |s: &str| {
+        format!(
+            "[[client]]\nkind = 'fixed-seq'\nserver = '{s}'\nisl_osl = [[128, 32]]\nconc = [1, 2]\n\
+             repeats = 2\nlockstep = 'ab'\n"
+        )
+    };
+    let plan = format!("{a}{b}{GSM8K}{}{}", fixed("a"), fixed("b"));
+    let slow = format!("{port_b}:0.4");
+    let (code, out) = sb.run(&plan, &[("FAKE_INFX_SLOW", &slow)]);
+    assert_eq!(code, 0, "{out}");
+    let step = sb.read("scripts/step.sh");
+    assert!(
+        step.contains(
+            "run_client client_01_gsm8k_a.sh\nrun_lockstep ab client_02_fixed-seq_a.sh client_03_fixed-seq_b.sh\n"
+        ),
+        "{step}"
+    );
+    for s in ["a", "b"] {
+        let n = if s == "a" { "02" } else { "03" };
+        let summary = sb.read(&format!("results/{n}_fixed-seq_{s}/summary.csv"));
+        assert_eq!(summary.lines().count(), 5, "{summary}");
+    }
+    // Per run: (start, end) of each server, in run order.
+    let points = fs::read_to_string(sb.root.join("state/points")).unwrap();
+    let times = |s: &str| -> Vec<(f64, f64)> {
+        ["c1_r1", "c1_r2", "c2_r1", "c2_r2"]
+            .iter()
+            .map(|run| {
+                let line = points
+                    .lines()
+                    .find(|l| l.starts_with(&format!("{s}_isl128_osl32_{run}.json ")))
+                    .unwrap_or_else(|| panic!("{s} {run} not in {points}"));
+                let w: Vec<f64> = line.split(' ').skip(1).map(|x| x.parse().unwrap()).collect();
+                (w[0], w[1])
+            })
+            .collect()
+    };
+    let (ta, tb) = (times("a"), times("b"));
+    for k in 0..4 {
+        assert!(
+            (ta[k].0 - tb[k].0).abs() < 0.3,
+            "run {k} did not start together: {points}"
+        );
+        if k > 0 {
+            assert!(
+                ta[k].0 >= tb[k - 1].1 - 0.05,
+                "a's run {k} started before b's run {} ended: {points}",
+                k - 1
+            );
+        }
+    }
+    sb.assert_no_leftovers();
+
+    // a fails at conc 2: b finishes the run it is in, then stops; the step fails.
+    fs::remove_dir_all(sb.work().join("results")).unwrap();
+    let fail = format!("{port_a}:2");
+    let (code, out) = sb.run(&plan, &[("FAKE_INFX_SLOW", &slow), ("FAKE_INFX_FAIL", &fail)]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("another client of the lockstep failed; stopping"), "{out}");
+    assert!(out.contains("lockstep ab failed; stopping"), "{out}");
+    assert!(sb
+        .work()
+        .join("results/03_fixed-seq_b/b_isl128_osl32_c2_r1.json")
+        .exists());
+    assert!(!sb
+        .work()
+        .join("results/03_fixed-seq_b/b_isl128_osl32_c2_r2.json")
+        .exists());
+    sb.assert_no_leftovers();
+}
+
 /// Every server starts on empty compile caches of its own, in the step's logs/, gone after
 /// the step; a plan that points a cache elsewhere keeps it across runs.
 #[test]
@@ -562,6 +655,49 @@ fn ctrl_c_during_startup_stops_servers() {
     assert_eq!(status.code(), Some(130));
     sb.assert_no_leftovers();
     assert!(sb.read("logs/run_all.log").contains("stopping servers"));
+}
+
+/// Ctrl-C while a lockstep runs: its clients (own process groups, out of the terminal's
+/// reach) are stopped with the servers.
+#[test]
+fn ctrl_c_during_lockstep_stops_its_clients() {
+    let _servers = servers_shared();
+    use std::os::unix::process::CommandExt;
+    let sb = Sandbox::new("int-lockstep");
+    let (a, _) = server_of("a", "m/base", 0, "");
+    let (b, port_b) = server_of("b", "m/base", 1, "");
+    let fixed = |s: &str| {
+        format!("[[client]]\nkind = 'fixed-seq'\nserver = '{s}'\nisl_osl = [[128, 32]]\nconc = [1]\nlockstep = 'ab'\n")
+    };
+    fs::write(
+        sb.work().join("plan.toml"),
+        format!("{a}{b}{}{}", fixed("a"), fixed("b")),
+    )
+    .unwrap();
+    let mut child = sb
+        .oaka(&["run"])
+        .env("FAKE_INFX_SLOW", format!("{port_b}:60"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    // a's point is done when b's (60 s) is surely under way.
+    let points = sb.root.join("state/points");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !points.exists() {
+        assert!(Instant::now() < deadline, "the lockstep never started");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let started = Instant::now();
+    Command::new("kill")
+        .args(["-INT", "--", &format!("-{}", child.id())])
+        .status()
+        .unwrap();
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(130));
+    assert!(started.elapsed() < Duration::from_secs(30), "waited for b's point");
+    sb.assert_no_leftovers();
 }
 
 #[test]

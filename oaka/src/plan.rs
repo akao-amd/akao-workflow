@@ -127,6 +127,9 @@ pub enum ClientSpec {
         off_spec: Option<OffSpec>,
         /// Gate: every point's median output tok/s over its repeats must reach this.
         min_output_tok_s: Option<f64>,
+        /// Clients with the same name run at the same time, each run of each point started
+        /// together (servers measured under each other's load).
+        lockstep: Option<String>,
     },
 }
 
@@ -160,6 +163,12 @@ impl ClientSpec {
         match self {
             ClientSpec::Gsm8k { .. } => "gsm8k",
             ClientSpec::FixedSeq { .. } => "fixed-seq",
+        }
+    }
+    pub fn lockstep(&self) -> Option<&str> {
+        match self {
+            ClientSpec::FixedSeq { lockstep, .. } => lockstep.as_deref(),
+            ClientSpec::Gsm8k { .. } => None,
         }
     }
 }
@@ -379,6 +388,7 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: &Machine) -> R
             }
         }
     }
+    check_lockstep(&plan.clients)?;
     // The arch of the GPUs the plan uses picks per-arch recipes.
     let arch = machine.gpus.as_ref().and_then(|gpus| {
         let mut used: Vec<&String> = servers
@@ -408,6 +418,52 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: &Machine) -> R
             rocm: machine.rocm.clone(),
         },
     })
+}
+
+/// Clients of one lockstep run their points together, run by run: at least two, each on
+/// its own server, with the same points and repeats.
+fn check_lockstep(clients: &[ClientSpec]) -> Result<()> {
+    let points = |c: &ClientSpec| match c {
+        ClientSpec::FixedSeq {
+            isl_osl, conc, repeats, ..
+        } => Some((isl_osl.clone(), conc.clone(), *repeats)),
+        ClientSpec::Gsm8k { .. } => None,
+    };
+    for (i, c) in clients.iter().enumerate() {
+        let Some(name) = c.lockstep() else { continue };
+        let at = format!("client #{} ({})", i + 1, c.kind());
+        if !valid_server_name(name) {
+            bail!("{at}: lockstep must match [A-Za-z0-9][A-Za-z0-9_-]*");
+        }
+        let first = clients.iter().position(|o| o.lockstep() == Some(name)).unwrap();
+        if first < i {
+            continue;
+        }
+        let members: Vec<(usize, &ClientSpec)> = clients
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.lockstep() == Some(name))
+            .collect();
+        if members.len() < 2 {
+            bail!("{at}: lockstep {name:?} has no other client; give the clients to run together the same name");
+        }
+        for (j, o) in &members[1..] {
+            let at = format!("client #{} ({})", j + 1, o.kind());
+            if members.iter().any(|(k, m)| k < j && m.server() == o.server()) {
+                bail!(
+                    "{at}: lockstep {name:?} has two clients on server {}; each needs its own",
+                    o.server()
+                );
+            }
+            if points(o) != points(c) {
+                bail!(
+                    "{at}: lockstep {name:?} needs the same isl_osl, conc and repeats as client #{}",
+                    i + 1
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A Work Directory belongs in a numbered task dir under the worker's artifact root, so
@@ -759,6 +815,37 @@ server = "a"
             &OK.replace("m/base", ""),
             Machine::default(),
             "pick one of: m/base m/new m/tp2",
+        );
+        // lockstep: two or more fixed-seq clients, one per server, the same points.
+        let pair = |a: &str, b: &str| {
+            format!(
+                "{OK}[[server]]\nname = 'b'\nprofile = 'm/base'\ngpus = [4]\n\
+                 [[client]]\nkind = 'fixed-seq'\nserver = 'a'\nisl_osl = [[1024, 1024]]\nconc = [4, 8]\n{a}\n\
+                 [[client]]\nkind = 'fixed-seq'\nserver = 'b'\nisl_osl = [[1024, 1024]]\nconc = [4, 8]\n{b}\n"
+            )
+        };
+        let both = "lockstep = 'ab'";
+        assert!(checked(&lib, &pair(both, both), Machine::default()).is_ok());
+        bad(
+            &pair(both, ""),
+            Machine::default(),
+            "lockstep \"ab\" has no other client",
+        );
+        bad(
+            &pair(both, &format!("{both}\nrepeats = 2")),
+            Machine::default(),
+            "client #4 (fixed-seq): lockstep \"ab\" needs the same isl_osl, conc and repeats as client #3",
+        );
+        bad(
+            &pair(both, both).replace("server = 'b'", "server = 'a'"),
+            Machine::default(),
+            "has two clients on server a",
+        );
+        bad(&pair("lockstep = 'a b'", ""), Machine::default(), "lockstep must match");
+        bad(
+            &OK.replace("kind = \"gsm8k\"", "kind = \"gsm8k\"\nlockstep = 'ab'"),
+            Machine::default(),
+            "unknown field",
         );
         // ROCm: a profile for another version, or a container whose version is unknown.
         let new = OK.replace("m/base", "m/new");
