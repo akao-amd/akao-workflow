@@ -4,7 +4,7 @@ description: The worker role's manual — an agent in a worker container (akao_<
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.7.0"
+  version: "2.7.1"
   category: development
   tags: ["worker", "sglang", "oaka", "bisect", "benchmark", "profiling", "git"]
 compatibility:
@@ -48,6 +48,10 @@ read an A-B-A, the bisect journey). The rules that are yours to keep:
   are in `$AKAO_REPO_ROOT/oaka/stacks.toml`. No recipe for your case? Do not improvise one — stop, ask
   the user, and add theirs to `stacks.toml`. A stack swap changes this container's Python
   for every process in it: say so in your report.
+- **A task that installs a stack needs the Rust toolchain**: SGLang's install builds its Rust
+  extensions with `cargo`, which a fresh container lacks (`oaka doctor` does not check it).
+  Install it before the first `stack.sh`, as the recipe says (`curl --proto '=https'
+  --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y`), and name its version in your report.
 - GPUs are yours to pick but must be free (`amd-smi metric --usage`). Plans number GPUs as
   HIP does; amd-smi may number the same cards differently (n10-17, m15-21: plan GPU 7 is
   amd-smi GPU 5). `oaka doctor`'s `gpu index` line gives the map: check a GPU by its amd-smi
