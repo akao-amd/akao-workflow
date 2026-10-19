@@ -1,6 +1,6 @@
 //! `plan.toml` in a Work Directory, its validation, and `plan.lock.toml`.
 
-use crate::profile::{targets_text, Arg, Library, Profile, Target};
+use crate::profile::{targets_text, Arg, Engine, Library, Profile, Target};
 use crate::stack::{self, Stacks};
 use crate::sys;
 use anyhow::{bail, Context, Result};
@@ -131,6 +131,17 @@ pub enum ClientSpec {
         /// together (servers measured under each other's load).
         lockstep: Option<String>,
     },
+    /// SGLang GPU traces of fixed-seq points' steady state (profiler V2, by stage): per point a
+    /// warm run, then cache-flushed profiled passes until one clean decode capture and enough
+    /// prefill steps are on disk.  The capture policy is fixed, like fixed-seq's client policy.
+    #[serde(rename = "trace")]
+    Trace {
+        server: String,
+        isl_osl: Vec<[u32; 2]>,
+        conc: Vec<u32>,
+        #[serde(default = "default_range_ratio")]
+        range_ratio: f64,
+    },
 }
 
 /// Deviations from the InferenceX client policy.  Results are marked OFFSPEC.
@@ -156,20 +167,37 @@ pub const PROMPTS_PER_CONC: u32 = 10;
 impl ClientSpec {
     pub fn server(&self) -> &str {
         match self {
-            ClientSpec::Gsm8k { server, .. } | ClientSpec::FixedSeq { server, .. } => server,
+            ClientSpec::Gsm8k { server, .. }
+            | ClientSpec::FixedSeq { server, .. }
+            | ClientSpec::Trace { server, .. } => server,
         }
     }
     pub fn kind(&self) -> &'static str {
         match self {
             ClientSpec::Gsm8k { .. } => "gsm8k",
             ClientSpec::FixedSeq { .. } => "fixed-seq",
+            ClientSpec::Trace { .. } => "trace",
         }
     }
     pub fn lockstep(&self) -> Option<&str> {
         match self {
             ClientSpec::FixedSeq { lockstep, .. } => lockstep.as_deref(),
-            ClientSpec::Gsm8k { .. } => None,
+            ClientSpec::Gsm8k { .. } | ClientSpec::Trace { .. } => None,
         }
+    }
+}
+
+/// The server env a trace client needs: SGLang's profiler V2, the only one that captures by
+/// stage as asked (v1 ignores `profile_stages` and overwrites prefill traces).  oaka sets it on
+/// every server a trace client profiles, as it sets HIP_VISIBLE_DEVICES.
+pub const PROFILER_ENV: (&str, &str) = ("SGLANG_PROFILE_V2", "1");
+
+impl Plan {
+    /// A trace client profiles this server.
+    pub fn traced(&self, server: &str) -> bool {
+        self.clients
+            .iter()
+            .any(|c| matches!(c, ClientSpec::Trace { .. }) && c.server() == server)
     }
 }
 
@@ -386,6 +414,53 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: &Machine) -> R
                     bail!("{at}: min_output_tok_s must be positive");
                 }
             }
+            ClientSpec::Trace {
+                isl_osl,
+                conc,
+                range_ratio,
+                ..
+            } => {
+                if isl_osl.is_empty() || isl_osl.iter().flatten().any(|n| *n == 0) {
+                    bail!("{at}: isl_osl must list positive [isl, osl] pairs");
+                }
+                if conc.is_empty() || conc.contains(&0) {
+                    bail!("{at}: conc must list positive concurrencies");
+                }
+                if !(*range_ratio > 0.0 && *range_ratio <= 1.0) {
+                    bail!("{at}: range_ratio must be within (0, 1]");
+                }
+                let s = servers.iter().find(|s| s.name == c.server()).unwrap();
+                if s.effective.engine != Engine::Sglang {
+                    bail!(
+                        "{at}: server {} runs {}; traces need SGLang's profiler",
+                        s.name,
+                        s.effective.engine.as_str()
+                    );
+                }
+                let (var, want) = PROFILER_ENV;
+                if let Some((_, v)) = s.effective.env.iter().find(|(k, _)| k == var) {
+                    if v != want {
+                        bail!(
+                            "{at}: server {} sets {var}={v}; a trace needs {var}={want}, which oaka sets",
+                            s.name
+                        );
+                    }
+                }
+            }
+        }
+    }
+    for s in &servers {
+        if plan.traced(&s.name)
+            && plan
+                .clients
+                .iter()
+                .any(|c| matches!(c, ClientSpec::FixedSeq { .. }) && c.server() == s.name)
+        {
+            warnings.push(format!(
+                "server {}: its fixed-seq numbers come from a server profiled by a trace client ({}={}); \
+                 a trace's own warm run gives its point's number",
+                s.name, PROFILER_ENV.0, PROFILER_ENV.1
+            ));
         }
     }
     check_lockstep(&plan.clients)?;
@@ -427,7 +502,7 @@ fn check_lockstep(clients: &[ClientSpec]) -> Result<()> {
         ClientSpec::FixedSeq {
             isl_osl, conc, repeats, ..
         } => Some((isl_osl.clone(), conc.clone(), *repeats)),
-        ClientSpec::Gsm8k { .. } => None,
+        ClientSpec::Gsm8k { .. } | ClientSpec::Trace { .. } => None,
     };
     for (i, c) in clients.iter().enumerate() {
         let Some(name) = c.lockstep() else { continue };
@@ -664,6 +739,9 @@ fn check_stack(
                         ));
                     }
                 }
+                ClientSpec::Trace { .. } => warnings.push(format!(
+                    "[stack.{package}]: bisect traces at every step; a trace is no gate and costs minutes"
+                )),
             }
         }
         if !gated {
@@ -847,6 +925,40 @@ server = "a"
             Machine::default(),
             "unknown field",
         );
+        // trace: points like fixed-seq's, an SGLang server whose profiler env oaka sets.
+        let trace = |extra: &str| {
+            format!("{OK}[[client]]\nkind = 'trace'\nserver = 'a'\nisl_osl = [[1024, 1024]]\nconc = [16]\n{extra}\n")
+        };
+        let c = checked(&lib, &trace(""), Machine::default()).unwrap();
+        assert!(c.plan.traced("a"));
+        assert!(
+            c.warnings
+                .iter()
+                .any(|w| w.contains("fixed-seq numbers come from a server profiled")),
+            "{:?}",
+            c.warnings
+        );
+        bad(&trace("repeats = 2"), Machine::default(), "unknown field");
+        bad(
+            &trace("").replace("conc = [16]", "conc = [0]"),
+            Machine::default(),
+            "positive concurrencies",
+        );
+        bad(
+            &trace("").replace(
+                "page-size = 64",
+                "page-size = 64\n[server.env]\nSGLANG_PROFILE_V2 = '0'",
+            ),
+            Machine::default(),
+            "client #3 (trace): server a sets SGLANG_PROFILE_V2=0; a trace needs SGLANG_PROFILE_V2=1, which oaka sets",
+        );
+        fs::write(lib.profile_path("m/vllm"), "extends = 'm/base'\nengine = 'vllm'\n").unwrap();
+        bad(
+            &trace("").replace("m/base", "m/vllm"),
+            Machine::default(),
+            "server a runs vllm; traces need SGLang's profiler",
+        );
+        fs::remove_file(lib.profile_path("m/vllm")).unwrap();
         // ROCm: a profile for another version, or a container whose version is unknown.
         let new = OK.replace("m/base", "m/new");
         bad(

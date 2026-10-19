@@ -21,7 +21,7 @@ pub struct Options {
     pub force: bool,
 }
 
-pub const CLIENT_KINDS: &[&str] = &["gsm8k", "fixed-seq"];
+pub const CLIENT_KINDS: &[&str] = &["gsm8k", "fixed-seq", "trace"];
 
 fn server_name(profile: &str, taken: &[String]) -> String {
     let recipe = profile.rsplit('/').next().unwrap_or("main");
@@ -50,6 +50,10 @@ fn client_block(kind: &str, server: &str, commented: bool) -> String {
         "gsm8k" => format!(
             "[[client]]\nkind = \"gsm8k\"            # accuracy gate: the run stops below min_score\n\
              server = \"{server}\"\nthinking = false\nmin_score = 0.90\n"
+        ),
+        "trace" => format!(
+            "[[client]]\nkind = \"trace\"            # SGLang GPU traces of these points' steady state (sets SGLANG_PROFILE_V2=1)\n\
+             server = \"{server}\"\nisl_osl = [[1024, 1024]]\nconc = [16]\nrange_ratio = 0.8\n"
         ),
         _ => format!(
             "[[client]]\nkind = \"fixed-seq\"        # InferenceX fixed-seq-len throughput\n\
@@ -284,6 +288,16 @@ mod tests {
         assert_eq!(checked.servers[1].gpus, [6, 7]);
         assert_eq!(checked.servers[1].name, "tp2");
         assert_eq!(checked.plan.clients.len(), 4);
+        let text = render(
+            &lib,
+            &Options {
+                clients: vec!["trace".into()],
+                ..opts
+            },
+        )
+        .unwrap();
+        let checked = plan::check_plan(&root, toml::from_str(&text).unwrap(), &lib, &plan::Machine::default()).unwrap();
+        assert!(checked.plan.traced("triton") && checked.plan.traced("tp2"));
         fs::remove_dir_all(root).unwrap();
     }
 }

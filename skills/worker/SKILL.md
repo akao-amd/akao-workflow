@@ -4,7 +4,7 @@ description: The worker role's manual — an agent in a worker container (akao_<
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.7.1"
+  version: "2.8.0"
   category: development
   tags: ["worker", "sglang", "oaka", "bisect", "benchmark", "profiling", "git"]
 compatibility:
@@ -71,7 +71,18 @@ traffic in a valid-looking trace. Time everything from **benchmark_serving's own
 hook**, which fires after the warm-ups are awaited and just before the burst
 (`infx/bench_serving/benchmark_serving.py`, `if profile:`).
 
-**The standard capture**, unless the request says otherwise:
+**How: a `trace` client** (`[[client]] kind = "trace"`, `server`, `isl_osl`, `conc`,
+`range_ratio`; `oaka/README.md`). It does the standard capture below and keeps everything in
+the task dir: the warm run, the traces, each capture's steps in `state.json`, a
+`record.json` of every request and arm with its completion count, `captures.csv`. Run it in a
+plan of its own, after the throughput sweep: oaka sets `SGLANG_PROFILE_V2=1` on the server it
+profiles (that is oaka's, not an override of the profile), and `check` flags fixed-seq
+numbers taken from such a server. Do not hand-write a driver around it any more: if a task
+needs what the trace client cannot do (another window, step count, a mixed capture), stop and
+say what oaka would need. Exit 3 = a point still incomplete after 3 passes; exit 1 at the
+probe = the profiler's rules changed on this SGLang revision (below), so no trace was taken.
+
+**The standard capture** (what the trace client does, and why):
 - **Warm run, flush, then the profiled pass**, all on one server. The warm run is the point as
   compiled (its tok/s is the point's number). `POST /flush_cache` is required: benchmark_serving
   seeds its prompts with `--seed 0`, so the profiled pass resends the warm run's prompts and every
@@ -90,41 +101,34 @@ hook**, which fires after the warm-ups are awaited and just before the burst
 - **Profiler options: SGLang's defaults, sent explicitly** in every `/start_profile`:
   `"with_stack": true, "record_shapes": false, "activities": ["CPU", "GPU"]`. (Stack off with
   shapes on would give smaller traces and shorter stalls; not adopted yet.)
+- **InferenceX's own client**: `client_argv(Point)` plus only `--profile`, run in-process with
+  the request function wrapped: the hook's `/start_profile` is not forwarded (its
+  `merge_profiles: true` fails V2's assertion) but starts the completion count; its
+  `/stop_profile` is dropped. `oaka doctor`'s `trace` line says whether InferenceX still has
+  what this wraps.
 - **Collect, do not analyse.** The deliverable is the traces, checked (below), with their record.
   No kernel breakdowns or comparisons unless asked, or something stands out — then briefly.
 - gsm8k is not needed when the same recipe and image already passed it; say which run did.
 
-**How, without touching `scripts/`.** Copy the generated `scripts/client_NN_fixed-seq_<server>.sh`
-into the task dir with its results sent to a side dir, and in place of
-`python3 -m infx.bench fixed-seq point` run a `profile_point.py` that builds the argv with
-InferenceX's own `infx.bench.fixed_seq.client_argv(Point)` plus only `--profile` (never
-hand-build `bench_serving` argv) and runs it in-process with the backend's request function
-wrapped: the hook's `/start_profile` is not forwarded (its `merge_profiles: true` fails V2's
-assertion) but starts the completion count; its `/stop_profile` is dropped; a thread arms the
-captures — `{"profile_by_stage": true, "profile_stages": ["decode"], "num_steps": 9,
-"output_dir": ..., "profile_prefix": ..., <options>}`, then `["prefill"]` — one at a time, each
-after the previous trace file is complete, counting its steps before the next. Keep the client
-copy, `profile_point.py`, the driver, and a `*.profile_record.json` (each request sent, when, at
-how many completions) in the task dir. ww42 3030's are a working set to copy.
-
-**Server env: `SGLANG_PROFILE_V2=1`** (`[server.env]` in the plan). The default (v1) by-stage
-profiler ignores `profile_stages` and, when a prefill lands inside its decode capture, writes that
-capture under the prefill name, overwriting the prefill trace. V2's rules (`ProfileManager`,
-`srt/utils/profile_utils.py`; read at SGLang d1357bf87b, the first two confirmed on a live
-server by ww42 3030's `probe_profile_v2_live.py`):
+**Profiler V2** (`SGLANG_PROFILE_V2=1`). The default (v1) by-stage profiler ignores
+`profile_stages` and, when a prefill lands inside its decode capture, writes that capture under
+the prefill name, overwriting the prefill trace. V2's rules (`ProfileManager`,
+`srt/utils/profile_utils.py`; read at SGLang d1357bf87b), which the trace client's probe
+(`scripts/trace_probe.py`) checks on the live server before any run:
 - **a capture ends at the first change of stage**: prefill stops at the next decode step, decode
   at the next prefill (a step is one or the other without `--enable-mixed-chunk`);
 - **`num_steps = N` records N + 1 steps**: send 9 for 10;
 - **by-stage only**: `profile_by_stage` true, `start_step` and `merge_profiles` unset, else an
   assertion; a plain `/start_profile` raises `NotImplementedError` — no mixed window;
 - **never arm while a capture runs**: `configure()` asserts nothing is running, in the scheduler;
-- files: `<profile_prefix>-<profile_id>-TP-0-<prefill|decode>.trace.json.gz`.
-Rules and body fields change between SGLang revisions: on another revision, read the source and
-run a live probe of these rules before the warm run (3030's takes seconds).
+- files: `<profile_prefix>-<profile_id>-TP-<rank>-<prefill|decode>.trace.json.gz`.
+Rules and body fields change between SGLang revisions: when the probe fails, read the source
+and report what changed; the driver is oaka's to fix.
 
-**Verify every trace from its step spans; do not trust the file name.** Each step appears twice,
-as `user_annotation` (CPU) and `gpu_user_annotation`: halve the counts below, or count only the
-CPU ones.
+**Verify every trace from its step spans; do not trust the file name.** The trace client
+counts them into `state.json` and `captures.csv`; spot-check a few files yourself. Each step
+appears twice, as `user_annotation` (CPU) and `gpu_user_annotation`: halve the counts below, or
+count only the CPU ones.
 
 ```bash
 zcat <trace>.trace.json.gz | grep -oE 'step\[(EXTEND|DECODE) bs=[0-9]+( toks=[0-9]+)?' | sort | uniq -c

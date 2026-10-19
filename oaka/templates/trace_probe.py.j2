@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+# {{ marker }}
+"""Does this server's SGLang profiler V2 behave as trace_point.py assumes?  Run by the trace
+clients on the live server before their first warm run, with throwaway requests of its own:
+  A  a prefill capture ends at the next decode step       (arm prefill, num_steps 9, 1 request)
+  B  num_steps = 9 records 10 decode steps                (arm decode, num_steps 9, 1 long request)
+  C  a decode capture ends at the next prefill            (arm decode, num_steps 2000, a 2nd request after 1 s)
+The rules and body fields change between SGLang revisions.  Exits 1 when one fails: the
+practice does not hold for this revision, and its traces would be wrong.
+  python3 trace_probe.py <base url> <served model> <out dir> <tp>
+"""
+{% raw %}
+import collections
+import gzip
+import json
+import os
+import sys
+import threading
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from trace_point import PROFILER_OPTS, post, trace_steps, wait_trace  # noqa: E402
+
+base, model, out, tp = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+os.makedirs(out, exist_ok=True)
+PROMPT = "Write a long story about a lighthouse keeper and the sea. " * 20
+
+
+def complete(max_tokens):
+    return post(f"{base}/v1/completions", {"model": model, "prompt": PROMPT, "max_tokens": max_tokens,
+                                           "temperature": 0, "ignore_eos": True})
+
+
+def arm(prefix, stage, num_steps):
+    body = {"profile_by_stage": True, "profile_stages": [stage], "num_steps": num_steps,
+            "output_dir": out, "profile_prefix": prefix, **PROFILER_OPTS}
+    return body, post(f"{base}/start_profile", body)
+
+
+def steps(prefix, stage, sent):
+    """The capture's steps, once its files are written (the requests are done by now)."""
+    files = wait_trace(out, prefix, stage, tp, ended=lambda: True, appear_s=120) if sent[0] == 200 else None
+    return (files[0] if files else None), (trace_steps(files[0]) if files else [])
+
+
+results = {}
+
+body, resp = arm("probeA", "prefill", 9)
+complete(8)
+path, st = steps("probeA", "prefill", resp)
+results["A_prefill_ends_at_decode"] = r = {"body": body, "response": resp, "file": path,
+                                           "steps": [s["name"] for s in st], "expect": "1 EXTEND step"}
+r["pass"] = len(st) == 1 and st[0]["mode"] == "EXTEND"
+
+body, resp = arm("probeB", "decode", 9)
+complete(64)
+path, st = steps("probeB", "decode", resp)
+results["B_num_steps_9_gives_10"] = r = {"body": body, "response": resp, "file": path, "n_steps": len(st),
+                                         "modes": sorted({s["mode"] for s in st}), "expect": "10 DECODE steps"}
+r["pass"] = len(st) == 10 and r["modes"] == ["DECODE"]
+
+body, resp = arm("probeC", "decode", 2000)
+first = threading.Thread(target=complete, args=(1500,))
+first.start()
+threading.Event().wait(1.0)
+complete(8)
+first.join()
+path, st = steps("probeC", "decode", resp)
+results["C_decode_ends_at_prefill"] = r = {"body": body, "response": resp, "file": path, "n_steps": len(st),
+                                           "modes": sorted({s["mode"] for s in st}),
+                                           "expect": "fewer than 1400 DECODE steps (not stopped: about 1500)"}
+r["pass"] = 0 < len(st) < 1400 and r["modes"] == ["DECODE"]
+
+# Where the step spans appear: what trace_point.py counts (user_annotation).
+if path:
+    with gzip.open(path, "rt") as f:
+        ev = json.load(f)
+    ev = ev.get("traceEvents", ev) if isinstance(ev, dict) else ev
+    results["step_span_categories"] = dict(collections.Counter(
+        e.get("cat") for e in ev if str(e.get("name", "")).startswith("step[")))
+
+ok = True
+for k, v in results.items():
+    if isinstance(v, dict) and "pass" in v:
+        ok &= v["pass"]
+        print(f"[trace_probe] {k}: {'PASS' if v['pass'] else 'FAIL'} ({v['expect']}; got "
+              f"{v.get('n_steps', v.get('steps'))}; /start_profile answered {v['response'][0]})", flush=True)
+print(f"[trace_probe] step span categories: {results.get('step_span_categories')}")
+with open(os.path.join(out, "probe.json"), "w") as f:
+    json.dump(results, f, indent=1)
+sys.exit(0 if ok else 1)
+{% endraw %}

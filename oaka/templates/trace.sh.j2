@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# {{ marker }}
+# Client {{ index }}: SGLang GPU traces of InferenceX fixed-seq points on server {{ server }} (port {{ port }}).
+#
+# The capture policy is fixed (worker skill, "Profiling"; scripts/trace_point.py):
+#   once: scripts/trace_probe.py checks this server's profiler V2 rules (SGLANG_PROFILE_V2=1, which
+#         oaka sets on server_{{ server }}.sh) with throwaway requests;
+#   per point: a warm run, as fixed-seq runs it (its tok/s is the point's number), then up to
+#         $MAX_PASSES profiled passes, each after POST /flush_cache, armed from 50% to 85% of the
+#         measured requests done, until one clean 10-step decode capture at bs = conc and 10
+#         prefill steps are on disk.
+# The profiled passes are not measurements: each capture stalls the scheduler mid-burst.
+# Points: ISL/OSL and concurrency below, range ratio {{ range_ratio }}, {{ prompts_per_conc }} prompts per unit of concurrency.
+# Results: <results>/{{ out }}/<point>/ (warm.json, traces/, pass<N>/, state.json, record.json),
+# captures.csv for every point.  Exits 3 when a point's traces are still incomplete after
+# the last pass (the other points still run), 1 on failure.
+#
+# Needs the server running (scripts/server_{{ server }}.sh).
+#   bash {{ self_path }}
+set -uo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+WORKDIR="$(dirname "$HERE")"
+PORT={{ port }}
+INFX={{ infx | q }}
+OUT="${RESULTS:-$WORKDIR/results}/{{ out }}"
+MAX_PASSES=3
+say() { echo "[client {{ index }} trace {{ server }}] $*"; }
+
+if ! (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; then
+    say "FATAL: nothing listens on port $PORT; start scripts/server_{{ server }}.sh first"
+    exit 1
+fi
+if [ ! -d "$INFX/infx" ]; then
+    say "FATAL: InferenceX not found at $INFX (akao init checks it out into /<year>/nocopy/InferenceX)"
+    exit 1
+fi
+say "InferenceX $(git -C "$INFX" rev-parse --short HEAD 2>/dev/null || echo '?') at $INFX"
+export PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$INFX${PYTHONPATH:+:$PYTHONPATH}"
+rm -rf "$OUT"
+mkdir -p "$OUT"
+
+say "$(date +%H:%M:%S) probe: the profiler's rules on this server -> ${OUT#"$WORKDIR"/}/probe/"
+if ! python3 "$HERE/trace_probe.py" "http://127.0.0.1:$PORT" {{ served | q }} "$OUT/probe" {{ tp }} \
+    >"$OUT/probe.log" 2>&1; then
+    cat "$OUT/probe.log"
+    say "FATAL: the profiler does not behave as the capture practice assumes; no traces taken"
+    exit 1
+fi
+grep '^\[trace_probe\]' "$OUT/probe.log"
+
+# isl osl conc
+POINTS=(
+{% for p in points %}
+    "{{ p }}"
+{% endfor %}
+)
+
+INCOMPLETE=()
+for point in "${POINTS[@]}"; do
+    read -r ISL OSL CONC <<<"$point"
+    NAME="{{ server }}_isl${ISL}_osl${OSL}_c${CONC}"
+    P="$OUT/$NAME"
+    mkdir -p "$P"
+    FLAGS=(
+        --base-url "http://127.0.0.1:$PORT"
+        --model {{ served | q }}
+        --tokenizer {{ tokenizer | q }}
+        --backend vllm
+        --isl "$ISL" --osl "$OSL"
+        --random-range-ratio {{ range_ratio }}
+        --conc "$CONC"
+        --num-prompts $(( {{ prompts_per_conc }} * CONC ))
+    )
+    say "$(date +%H:%M:%S) $NAME: warm run"
+    if ! python3 -m infx.bench fixed-seq point "${FLAGS[@]}" --result "$P/warm.json" >"$P/warm.log" 2>&1; then
+        say "FAILED: the warm run; last lines of $P/warm.log:"
+        tail -20 "$P/warm.log"
+        exit 1
+    fi
+    for PASS in $(seq 1 $MAX_PASSES); do
+        say "$(date +%H:%M:%S) $NAME: flush, profiled pass $PASS"
+        mkdir -p "$P/pass$PASS"
+        python3 "$HERE/trace_point.py" "${FLAGS[@]}" --out "$P" --pass "$PASS" --tp {{ tp }} \
+            >"$P/pass$PASS/trace_point.log" 2>&1
+        RC=$?
+        tail -1 "$P/pass$PASS/trace_point.log" | cut -c1-240
+        case $RC in
+            0) break ;;
+            2) [ "$PASS" -eq $MAX_PASSES ] && { say "$NAME: INCOMPLETE after $MAX_PASSES passes"; INCOMPLETE+=("$NAME"); } ;;
+            *)
+                say "FAILED ($RC); last lines of $P/pass$PASS/trace_point.log:"
+                tail -20 "$P/pass$PASS/trace_point.log"
+                exit 1
+                ;;
+        esac
+    done
+done
+
+# Every capture of every point, also kept as captures.csv; the warm runs' numbers.
+python3 - "$OUT" "${POINTS[@]}" <<'PY'
+import csv, json, os, sys
+out, points = sys.argv[1], sys.argv[2:]
+rows = [["point", "pass", "stage", "file", "steps", "bs", "toks", "use"]]
+for d in sorted(e for e in os.listdir(out) if os.path.isfile(os.path.join(out, e, "state.json"))):
+    s = json.load(open(os.path.join(out, d, "state.json")))
+    w = json.load(open(os.path.join(out, d, "warm.json")))
+    print(f"{d}: warm run {w.get('output_throughput', 0):.1f} out tok/s; {s['passes']} profiled pass(es), "
+          f"decode {'clean' if s['decode_clean'] else 'MISSING'}, {s['prefill_steps']} prefill steps")
+    for c in s["captures"]:
+        rows.append([d, c["pass"], c.get("stage", ""), " ".join(c.get("files", [])) or "-", c.get("steps", ""),
+                     " ".join(map(str, c.get("bs", []))), " ".join(map(str, c.get("toks", []))), c["use"]])
+with open(os.path.join(out, "captures.csv"), "w", newline="") as f:
+    csv.writer(f).writerows(rows)
+print(f"captures: {os.path.join(out, 'captures.csv')}")
+PY
+if [ -n "${INCOMPLETE[*]:-}" ]; then
+    say "incomplete: ${INCOMPLETE[*]}"
+    exit 3
+fi
+say "done"

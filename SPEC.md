@@ -142,6 +142,19 @@ Where the how lives: worker reference (commands, plan and profile fields)
   (its clone of the repo cannot run `cargo test`).
 - **GSM8K through `sgl-eval`, never `sglang[test]`**, which pulls PyPI sglang over the
   image's.
+- **Servers measured under each other's load are a `lockstep` of fixed-seq clients**
+  (2026-10-19), each run of each point started on all of them together.  Why: clients ran
+  in plan order, so a TP1x2 layout measured one idle-neighbour server at a time; two
+  workers then built it two different ways around oaka (a patch, a hand-copied step).
+- **GPU traces are a client kind, `trace`, with the capture practice as fixed policy**
+  (2026-10-19): a live probe of profiler V2's rules, then per point a warm run and flushed
+  profiled passes, armed from 50% to 85% of the measured requests done, until one clean
+  decode capture and 10 prefill steps exist.  oaka sets `SGLANG_PROFILE_V2=1` on a traced
+  server, as it sets `HIP_VISIBLE_DEVICES`.  Why: the practice (ww42 1014_prof_mi355,
+  3029-3032) was 500 lines of hand-copied driver per task, coupled to InferenceX's client
+  internals and to the profiler's rules, both of which drift; and a worker held to "the
+  profile as written" could not set the env.  The probe and `doctor`'s `trace` check turn
+  that drift into a stop instead of wrong traces.
 
 ### Decisions on the stack (milestone 2)
 

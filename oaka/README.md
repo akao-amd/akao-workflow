@@ -91,6 +91,13 @@ repeats = 1
 # min_output_tok_s = 3000  # gate: each point's median output tok/s over its repeats must reach it
 # lockstep = "pair"        # run with the other fixed-seq clients named "pair" (see below)
 
+[[client]]
+kind = "trace"             # SGLang GPU traces of these points' steady state (see below)
+server = "quant"
+isl_osl = [[1024, 1024]]
+conc = [16]
+range_ratio = 0.8
+
 [stack.sglang]             # optional: install a package of stacks.toml first (see Stack)
 tree = "/2026/nocopy/sglang-mytask"
 commit = "aa5551d9b6"
@@ -111,6 +118,31 @@ in `logs/lockstep_<name>/` for the others; a fast server idles until the slow on
 ends).  They need the same `isl_osl`, `conc` and `repeats`, one client per server.  When
 one fails, the others stop before their next run.  Each client keeps its own results and
 `summary.csv`; run by hand, a client script does not wait.
+
+A `trace` client captures SGLang GPU traces (Chrome/Perfetto, one file per TP rank) of each
+of its points' steady state; the capture practice is fixed policy, like fixed-seq's client
+(the worker skill's "Profiling" gives the reasons):
+- oaka sets `SGLANG_PROFILE_V2=1` on the server (profiler V2 captures by stage; v1 ignores the
+  stage and overwrites prefill traces).  Only SGLang servers; a plan or profile setting
+  another value is refused.  Fixed-seq numbers from the same server are flagged by `check`:
+  a trace's own warm run is its point's number.
+- First, once per client, `scripts/trace_probe.py` checks the profiler's rules on the live
+  server with throwaway requests (a capture ends at the next change of stage; `num_steps` 9
+  records 10 steps).  When they do not hold, the client stops before any run (exit 1).
+- Per point: a warm run (InferenceX's fixed-seq point, as compiled; 10 prompts per
+  concurrency), then up to 3 profiled passes (`scripts/trace_point.py`), each after
+  `POST /flush_cache`.  A pass runs InferenceX's own client with `--profile`; its hook marks
+  the end of the warm-ups, and from 50% to 85% of the measured requests done, captures are
+  armed one at a time: decode until one holds 10 `DECODE` steps at `bs = conc`, then
+  prefill until the captures hold 10 `EXTEND` steps.  A capture still armed at the end is
+  fired on a throwaway request and not used.
+- Results: `<client>/<point>/warm.json` (the number to quote: profiled passes stall the
+  scheduler), `traces/`, `pass<N>/` (the profiled client's result and log), `state.json`
+  (each capture: files, steps, bs, toks, used or not), `record.json` (every event, with the
+  completion count); `<client>/probe/` and `captures.csv` across points.  Exit 3 when a
+  point is still incomplete after the last pass (the other points still run).
+- `oaka doctor`'s `trace` line says whether this InferenceX still has what the driver
+  wraps (`fixed_seq.Point`/`client_argv`, `ASYNC_REQUEST_FUNCS`, the `--profile` hook).
 
 ## Stack (`[stack.<package>]`, `stacks.toml`)
 

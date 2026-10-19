@@ -130,6 +130,7 @@ pub fn run(lib: &Library, json: bool) -> Result<()> {
     } else {
         let head = output(&["git", "-C", &infx, "log", "-1", "--format=%h %cs"], &[]).unwrap_or_else(|| "?".into());
         r.ok("inferencex", format!("{infx} at {head}"));
+        check_trace_client(&mut r, &infx);
     }
 
     check_engines(&mut r, lib);
@@ -198,6 +199,37 @@ pub fn run(lib: &Library, json: bool) -> Result<()> {
 /// Plans, HIP_VISIBLE_DEVICES and oaka number GPUs in HIP order (KFD nodes); amd-smi numbers
 /// them by PCI address.  Where the two differ, "is GPU 7 free?" read off amd-smi looks at
 /// another card, so the map is shown.
+/// What scripts/trace_point.py takes from InferenceX: it runs the client in-process and wraps
+/// its request function, so a rename there breaks trace clients (only them: a warning).
+fn check_trace_client(r: &mut Report, infx: &str) {
+    const PROBE: &str = "import importlib.util\n\
+from infx.bench.fixed_seq import Point, client_argv\n\
+from infx.bench_serving import backend_request_func as b\n\
+b.ASYNC_REQUEST_FUNCS['vllm'], b.RequestFuncOutput\n\
+src = open(importlib.util.find_spec('infx.bench_serving.benchmark_serving').origin).read()\n\
+assert '/start_profile' in src, 'benchmark_serving has no --profile hook (/start_profile)'\n";
+    match Command::new("python3")
+        .args(["-c", PROBE])
+        .env("PYTHONPATH", infx)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+    {
+        Ok(o) if o.status.success() => r.ok("trace", "InferenceX's client has what trace clients wrap"),
+        Ok(o) => {
+            let err = String::from_utf8_lossy(&o.stderr);
+            let last = err.lines().last().unwrap_or("").trim().to_string();
+            r.warn(
+                "trace",
+                format!(
+                    "trace clients cannot wrap InferenceX's client ({last}); they need fixed_seq.Point/client_argv, \
+                     backend_request_func.ASYNC_REQUEST_FUNCS/RequestFuncOutput and benchmark_serving's --profile hook"
+                ),
+            )
+        }
+        Err(e) => r.warn("trace", format!("python3: {e}")),
+    }
+}
+
 fn check_gpu_index(r: &mut Report) {
     if std::env::var_os("OAKA_GPUS").is_some() {
         return;

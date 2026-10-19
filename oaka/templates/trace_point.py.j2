@@ -1,0 +1,293 @@
+#!/usr/bin/env python3
+# {{ marker }}
+"""One profiled pass of an InferenceX fixed-seq point: SGLang profiler V2 captures of its steady state.
+
+Run by the trace client scripts (scripts/client_NN_trace_*.sh) after the point's warm run; the
+policy is the worker skill's "Profiling" practice and is not a plan knob:
+- POST /flush_cache first: the client seeds its prompts (--seed 0), so without a flush every
+  prefill of this pass would be a radix-cache hit of the warm run's prompts;
+- the client is InferenceX's own: ``client_argv(Point)`` plus only ``--profile``, run in-process
+  with the backend's request function wrapped.  The hook's ``/start_profile`` (sent after the
+  warm-ups, just before the measured burst) is not forwarded: it starts the completion count.
+  Its ``/stop_profile`` is dropped;
+- from START_AT of the measured requests done, a thread arms by-stage captures one at a time,
+  each only after the previous one's trace files (one per TP rank) are complete: decode until one
+  capture holds DECODE_STEPS clean steps (all DECODE at bs = conc), then prefill until the
+  captures total PREFILL_STEPS EXTEND steps.  No arming after STOP_AT (past it the burst admits
+  no new requests and its batch shrinks).  A capture still armed when the burst ends is fired
+  on a throwaway request and marked unused;
+- progress is kept in <out>/state.json across passes, every event in <out>/record.json.
+Exits 0 when the point's traces are complete, 2 when another pass is needed, 1 on failure.
+"""
+{% raw %}
+from __future__ import annotations
+
+import argparse
+import glob
+import gzip
+import json
+import os
+import runpy
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime
+from pathlib import Path
+
+START_AT, STOP_AT = 0.5, 0.85
+DECODE_STEPS, PREFILL_STEPS = 10, 10
+# SGLang's defaults, sent explicitly so that another revision's defaults cannot change the traces.
+PROFILER_OPTS = {"with_stack": True, "record_shapes": False, "activities": ["CPU", "GPU"]}
+POLL_S = 0.05
+# Once the requests are done: how long a capture's first file may take to appear (profiler
+# exports can lag the step that ended the capture), and how long all of them to be written.
+APPEAR_GRACE_S = 5
+WRITE_GRACE_S = 120
+
+
+def post(url: str, body: dict | None = None, timeout: float = 600.0) -> tuple[int, str]:
+    data = json.dumps(body).encode() if body is not None else b""
+    req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read().decode(errors="replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode(errors="replace")
+
+
+def trace_steps(path: str) -> list[dict]:
+    """The step spans of a trace, one per forward step in time order.  Each appears on the CPU
+    (user_annotation) and on the GPU (gpu_user_annotation); the CPU one is counted."""
+    with gzip.open(path, "rt") as f:
+        events = json.load(f)
+    events = events.get("traceEvents", events) if isinstance(events, dict) else events
+    steps = {}
+    for e in events:
+        name = str(e.get("name", ""))
+        if name.startswith("step[") and e.get("cat") == "user_annotation":
+            steps[(e.get("ts"), name)] = name
+    out = []
+    for (ts, _), name in sorted(steps.items(), key=lambda kv: (kv[0][0] or 0, kv[0][1])):
+        mode, _, rest = name[5:-1].partition(" ")
+        fields = dict(kv.split("=", 1) for kv in rest.split() if "=" in kv)
+        out.append({"ts": ts, "mode": mode, "bs": int(fields.get("bs", -1)),
+                    "toks": int(fields["toks"]) if "toks" in fields else None, "name": name})
+    return out
+
+
+def trace_files(trace_dir: str, prefix: str, stage: str) -> list[str]:
+    """A capture's files: <prefix>-<id>-TP-<rank>-<stage>.trace.json.gz, rank 0 first."""
+    hits = glob.glob(os.path.join(trace_dir, f"{prefix}-*-{stage}.trace.json.gz"))
+    return sorted(hits, key=lambda p: ("-TP-0-" not in p, p))
+
+
+def wait_trace(trace_dir: str, prefix: str, stage: str, tp: int, ended=lambda: False,
+               appear_s: float = APPEAR_GRACE_S) -> list[str] | None:
+    """The capture's files once every rank's is written and stable; None when the requests are
+    done (`ended()`) and no file appeared within `appear_s` (the capture never fired), or the
+    files did not complete within WRITE_GRACE_S."""
+    last, ended_at = None, None
+    while True:
+        hits = trace_files(trace_dir, prefix, stage)
+        sizes = [os.path.getsize(h) for h in hits]
+        if len(hits) >= tp and all(sizes) and sizes == last:
+            return hits
+        last = sizes
+        if ended():
+            ended_at = ended_at or time.monotonic()
+            waited = time.monotonic() - ended_at
+            if (not hits and waited > appear_s) or waited > WRITE_GRACE_S:
+                return None
+        time.sleep(POLL_S)
+
+
+class Controller:
+    def __init__(self, a: argparse.Namespace):
+        self.a = a
+        self.n = a.num_prompts
+        self.trace_dir = os.path.join(a.out, "traces")
+        self.state_path = Path(a.out, "state.json")
+        self.done = 0
+        self.started = False
+        self.t0 = None
+        self.thread = None
+        self.record = []
+        self.state = json.loads(self.state_path.read_text()) if self.state_path.exists() else {
+            "passes": 0, "decode_clean": None, "prefill_steps": 0, "captures": [],
+        }
+        self.state["passes"] = a.pass_no
+        self.pending = None  # an armed capture whose files have not appeared
+
+    def log(self, what: str, **kw):
+        ev = {"wall": datetime.now().isoformat(timespec="milliseconds"), "pass": self.a.pass_no,
+              "t_burst_s": None if self.t0 is None else round(time.monotonic() - self.t0, 3),
+              "done": self.done, "of": self.n, "what": what, **kw}
+        self.record.append(ev)
+        print(f"[trace_point pass {self.a.pass_no}] {json.dumps(ev)}", flush=True)
+
+    def complete(self) -> bool:
+        return self.state["decode_clean"] is not None and self.state["prefill_steps"] >= PREFILL_STEPS
+
+    # Called from the client's event loop.
+    def burst_started(self):
+        self.started = True
+        self.t0 = time.monotonic()
+        self.log("hook /start_profile: the measured burst starts (not forwarded)")
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+
+    def request_done(self):
+        if self.started:
+            self.done += 1
+
+    # The capture thread.
+    def run(self):
+        start, stop = START_AT * self.n, STOP_AT * self.n
+        while self.done < start:
+            time.sleep(POLL_S)
+        self.log(f"steady state: {self.done} >= {START_AT} x {self.n} done")
+        while not self.complete() and self.done < stop:
+            if not self.capture("decode" if self.state["decode_clean"] is None else "prefill"):
+                break
+        self.log("capture thread ends", complete=self.complete())
+
+    def capture(self, stage: str) -> bool:
+        k = sum(1 for c in self.state["captures"] if c.get("stage") == stage) + 1
+        prefix = f"pass{self.a.pass_no}_{stage}{k:02d}"
+        # V2 records num_steps + 1 steps.  A steady-state prefill capture ends at the next
+        # decode step anyway: ask for up to PREFILL_STEPS and let the stage change end it.
+        num_steps = (DECODE_STEPS if stage == "decode" else PREFILL_STEPS) - 1
+        body = {"profile_by_stage": True, "profile_stages": [stage], "num_steps": num_steps,
+                "output_dir": self.trace_dir, "profile_prefix": prefix, **PROFILER_OPTS}
+        code, text = post(f"{self.a.base_url}/start_profile", body)
+        self.log(f"arm {stage}", prefix=prefix, body=body, status=code, response=text.strip())
+        if code != 200:
+            return False
+        self.pending = (prefix, stage)
+        files = wait_trace(self.trace_dir, prefix, stage, self.a.tp, ended=lambda: self.done >= self.n)
+        if files is None:
+            self.log(f"no complete trace for {prefix} before the burst ended: still armed", prefix=prefix)
+            return False
+        self.pending = None
+        st = trace_steps(files[0])
+        modes = sorted({s["mode"] for s in st})
+        cap = {"pass": self.a.pass_no, "stage": stage, "prefix": prefix,
+               "files": [os.path.basename(f) for f in files], "steps": len(st), "modes": modes,
+               "bs": [s["bs"] for s in st], "toks": [s["toks"] for s in st if s["toks"] is not None]}
+        if stage == "decode":
+            clean = len(st) == DECODE_STEPS and modes == ["DECODE"] and all(b == self.a.conc for b in cap["bs"])
+            cap["use"] = "clean" if clean else "short or unclean: not used"
+            if clean:
+                self.state["decode_clean"] = cap["files"][0]
+        else:
+            ok = modes == ["EXTEND"]
+            cap["use"] = "used" if ok else "unexpected steps: not used"
+            if ok:
+                self.state["prefill_steps"] += len(st)
+        self.state["captures"].append(cap)
+        self.log(f"trace {stage}", **cap,
+                 prefill_steps_total=self.state["prefill_steps"], decode_clean=self.state["decode_clean"])
+        return True
+
+
+def fail(msg: str) -> int:
+    print(f"[trace_point] FATAL: {msg}", flush=True)
+    return 1
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    # The flags of `python3 -m infx.bench fixed-seq point`, unchanged.
+    p.add_argument("--base-url", required=True)
+    p.add_argument("--model", required=True)
+    p.add_argument("--backend", required=True)
+    p.add_argument("--tokenizer", required=True)
+    p.add_argument("--isl", type=int, required=True)
+    p.add_argument("--osl", type=int, required=True)
+    p.add_argument("--random-range-ratio", required=True)
+    p.add_argument("--conc", type=int, required=True)
+    p.add_argument("--num-prompts", type=int, required=True)
+    # The profiling.
+    p.add_argument("--out", required=True, help="the point's dir: traces/, pass<N>/, state.json, record.json")
+    p.add_argument("--pass", dest="pass_no", type=int, required=True)
+    p.add_argument("--tp", type=int, required=True, help="the server's TP: trace files per capture")
+    a = p.parse_args()
+    os.makedirs(os.path.join(a.out, "traces"), exist_ok=True)
+    result = Path(a.out, f"pass{a.pass_no}", "result.json")
+    result.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from infx.bench.fixed_seq import Point, client_argv
+        from infx.bench_serving import backend_request_func as brf
+        brf.ASYNC_REQUEST_FUNCS[a.backend], brf.RequestFuncOutput
+    except (ImportError, AttributeError, KeyError) as e:
+        return fail(f"InferenceX's client changed ({e!r}); trace_point.py needs infx.bench.fixed_seq's "
+                    "Point and client_argv, and backend_request_func's ASYNC_REQUEST_FUNCS and RequestFuncOutput")
+
+    ctl = Controller(a)
+    code, text = post(f"{a.base_url}/flush_cache")
+    ctl.log("POST /flush_cache", status=code, response=text.strip()[:200])
+    if code != 200:
+        return fail(f"/flush_cache answered {code}: {text.strip()[:200]}")
+    time.sleep(1)
+
+    point = Point(base_url=a.base_url, model=a.model, backend=a.backend, tokenizer=a.tokenizer, isl=a.isl,
+                  osl=a.osl, random_range_ratio=a.random_range_ratio, conc=a.conc, num_prompts=a.num_prompts,
+                  result=result)
+    argv = client_argv(point) + ["--profile"]
+    module = "infx.bench_serving.benchmark_serving"
+    if argv[1:3] != ["-m", module]:
+        return fail(f"InferenceX's client_argv no longer runs {module}: {argv[:3]}")
+    ctl.log("client argv", argv=argv)
+    inner = brf.ASYNC_REQUEST_FUNCS[a.backend]
+
+    async def wrapped(request_func_input, pbar=None):
+        url = request_func_input.api_url
+        if url.endswith("/start_profile"):
+            ctl.burst_started()
+            return brf.RequestFuncOutput(success=True)
+        if url.endswith("/stop_profile"):
+            ctl.log("hook /stop_profile: dropped")
+            return brf.RequestFuncOutput(success=True)
+        out = await inner(request_func_input=request_func_input, pbar=pbar)
+        ctl.request_done()
+        return out
+
+    brf.ASYNC_REQUEST_FUNCS[a.backend] = wrapped  # benchmark_serving looks it up in this dict
+    sys.argv = [module] + argv[3:]
+    rc = 0
+    try:
+        runpy.run_module(module, run_name="__main__", alter_sys=True)
+    except SystemExit as e:
+        rc = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+    if ctl.thread is not None:
+        ctl.thread.join(timeout=WRITE_GRACE_S + 60)
+    if ctl.pending:
+        # An armed capture that never fired would catch the next traffic (the next pass's
+        # warm-up): fire it on a throwaway request and mark it unused.
+        prefix, stage = ctl.pending
+        code, _ = post(f"{a.base_url}/v1/completions", {"model": a.model, "prompt": "Drain the armed profiler.",
+                                                         "max_tokens": 16, "temperature": 0})
+        files = wait_trace(ctl.trace_dir, prefix, stage, a.tp, ended=lambda: True)
+        ctl.log("drained an armed capture with a throwaway request: not used", prefix=prefix, status=code)
+        ctl.state["captures"].append({"pass": a.pass_no, "stage": stage, "prefix": prefix,
+                                      "files": [os.path.basename(f) for f in files or []],
+                                      "use": "drained: not used"})
+    ctl.log("pass ends", client_rc=rc, complete=ctl.complete(), prefill_steps=ctl.state["prefill_steps"],
+            decode_clean=ctl.state["decode_clean"])
+    ctl.state_path.write_text(json.dumps(ctl.state, indent=1) + "\n")
+    rec = Path(a.out, "record.json")
+    old = json.loads(rec.read_text()) if rec.exists() else []
+    rec.write_text(json.dumps(old + ctl.record, indent=1) + "\n")
+    if rc != 0:
+        return fail(f"the InferenceX client exited {rc}")
+    if not ctl.started:
+        return fail("InferenceX's --profile hook never fired: its benchmark_serving changed")
+    return 0 if ctl.complete() else 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+{% endraw %}

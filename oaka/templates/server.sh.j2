@@ -101,6 +101,11 @@ export PYTHONPATH={{ pythonpath | q }}${PYTHONPATH:+:$PYTHONPATH}
 {% for kv in env %}
 export {{ kv[0] }}={{ kv[1] | q }}
 {% endfor %}
+{% if profiler_env %}
+# A trace client profiles this server: SGLang's profiler V2, which captures by stage (oaka's,
+# like HIP_VISIBLE_DEVICES; not part of the profile).
+export {{ profiler_env }}
+{% endif %}
 
 ARGS=(
 {% for line in fixed %}

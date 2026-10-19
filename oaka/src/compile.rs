@@ -40,6 +40,9 @@ fn templates() -> Result<Environment<'static>> {
     env.add_template("install.sh", include_str!("../templates/install.sh.j2"))?;
     env.add_template("bisect_step.sh", include_str!("../templates/bisect_step.sh.j2"))?;
     env.add_template("metrics.py", include_str!("../templates/metrics.py.j2"))?;
+    env.add_template("trace.sh", include_str!("../templates/trace.sh.j2"))?;
+    env.add_template("trace_point.py", include_str!("../templates/trace_point.py.j2"))?;
+    env.add_template("trace_probe.py", include_str!("../templates/trace_probe.py.j2"))?;
     Ok(env)
 }
 
@@ -179,6 +182,7 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
             model => s.model, tp => s.tp, fixed, args, packages => PROVENANCE_PACKAGES,
             engine => s.effective.engine.as_str(), command => s.effective.engine.command(),
             pythonpath => pythonpath.join(":"), caches,
+            profiler_env => c.plan.traced(&s.name).then(|| format!("{}={}", plan::PROFILER_ENV.0, plan::PROFILER_ENV.1)),
             targets => s.base.arch.iter().map(|t| format!("({:?}, {:?})", t.arch(), t.rocm())).collect::<Vec<_>>().join(", "),
             targets_text => crate::profile::targets_text(&s.base.arch),
         })?;
@@ -228,9 +232,33 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
                     ..common
                 })?
             }
+            ClientSpec::Trace {
+                isl_osl,
+                conc,
+                range_ratio,
+                ..
+            } => {
+                let points: Vec<String> = isl_osl
+                    .iter()
+                    .flat_map(|[i, o]| conc.iter().map(move |c| format!("{i} {o} {c}")))
+                    .collect();
+                env.get_template("trace.sh")?.render(context! {
+                    points, range_ratio, prompts_per_conc => PROMPTS_PER_CONC, tokenizer => s.model,
+                    infx => infx_root(), tp => s.tp, ..common
+                })?
+            }
         };
         clients.push((cl.lockstep(), file.clone()));
         files.push((file, text));
+    }
+    // The trace clients' capture driver and their live probe of the profiler, shared.
+    if c.plan.clients.iter().any(|cl| matches!(cl, ClientSpec::Trace { .. })) {
+        for f in ["trace_point.py", "trace_probe.py"] {
+            let text = env
+                .get_template(f)?
+                .render(context! { marker, self_path => format!("{SCRIPTS}/{f}") })?;
+            files.push((f.into(), text));
+        }
     }
     // step.sh's order: each client alone, or a lockstep's clients together where its first is.
     let mut runs: Vec<minijinja::Value> = Vec::new();
@@ -368,7 +396,7 @@ fn metrics_script(env: &Environment, c: &Checked, marker: &str) -> Result<String
     for (i, cl) in c.plan.clients.iter().enumerate() {
         let dir = format!("{:02}_{}_{}", i + 1, cl.kind(), cl.server());
         let points: Vec<String> = match cl {
-            ClientSpec::Gsm8k { .. } => Vec::new(),
+            ClientSpec::Gsm8k { .. } | ClientSpec::Trace { .. } => Vec::new(),
             ClientSpec::FixedSeq { isl_osl, conc, .. } => isl_osl
                 .iter()
                 .flat_map(|[i, o]| conc.iter().map(move |c| format!("({i}, {o}, {c})")))
@@ -483,6 +511,67 @@ off_spec = { prompts_per_conc = 4 }
         let p1 = plan::load_lock(&work).unwrap().port["a"];
         compile(&checked).unwrap();
         assert_eq!(plan::load_lock(&work).unwrap().port["a"], p1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn trace_clients_compile_to_scripts_that_parse() {
+        let root = std::env::temp_dir().join(format!(
+            "oaka-compile-trace-{}-{}",
+            std::process::id(),
+            fastrand::u32(..)
+        ));
+        let lib = Library { root: root.join("lib") };
+        let work = root.join("work");
+        fs::create_dir_all(lib.profiles_dir().join("m")).unwrap();
+        fs::create_dir_all(&work).unwrap();
+        fs::write(lib.profile_path("m/base"), "model = '/model/m'\n").unwrap();
+        let base = "[[server]]\nname = 'a'\nprofile = 'm/base'\ngpus = [0, 1]\nport = 29950\n\
+                    [[server]]\nname = 'b'\nprofile = 'm/base'\ngpus = [2]\nport = 29951\n\
+                    [[client]]\nkind = 'fixed-seq'\nserver = 'b'\nisl_osl = [[128, 32]]\nconc = [1]\n";
+        let trace = "[[client]]\nkind = 'trace'\nserver = 'a'\nisl_osl = [[1024, 1024], [8192, 1024]]\nconc = [4]\n";
+        let compile_plan = |text: &str| {
+            fs::write(work.join(plan::PLAN), text).unwrap();
+            let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, &plan::Machine::default()).unwrap();
+            compile(&checked).unwrap()
+        };
+        let read = |f: &str| fs::read_to_string(work.join(SCRIPTS).join(f)).unwrap();
+
+        let out = compile_plan(&format!("{base}{trace}"));
+        assert!(read("server_a.sh").contains("\nexport SGLANG_PROFILE_V2=1\n"));
+        assert!(
+            !read("server_b.sh").contains("SGLANG_PROFILE_V2"),
+            "only the traced server"
+        );
+        let client = read("client_02_trace_a.sh");
+        assert!(client.contains("    \"8192 1024 4\"\n"), "{client}");
+        assert!(client.contains("--tp 2 "), "{client}");
+        assert!(client.contains("--num-prompts $(( 10 * CONC ))"), "{client}");
+        assert!(read("step.sh").contains("run_client client_02_trace_a.sh\n"));
+        for f in &out.written {
+            let st = match f.extension().and_then(|e| e.to_str()) {
+                Some("sh") => std::process::Command::new("bash").arg("-n").arg(f).status().unwrap(),
+                Some("py") => std::process::Command::new("python3")
+                    .args(["-c", "import ast, sys; ast.parse(open(sys.argv[1]).read())"])
+                    .arg(f)
+                    .status()
+                    .unwrap(),
+                _ => continue,
+            };
+            assert!(st.success(), "{} does not parse", f.display());
+        }
+        assert!(generated(&work.join("scripts/trace_point.py")));
+
+        // Without a trace client, its scripts and the profiler env go.
+        let removed: Vec<String> = compile_plan(base)
+            .removed
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        for f in ["client_02_trace_a.sh", "trace_point.py", "trace_probe.py"] {
+            assert!(removed.iter().any(|r| r == f), "{f} not removed: {removed:?}");
+        }
+        assert!(!read("server_a.sh").contains("SGLANG_PROFILE_V2"));
         fs::remove_dir_all(root).unwrap();
     }
 

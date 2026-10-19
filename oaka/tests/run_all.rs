@@ -27,13 +27,24 @@ fn servers_exclusive() -> RwLockWriteGuard<'static, ()> {
 /// `python3 -m sglang.launch_server`: listens on --port, prints sglang's ready line, keeps
 /// a child process like sglang's scheduler, and stops both on SIGTERM.
 /// `--crash` exits like an argparse error; FAKE_READY_DELAY delays readiness.
+///
+/// It also serves what a trace client uses, over a simulated scheduler: `POST /v1/completions`
+/// (`prompt_len` and `max_tokens` from the body; one EXTEND step admits every waiting request,
+/// DECODE steps give each running one a token), `POST /flush_cache`, and profiler V2's by-stage
+/// `/start_profile`: a capture starts at the first step of its stage, ends at the first step
+/// of another stage or after num_steps + 1 steps, and writes one trace per TP rank; arming
+/// while one is armed is refused, and so is any capture without SGLANG_PROFILE_V2=1.
+/// FAKE_STEP_S is a step's time (bs = 1: a quarter of it); FAKE_PASS_PREFILL_MIXED makes the
+/// trace clients' prefill captures (prefix pass*) also record the decode step that ends them.
+/// Events go to state/events_<port>: `arm <prefix> <t>`, `flush <t>`, `done <tag> <t>`.
 const FAKE_SGLANG: &str = r#"
-import json, os, signal, socket, subprocess, sys, time
+import gzip, http.server, json, os, signal, socket, subprocess, sys, threading, time
 args = sys.argv[1:]
 if "--crash" in args:
     print("sglang serve: error: unrecognized arguments: --crash", flush=True)
     sys.exit(2)
 port = int(args[args.index("--port") + 1])
+tp = int(args[args.index("--tp") + 1]) if "--tp" in args else 1
 def stop(*_):
     child.terminate(); child.wait(); sys.exit(0)
 signal.signal(signal.SIGTERM, signal.SIG_IGN)  # until the child exists: a TERM now must not orphan it
@@ -55,15 +66,112 @@ for var in ("TRITON_CACHE_DIR", "XDG_CACHE_HOME", "SGLANG_CACHE_DIR"):
     if path:
         os.makedirs(path, exist_ok=True)
         open(os.path.join(path, "kernel.bin"), "w").close()
-json.dump({"argv": args, "gpus": os.environ.get("HIP_VISIBLE_DEVICES"), "fakepkg": pkg, "caches": caches},
+json.dump({"argv": args, "gpus": os.environ.get("HIP_VISIBLE_DEVICES"), "fakepkg": pkg, "caches": caches,
+           "profile_v2": os.environ.get("SGLANG_PROFILE_V2")},
           open(os.path.join(state, f"server_{port}.json"), "w"))
-s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(("127.0.0.1", port)); s.listen(); s.settimeout(0.2)
+
+STEP_S = float(os.environ.get("FAKE_STEP_S", "0.01"))
+V2 = os.environ.get("SGLANG_PROFILE_V2") == "1"
+MIXED = bool(os.environ.get("FAKE_PASS_PREFILL_MIXED"))
+lock = threading.Lock()
+waiting, running = [], []
+prof = None  # the armed capture: dict(stage, num_steps, dir, prefix, steps)
+def event(*words):
+    with open(os.path.join(state, f"events_{port}"), "a") as f:
+        f.write(" ".join(map(str, words)) + f" {time.time()}\n")
+def write_trace(p):
+    for rank in range(tp):
+        ev = []
+        for i, name in enumerate(p["steps"]):
+            ev.append({"name": name, "cat": "user_annotation", "ts": i * 1000, "ph": "X"})
+            ev.append({"name": name, "cat": "gpu_user_annotation", "ts": i * 1000 + 5, "ph": "X"})
+        path = os.path.join(p["dir"], f"{p['prefix']}-{time.time()}-TP-{rank}-{p['stage']}.trace.json.gz")
+        with gzip.open(path + ".tmp", "wt") as f:
+            json.dump({"traceEvents": ev}, f)
+        os.rename(path + ".tmp", path)
+def profile_step(mode, name):
+    global prof
+    if prof is None:
+        return
+    want = "EXTEND" if prof["stage"] == "prefill" else "DECODE"
+    if not prof["steps"]:
+        if mode == want:
+            prof["steps"].append(name)
+        return
+    if mode != want:
+        if MIXED and prof["stage"] == "prefill" and prof["prefix"].startswith("pass"):
+            prof["steps"].append(name)
+        write_trace(prof); prof = None
+        return
+    prof["steps"].append(name)
+    if len(prof["steps"]) == prof["num_steps"] + 1:
+        write_trace(prof); prof = None
+def scheduler():
+    while True:
+        with lock:
+            if waiting:
+                batch = waiting[:]; del waiting[:]
+                name = f"step[EXTEND bs={len(batch)} toks={sum(r['len'] for r in batch)}]"
+                profile_step("EXTEND", name)
+                for r in batch:
+                    r["got"] = 1
+                running.extend(batch); bs = len(batch)
+            elif running:
+                name = f"step[DECODE bs={len(running)}]"
+                profile_step("DECODE", name)
+                for r in running:
+                    r["got"] += 1
+                bs = len(running)
+            else:
+                bs = 0
+            for r in [r for r in running if r["got"] >= r["max"]]:
+                running.remove(r); r["done"].set()
+        time.sleep(STEP_S / 4 if bs <= 1 else STEP_S)
+threading.Thread(target=scheduler, daemon=True).start()
+class H(http.server.BaseHTTPRequestHandler):
+    def reply(self, code, text):
+        body = text.encode()
+        self.send_response(code); self.send_header("Content-Length", str(len(body))); self.end_headers()
+        self.wfile.write(body)
+    def do_POST(self):
+        global prof
+        n = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(n) or b"{}")
+        if self.path == "/v1/completions":
+            prompt = str(body.get("prompt", ""))
+            r = {"len": int(body.get("prompt_len", len(prompt.split()))), "max": max(1, int(body.get("max_tokens", 16))),
+                 "got": 0, "done": threading.Event()}
+            with lock:
+                waiting.append(r)
+            r["done"].wait()
+            event("done", (prompt.split() or ["-"])[0])
+            self.reply(200, json.dumps({"choices": [{"text": "x " * r["got"]}], "usage": {"completion_tokens": r["got"]}}))
+        elif self.path == "/flush_cache":
+            event("flush")
+            self.reply(200, "Cache flushed.\n")
+        elif self.path == "/start_profile":
+            if not V2:
+                self.reply(500, "profiler v1: by-stage profile_stages are not supported"); return
+            if not body.get("profile_by_stage") or "merge_profiles" in body or "start_step" in body:
+                self.reply(500, "AssertionError: V2 profiles by stage only"); return
+            with lock:
+                if prof is not None:
+                    self.reply(400, "AssertionError: a capture is already armed"); return
+                prof = {"stage": body["profile_stages"][0], "num_steps": int(body["num_steps"]),
+                        "dir": body["output_dir"], "prefix": body["profile_prefix"], "steps": []}
+                os.makedirs(prof["dir"], exist_ok=True)
+            event("arm", body["profile_prefix"])
+            self.reply(200, "Start profiling.\n")
+        else:
+            self.reply(404, "")
+    def log_message(self, *a):
+        pass
+http.server.ThreadingHTTPServer.allow_reuse_address = True
+http.server.ThreadingHTTPServer.daemon_threads = True
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), H)
 time.sleep(float(os.environ.get("FAKE_READY_DELAY", "0")))
 print("The server is fired up and ready to roll!", flush=True)
-while True:
-    try: s.accept()[0].close()
-    except socket.timeout: pass
+srv.serve_forever()
 "#;
 
 /// `vllm serve <model> ...` and `python3 -m atom.entrypoints.openai_server ...`: listen on
@@ -126,6 +234,109 @@ json.dump({"output_throughput": speed * c, "total_token_throughput": 200.0 * c, 
            "mean_tpot_ms": 1.0, "completed": int(o["num-prompts"]), "argv": a}, open(o["result"], "w"))
 "#;
 
+/// InferenceX's `infx.bench.fixed_seq` as trace_point.py uses it: `Point` and `client_argv`.
+const FAKE_INFX_FIXED_SEQ: &str = r#"
+from dataclasses import dataclass
+from pathlib import Path
+
+@dataclass(frozen=True)
+class Point:
+    base_url: str
+    model: str
+    backend: str
+    isl: int
+    osl: int
+    random_range_ratio: str
+    conc: int
+    num_prompts: int
+    result: Path
+    tokenizer: str | None = None
+    use_chat_template: bool = False
+    trust_remote_code: bool = False
+
+def client_argv(point: Point) -> list[str]:
+    return ["python3", "-m", "infx.bench_serving.benchmark_serving", "--model", point.model,
+            "--backend", point.backend, "--base-url", point.base_url, "--random-input-len", str(point.isl),
+            "--random-output-len", str(point.osl), "--random-range-ratio", point.random_range_ratio,
+            "--num-prompts", str(point.num_prompts), "--max-concurrency", str(point.conc),
+            "--num-warmups", str(2 * point.conc), "--result-dir", str(point.result.parent),
+            "--result-filename", point.result.name, "--tokenizer", point.tokenizer]
+"#;
+
+/// InferenceX's `infx.bench_serving.backend_request_func`: the request functions by backend.
+const FAKE_INFX_REQUEST_FUNC: &str = r#"
+import asyncio, json, urllib.request
+from dataclasses import dataclass
+
+@dataclass
+class RequestFuncInput:
+    prompt: str
+    api_url: str
+    prompt_len: int
+    output_len: int
+    model: str
+
+@dataclass
+class RequestFuncOutput:
+    success: bool = False
+    output_tokens: int = 0
+
+def _post(i):
+    body = json.dumps({"model": i.model, "prompt": i.prompt, "prompt_len": i.prompt_len,
+                       "max_tokens": i.output_len}).encode()
+    req = urllib.request.Request(i.api_url, data=body, method="POST", headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=600) as r:
+        return json.load(r)
+
+async def async_request_openai_completions(request_func_input, pbar=None):
+    out = await asyncio.to_thread(_post, request_func_input)
+    return RequestFuncOutput(success=True, output_tokens=out["usage"]["completion_tokens"])
+
+ASYNC_REQUEST_FUNCS = {"vllm": async_request_openai_completions}
+"#;
+
+/// InferenceX's `infx.bench_serving.benchmark_serving`: `2 x conc` warm-ups of one prompt
+/// (`WARMUP`), then with `--profile` the hook's `/start_profile`, the burst (`REQ <i>`, random
+/// lengths within the range ratio) at `--max-concurrency`, and `/stop_profile`; the result JSON.
+const FAKE_INFX_BENCH_SERVING: &str = r#"
+import argparse, asyncio, json, os, random, time
+from .backend_request_func import ASYNC_REQUEST_FUNCS, RequestFuncInput
+
+p = argparse.ArgumentParser()
+for f in ["--model", "--backend", "--base-url", "--random-input-len", "--random-output-len",
+          "--random-range-ratio", "--num-prompts", "--max-concurrency", "--num-warmups", "--result-dir",
+          "--result-filename", "--tokenizer"]:
+    p.add_argument(f)
+p.add_argument("--profile", action="store_true")
+a = p.parse_args()
+isl, osl, ratio = int(a.random_input_len), int(a.random_output_len), float(a.random_range_ratio)
+conc, n = int(a.max_concurrency), int(a.num_prompts)
+rng = random.Random(0)
+url = a.base_url + "/v1/completions"
+
+async def main():
+    request_func = ASYNC_REQUEST_FUNCS[a.backend]
+    warm = RequestFuncInput("WARMUP", url, isl, osl, a.model)
+    await asyncio.gather(*[request_func(request_func_input=warm) for _ in range(int(a.num_warmups))])
+    if a.profile:
+        await request_func(request_func_input=RequestFuncInput("", a.base_url + "/start_profile", 0, 0, a.model))
+    sem = asyncio.Semaphore(conc)
+    async def one(i):
+        inp = RequestFuncInput(f"REQ {i}", url, rng.randint(int(isl * ratio), isl), rng.randint(int(osl * ratio), osl),
+                               a.model)
+        async with sem:
+            return await request_func(request_func_input=inp)
+    t0 = time.time()
+    outs = await asyncio.gather(*[one(i) for i in range(n)])
+    if a.profile:
+        await request_func(request_func_input=RequestFuncInput("", a.base_url + "/stop_profile", 0, 0, a.model))
+    toks = sum(o.output_tokens for o in outs)
+    json.dump({"output_throughput": toks / (time.time() - t0), "completed": len(outs)},
+              open(os.path.join(a.result_dir, a.result_filename), "w"))
+
+asyncio.run(main())
+"#;
+
 /// `sgl-eval run gsm8k ...`: writes metrics.json with FAKE_GSM8K_SCORE (default 0.95).
 const FAKE_SGL_EVAL: &str = r#"#!/usr/bin/env python3
 import json, os, sys, time
@@ -159,7 +370,13 @@ impl Sandbox {
         write("infx/infx/__init__.py", "");
         write("infx/infx/bench/__init__.py", "");
         write("infx/infx/bench/__main__.py", FAKE_INFX);
-        write("infx/infx/bench/fixed_seq.py", "");
+        write("infx/infx/bench/fixed_seq.py", FAKE_INFX_FIXED_SEQ);
+        write("infx/infx/bench_serving/__init__.py", "");
+        write(
+            "infx/infx/bench_serving/backend_request_func.py",
+            FAKE_INFX_REQUEST_FUNC,
+        );
+        write("infx/infx/bench_serving/benchmark_serving.py", FAKE_INFX_BENCH_SERVING);
         write("bin/sgl-eval", FAKE_SGL_EVAL);
         Command::new("chmod")
             .arg("+x")
@@ -739,6 +956,7 @@ fn doctor_reports_missing_prerequisites() {
         "ok    library",
         "ok    gpus        2 x gfx950",
         "ok    inferencex",
+        "ok    trace       InferenceX's client has what trace clients wrap",
         "ok    sgl-eval",
         "warn  repo        no akao-workflow clone at",
     ] {
@@ -775,6 +993,16 @@ fn doctor_reports_missing_prerequisites() {
         .unwrap();
     assert_eq!(gpus["status"], "ok");
     assert!(gpus["detail"].as_str().unwrap().starts_with("2 x gfx950"), "{gpus}");
+
+    // An InferenceX whose client lost the --profile hook: trace clients cannot work.
+    let bs = sb.root.join("infx/infx/bench_serving/benchmark_serving.py");
+    fs::write(
+        &bs,
+        fs::read_to_string(&bs).unwrap().replace("/start_profile", "/begin"),
+    )
+    .unwrap();
+    let text = String::from_utf8_lossy(&sb.oaka(&["doctor"]).output().unwrap().stdout).into_owned();
+    assert!(text.contains("warn  trace       trace clients cannot wrap InferenceX's client (AssertionError: benchmark_serving has no --profile hook"), "{text}");
 
     fs::remove_dir_all(sb.root.join("infx")).unwrap();
     let out = sb.oaka(&["doctor"]).env("OAKA_GPUS", "").output().unwrap();
@@ -1293,4 +1521,146 @@ fn the_library_is_the_repo_checkouts_oaka_dir() {
         "{text}"
     );
     assert!(text.contains("m/vllm"), "{text}");
+}
+
+/// `[[client]] kind = 'trace'` on server a, one point.
+fn trace_client(isl_osl: &str, conc: &str) -> String {
+    format!("[[client]]\nkind = 'trace'\nserver = 'a'\nisl_osl = {isl_osl}\nconc = {conc}\nrange_ratio = 0.5\n")
+}
+
+/// The stand-in server's events: (what, word, time) per line of state/events_<port>.
+fn events(sb: &Sandbox, port: u16) -> Vec<(String, String, f64)> {
+    fs::read_to_string(sb.root.join(format!("state/events_{port}")))
+        .unwrap_or_default()
+        .lines()
+        .map(|l| {
+            let w: Vec<&str> = l.split(' ').collect();
+            let t = w.last().unwrap().parse().unwrap();
+            (
+                w[0].to_string(),
+                if w.len() > 2 { w[1].to_string() } else { String::new() },
+                t,
+            )
+        })
+        .collect()
+}
+
+/// A trace client: oaka sets the profiler env, the probe passes, every point gets its warm
+/// run and then flushed profiled passes whose captures are armed only within 50-85% of the
+/// measured burst (never in the warm-ups), until a clean decode capture and 10 prefill steps
+/// are on disk; one trace file per TP rank.
+#[test]
+fn trace_client_captures_the_steady_state() {
+    let _servers = servers_shared();
+    let sb = Sandbox::new("trace");
+    let (a, port) = server_of("a", "m/base", 0, "");
+    let plan = format!(
+        "{}{}",
+        a.replace("gpus = [0]", "gpus = [0, 1]"),
+        trace_client("[[64, 40]]", "[4]")
+    );
+    let (code, out) = sb.run(&plan, &[("FAKE_STEP_S", "0.01")]);
+    assert_eq!(code, 0, "{out}");
+    assert!(sb
+        .read("scripts/server_a.sh")
+        .contains("\nexport SGLANG_PROFILE_V2=1\n"));
+    let record: serde_json::Value = serde_json::from_str(&sb.server_record().join("")).unwrap();
+    assert_eq!(record["profile_v2"], "1");
+    for probe in [
+        "A_prefill_ends_at_decode",
+        "B_num_steps_9_gives_10",
+        "C_decode_ends_at_prefill",
+    ] {
+        assert!(out.contains(&format!("[trace_probe] {probe}: PASS")), "{out}");
+    }
+
+    let point = sb.work().join("results/01_trace_a/a_isl64_osl40_c4");
+    assert!(point.join("warm.json").exists());
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(point.join("state.json")).unwrap()).unwrap();
+    assert!(state["decode_clean"].is_string(), "{state}");
+    assert!(state["prefill_steps"].as_u64().unwrap() >= 10, "{state}");
+    for cap in state["captures"].as_array().unwrap() {
+        let files = cap["files"].as_array().unwrap();
+        assert_eq!(files.len(), 2, "one trace per TP rank: {cap}");
+        assert!(files[0].as_str().unwrap().contains("-TP-0-"), "{cap}");
+        if cap["use"] == "clean" {
+            assert_eq!(cap["bs"], serde_json::json!(vec![4; 10]), "{cap}");
+        }
+    }
+    let csv = sb.read("results/01_trace_a/captures.csv");
+    assert!(csv.lines().count() > 2 && csv.contains(",clean"), "{csv}");
+
+    // Each pass: a flush, then the warm-ups, then arms only within 50-85% of the 40 requests.
+    let ev = events(&sb, port);
+    let passes: Vec<usize> = ev
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.0 == "flush")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(passes.len() as u64, state["passes"].as_u64().unwrap(), "{ev:?}");
+    for (k, &start) in passes.iter().enumerate() {
+        let end = passes.get(k + 1).copied().unwrap_or(ev.len());
+        let mut done = 0;
+        let mut warmups_done = 0;
+        for e in &ev[start..end] {
+            match (e.0.as_str(), e.1.as_str()) {
+                ("done", "REQ") => done += 1,
+                ("done", "WARMUP") => {
+                    assert_eq!(done, 0, "a warm-up after the burst began: {ev:?}");
+                    warmups_done += 1
+                }
+                ("arm", prefix) if prefix.starts_with("pass") => {
+                    assert_eq!(warmups_done, 8, "armed before the warm-ups were done: {ev:?}");
+                    assert!((20..=34).contains(&done), "armed at {done} of 40 done: {ev:?}");
+                }
+                _ => {}
+            }
+        }
+    }
+    sb.assert_no_leftovers();
+}
+
+/// A point whose traces stay incomplete gets every pass, each flushed, and the client exits 3;
+/// a profiler that breaks the practice's rules stops the client at the probe, before any run.
+#[test]
+fn trace_client_reports_incomplete_traces_and_a_failed_probe() {
+    let _servers = servers_shared();
+    let sb = Sandbox::new("trace-bad");
+    let (a, port) = server_of("a", "m/base", 0, "");
+    let plan = format!("{a}{}", trace_client("[[64, 24]]", "[2]"));
+    // Prefill captures that also hold a decode step are never used.
+    let (code, out) = sb.run(&plan, &[("FAKE_STEP_S", "0.004"), ("FAKE_PASS_PREFILL_MIXED", "1")]);
+    assert_eq!(code, 3, "{out}");
+    assert!(out.contains("a_isl64_osl24_c2: INCOMPLETE after 3 passes"), "{out}");
+    let point = sb.work().join("results/01_trace_a/a_isl64_osl24_c2");
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(point.join("state.json")).unwrap()).unwrap();
+    assert_eq!(state["passes"], 3);
+    assert_eq!(state["prefill_steps"], 0);
+    assert_eq!(events(&sb, port).iter().filter(|e| e.0 == "flush").count(), 3);
+    assert!(sb
+        .read("results/01_trace_a/captures.csv")
+        .contains("unexpected steps: not used"));
+    sb.assert_no_leftovers();
+
+    // A server without profiler V2 (the plan cannot unset it, so its script is edited).
+    let script = sb.work().join("scripts/server_a.sh");
+    let text = sb.read("scripts/server_a.sh").replace("export SGLANG_PROFILE_V2=1", "");
+    fs::write(&script, text).unwrap();
+    let out = sb.sandboxed("bash").arg("scripts/run_all.sh").output().unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("[trace_probe] A_prefill_ends_at_decode: FAIL"), "{text}");
+    assert!(
+        text.contains("FATAL: the profiler does not behave as the capture practice assumes"),
+        "{text}"
+    );
+    assert!(!point.exists(), "no warm run after a failed probe");
+    sb.assert_no_leftovers();
 }
