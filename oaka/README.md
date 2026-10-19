@@ -128,7 +128,9 @@ of its points' steady state; the capture practice is fixed policy, like fixed-se
   a trace's own warm run is its point's number.
 - First, once per client, `scripts/trace_probe.py` checks the profiler's rules on the live
   server with throwaway requests (a capture ends at the next change of stage; `num_steps` 9
-  records 10 steps).  When they do not hold, the client stops before any run (exit 1).
+  records 10 steps) and that its traces hold GPU kernels: on torch 2.12 / ROCm 10.1 they hold
+  CPU events only unless SGLang carries sgl-project/sglang#44292.  When a check fails, the
+  client stops before any run (exit 1).
 - Per point: a warm run (InferenceX's fixed-seq point, as compiled; 10 prompts per
   concurrency), then up to 3 profiled passes (`scripts/trace_point.py`), each after
   `POST /flush_cache`.  A pass runs InferenceX's own client with `--profile`; its hook marks

@@ -4,7 +4,7 @@ description: The worker role's manual — an agent in a worker container (akao_<
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.8.0"
+  version: "2.8.1"
   category: development
   tags: ["worker", "sglang", "oaka", "bisect", "benchmark", "profiling", "git"]
 compatibility:
@@ -114,7 +114,9 @@ probe = the profiler's rules changed on this SGLang revision (below), so no trac
 `profile_stages` and, when a prefill lands inside its decode capture, writes that capture under
 the prefill name, overwriting the prefill trace. V2's rules (`ProfileManager`,
 `srt/utils/profile_utils.py`; read at SGLang d1357bf87b), which the trace client's probe
-(`scripts/trace_probe.py`) checks on the live server before any run:
+(`scripts/trace_probe.py`) checks on the live server before any run, together with GPU kernels
+being recorded at all (torch 2.12 / ROCm 10.1 records the CPU only unless SGLang carries
+sgl-project/sglang#44292: child processes inherit `ROCPROFILER_REGISTER_LIBRARY`; ww43 1042/1043):
 - **a capture ends at the first change of stage**: prefill stops at the next decode step, decode
   at the next prefill (a step is one or the other without `--enable-mixed-chunk`);
 - **`num_steps = N` records N + 1 steps**: send 9 for 10;
@@ -135,7 +137,9 @@ zcat <trace>.trace.json.gz | grep -oE 'step\[(EXTEND|DECODE) bs=[0-9]+( toks=[0-
 ```
 
 Prefill: `EXTEND bs=1` (sometimes 2), `toks` between `range_ratio`·ISL and ISL and varied across
-captures; identical counts are the warm-up's prompt, `toks=1` a cache hit (no flush). Decode: 10
+captures — or, for prompts longer than the chunked-prefill size, one step per chunk (8k/1k with
+3072: `toks=3072`, `3072`, then the rest); identical counts are the warm-up's prompt, `toks=1` a
+cache hit (no flush). Decode: 10
 `DECODE` steps at `bs = conc`.
 
 **Always say this in the report — a profiled run is not a measurement.** Each trace stalls the

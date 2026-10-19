@@ -5,6 +5,8 @@ clients on the live server before their first warm run, with throwaway requests 
   A  a prefill capture ends at the next decode step       (arm prefill, num_steps 9, 1 request)
   B  num_steps = 9 records 10 decode steps                (arm decode, num_steps 9, 1 long request)
   C  a decode capture ends at the next prefill            (arm decode, num_steps 2000, a 2nd request after 1 s)
+  D  the traces hold GPU kernels                          (B's trace; CPU-only traces are useless for kernel times:
+                                                           torch 2.12 / ROCm 10.1 needs sgl-project/sglang#44292)
 The rules and body fields change between SGLang revisions.  Exits 1 when one fails: the
 practice does not hold for this revision, and its traces would be wrong.
   python3 trace_probe.py <base url> <served model> <out dir> <tp>
@@ -54,6 +56,7 @@ r["pass"] = len(st) == 1 and st[0]["mode"] == "EXTEND"
 body, resp = arm("probeB", "decode", 9)
 complete(64)
 path, st = steps("probeB", "decode", resp)
+path_b = path
 results["B_num_steps_9_gives_10"] = r = {"body": body, "response": resp, "file": path, "n_steps": len(st),
                                          "modes": sorted({s["mode"] for s in st}), "expect": "10 DECODE steps"}
 r["pass"] = len(st) == 10 and r["modes"] == ["DECODE"]
@@ -70,6 +73,19 @@ results["C_decode_ends_at_prefill"] = r = {"body": body, "response": resp, "file
                                            "expect": "fewer than 1400 DECODE steps (not stopped: about 1500)"}
 r["pass"] = 0 < len(st) < 1400 and r["modes"] == ["DECODE"]
 
+
+def categories(path):
+    with gzip.open(path, "rt") as f:
+        ev = json.load(f)
+    ev = ev.get("traceEvents", ev) if isinstance(ev, dict) else ev
+    return collections.Counter(e.get("cat") for e in ev)
+
+
+cats = categories(path_b) if path_b else collections.Counter()
+results["D_gpu_kernels_recorded"] = r = {"file": path_b, "n_kernels": cats.get("kernel", 0), "categories": dict(cats),
+                                         "expect": "GPU kernel events in B's trace"}
+r["pass"] = r["n_kernels"] > 0
+
 # Where the step spans appear: what trace_point.py counts (user_annotation).
 if path:
     with gzip.open(path, "rt") as f:
@@ -82,8 +98,13 @@ ok = True
 for k, v in results.items():
     if isinstance(v, dict) and "pass" in v:
         ok &= v["pass"]
-        print(f"[trace_probe] {k}: {'PASS' if v['pass'] else 'FAIL'} ({v['expect']}; got "
-              f"{v.get('n_steps', v.get('steps'))}; /start_profile answered {v['response'][0]})", flush=True)
+        got = v.get("n_steps", v.get("n_kernels", v.get("steps")))
+        answered = f"; /start_profile answered {v['response'][0]}" if "response" in v else ""
+        print(f"[trace_probe] {k}: {'PASS' if v['pass'] else 'FAIL'} ({v['expect']}; got {got}{answered})", flush=True)
+if not results["D_gpu_kernels_recorded"]["pass"]:
+    print("[trace_probe] the profiler records no GPU activity: the traces would hold CPU events only.  On torch 2.12 /"
+          " ROCm 10.1, SGLang needs sgl-project/sglang#44292 (child processes inherit ROCPROFILER_REGISTER_LIBRARY).",
+          flush=True)
 print(f"[trace_probe] step span categories: {results.get('step_span_categories')}")
 with open(os.path.join(out, "probe.json"), "w") as f:
     json.dump(results, f, indent=1)

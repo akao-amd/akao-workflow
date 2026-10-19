@@ -34,6 +34,8 @@ fn servers_exclusive() -> RwLockWriteGuard<'static, ()> {
 /// `/start_profile`: a capture starts at the first step of its stage, ends at the first step
 /// of another stage or after num_steps + 1 steps, and writes one trace per TP rank; arming
 /// while one is armed is refused, and so is any capture without SGLANG_PROFILE_V2=1.
+/// Each step's span is written on the CPU and the GPU with one kernel, unless FAKE_TRACE_NO_GPU
+/// (CPU events only, as torch 2.12 / ROCm 10.1 without sgl-project/sglang#44292).
 /// FAKE_STEP_S is a step's time (bs = 1: a quarter of it); FAKE_PASS_PREFILL_MIXED makes the
 /// trace clients' prefill captures (prefix pass*) also record the decode step that ends them.
 /// Events go to state/events_<port>: `arm <prefix> <t>`, `flush <t>`, `done <tag> <t>`.
@@ -73,6 +75,7 @@ json.dump({"argv": args, "gpus": os.environ.get("HIP_VISIBLE_DEVICES"), "fakepkg
 STEP_S = float(os.environ.get("FAKE_STEP_S", "0.01"))
 V2 = os.environ.get("SGLANG_PROFILE_V2") == "1"
 MIXED = bool(os.environ.get("FAKE_PASS_PREFILL_MIXED"))
+GPU = not os.environ.get("FAKE_TRACE_NO_GPU")
 lock = threading.Lock()
 waiting, running = [], []
 prof = None  # the armed capture: dict(stage, num_steps, dir, prefix, steps)
@@ -84,7 +87,9 @@ def write_trace(p):
         ev = []
         for i, name in enumerate(p["steps"]):
             ev.append({"name": name, "cat": "user_annotation", "ts": i * 1000, "ph": "X"})
-            ev.append({"name": name, "cat": "gpu_user_annotation", "ts": i * 1000 + 5, "ph": "X"})
+            if GPU:
+                ev.append({"name": name, "cat": "gpu_user_annotation", "ts": i * 1000 + 5, "ph": "X"})
+                ev.append({"name": "_moe_gemm_a8w4", "cat": "kernel", "ts": i * 1000 + 6, "ph": "X"})
         path = os.path.join(p["dir"], f"{p['prefix']}-{time.time()}-TP-{rank}-{p['stage']}.trace.json.gz")
         with gzip.open(path + ".tmp", "wt") as f:
             json.dump({"traceEvents": ev}, f)
@@ -1661,6 +1666,18 @@ fn trace_client_reports_incomplete_traces_and_a_failed_probe() {
         text.contains("FATAL: the profiler does not behave as the capture practice assumes"),
         "{text}"
     );
+    assert!(!point.exists(), "no warm run after a failed probe");
+    sb.assert_no_leftovers();
+
+    // A profiler that records the CPU only: traces without kernels are refused before any run.
+    let (code, out) = sb.run(&plan, &[("FAKE_STEP_S", "0.004"), ("FAKE_TRACE_NO_GPU", "1")]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("[trace_probe] A_prefill_ends_at_decode: PASS"), "{out}");
+    assert!(
+        out.contains("[trace_probe] D_gpu_kernels_recorded: FAIL (GPU kernel events in B's trace; got 0)"),
+        "{out}"
+    );
+    assert!(out.contains("sgl-project/sglang#44292"), "{out}");
     assert!(!point.exists(), "no warm run after a failed probe");
     sb.assert_no_leftovers();
 }
