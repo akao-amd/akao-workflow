@@ -1,0 +1,28 @@
+# gpt-oss-120b/best for the draft-1021 trees, where the expert-GEMM backend switch moved from AITER
+# to SGLang.  Created 2026-10-21 for ww43 1021_verify_update_draft (h21-5 A0).
+#
+# The draft-1016 patches were refactored onto upstream main as PR-sized branches (AITER
+# draft-1021-flydsl-cache, draft-1021-a8w4-configs; SGLang draft-1021-w4a8-gather,
+# draft-1021-lm-head-tgemm) and one integration branch per repo, draft-1021.  On those trees:
+#   - AITER no longer reads AITER_A8W4_BACKEND: moe_gemm_a8w4 takes the backend as an argument;
+#   - SGLang picks it, from SGLANG_GFX1250_W4A8_BACKEND, and refuses
+#     SGLANG_GFX1250_W4A8_KERNEL_GATHER=1 without SGLANG_GFX1250_W4A8_BACKEND=triton (ValueError
+#     at model load), since the gluon gather needs TDM.
+# So this is best with that one line swapped; everything else (base's flags, HIP_FORCE_DEV_KERNARG
+# dropped, KERNEL_GATHER, LM_HEAD_AITER_TGEMM) is inherited unchanged.  best's own comments say
+# why each switch is there and what it was worth.
+#
+# On trees before draft-1021 (draft-1016 and older) this profile is NOT best: their AITER reads only
+# AITER_A8W4_BACKEND, so the expert GEMMs stay on gluon, and their SGLang does not check the pair.
+# Use best there.  On stock trees all switches are inert, as with best.
+#
+#   AITER_A8W4_BACKEND = false                   the old switch, read by no draft-1021 tree
+#   SGLANG_GFX1250_W4A8_BACKEND = "triton"       its replacement: expert GEMMs on _moe_gemm_a8w4
+
+description = "gpt-oss-120b W4A8 best gfx1250 recipe for draft-1021 trees: best with the W4A8 backend switch moved to SGLang (SGLANG_GFX1250_W4A8_BACKEND)"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/best"
+
+[env]
+AITER_A8W4_BACKEND = false
+SGLANG_GFX1250_W4A8_BACKEND = "triton"

@@ -1,0 +1,20 @@
+# gpt-oss-120b/base1021 at TP2.  Created 2026-10-21 for ww43 1021_verify_update_draft (h21-5 A0).
+#
+# Derived from base1021 the way best-tp2 is derived from best: the same recipe (inherited via
+# extends), with the tp pin 1 -> 2 and --disable-custom-all-reduce.  base1021 inherits best's
+# tp = 1, so a plan giving it two GPUs is rejected; hence this child profile.
+#
+# --disable-custom-all-reduce: from gpt-oss-120b/tp2 via best-tp2 (AiterCustomAllreduce hung TP2
+#   on GPUs 6+7 in DPX mode, ROCm 10.0.0).  Kept so this profile differs from best-tp2 only by
+#   base1021's env line.
+#
+# best-tp2's caveat holds here too: the tuned gfx1250 Triton table was swept for the TP1 shapes,
+# so at TP2 the expert GEMMs run on entries tuned for other shapes.
+
+description = "gpt-oss-120b W4A8 best gfx1250 recipe for draft-1021 trees at TP2, RCCL all-reduce"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/base1021"
+tp = 2
+
+[args]
+disable-custom-all-reduce = true
