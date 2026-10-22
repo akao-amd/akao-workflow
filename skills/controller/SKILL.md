@@ -113,7 +113,17 @@ declared, not detected:
 | After writing | say **"done — yours"**; keep the interval to a few sends |
 
 If a capture shows a dialog you did not open (a permission prompt), send no keys: the user
-is mid-decision, and your keystroke would choose for them.
+is mid-decision, and your keystroke would choose for them. Two prompts are the exception:
+the user granted them standing (2026-10-22), so answer them in a worker's window yourself,
+saying "driving" / "done — yours" around it as for any write:
+
+| Prompt | Answer |
+|---|---|
+| folder trust ("Is this a project you created or one you trust?") | "Yes, I trust this folder": `Down`, then `C-m` |
+| "Allow this read outside the working directories?" | "1. Yes, and keep allowing any reads outside the working directories": `C-m` when `❯` is on it |
+
+First check that the capture shows exactly that prompt, with nothing typed into it. Any
+other prompt, or one you are unsure of, stays the user's: send no keys and tell them.
 
 ## You are also the tools' developer
 
