@@ -253,7 +253,8 @@ http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
 /// Each point appends `<result file> <start> <end>` to state/points; FAKE_INFX_SLOW
 /// (`<port>:<seconds>`) makes the points against one server take that long, FAKE_INFX_FAIL
 /// (`<port>:<conc>`) fails that server's points at that concurrency; with FAKE_INFX_COLD a
-/// point's first run (`_r1`) is half as fast, as on a server that compiles while measured.
+/// point's first run (`_r1`) is half as fast, as on a server that compiles while measured;
+/// FAKE_INFX_SCALE (`<port>:<conc>:<factor>,...`) scales that server's tok/s at that concurrency.
 const FAKE_INFX: &str = r#"
 import json, os, sys, time
 try:
@@ -278,6 +279,10 @@ with open(os.path.join(os.environ["FAKE_STATE"], "points"), "a") as f:
     f.write(f"{os.path.basename(o['result'])} {start} {time.time()}\n")
 if os.environ.get("FAKE_INFX_COLD") and o["result"].endswith("_r1.json"):
     speed /= 2
+for scale in filter(None, os.environ.get("FAKE_INFX_SCALE", "").split(",")):
+    p, k, x = scale.split(":")
+    if p == port and int(k) == c:
+        speed *= float(x)
 json.dump({"output_throughput": speed * c, "total_token_throughput": 200.0 * c, "mean_ttft_ms": 10.0,
            "mean_tpot_ms": 1.0, "completed": int(o["num-prompts"]), "argv": a}, open(o["result"], "w"))
 "#;
@@ -751,7 +756,16 @@ fn lockstep_clients_run_together() {
     };
     let plan = format!("{a}{b}{GSM8K}{}{}", fixed("a"), fixed("b"));
     let slow = format!("{port_b}:0.4");
-    let (code, out) = sb.run(&plan, &[("FAKE_INFX_SLOW", &slow)]);
+    // a is the slower server at conc 1, b at conc 2; both runs of b's conc 2 are slow.
+    let scale = format!("{port_a}:1:0.5,{port_b}:2:0.25");
+    let (code, out) = sb.run(
+        &plan,
+        &[
+            ("FAKE_INFX_SLOW", &slow),
+            ("FAKE_INFX_SCALE", &scale),
+            ("FAKE_INFX_COLD", "1"),
+        ],
+    );
     assert_eq!(code, 0, "{out}");
     let step = sb.read("scripts/step.sh");
     assert!(
@@ -765,6 +779,14 @@ fn lockstep_clients_run_together() {
         let summary = sb.read(&format!("results/{n}_fixed-seq_{s}/summary.csv"));
         assert_eq!(summary.lines().count(), 3, "{summary}");
     }
+    // The lockstep's summary: per point the slower server's last run (a cold run 1 is slower
+    // still, but is not the number).
+    let both = sb.read("results/lockstep_ab/summary.csv");
+    assert_eq!(both.lines().count(), 3, "{both}");
+    assert!(
+        both.contains("a_isl128_osl32_c1_r2,128,32,1,50.0,") && both.contains("b_isl128_osl32_c2_r2,128,32,2,50.0,"),
+        "{both}"
+    );
     // Per run: (start, end) of each server, in run order.
     let points = fs::read_to_string(sb.root.join("state/points")).unwrap();
     let times = |s: &str| -> Vec<(f64, f64)> {

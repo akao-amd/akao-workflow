@@ -124,7 +124,9 @@ in the plan, and every run of every point starts on all of them together (a clie
 in `logs/lockstep_<name>/` for the others; a fast server idles until the slow one's run
 ends).  They need the same `isl_osl`, `conc` and `repeats`, one client per server.  When
 one fails, the others stop before their next run.  Each client keeps its own results and
-`summary.csv`; run by hand, a client script does not wait.
+`summary.csv`, and `step.sh` adds `results/lockstep_<name>/summary.csv`: per point the
+row of the slowest server (lowest output tok/s of its last run), the number each server of
+the lockstep can be counted on for.  Run by hand, a client script does not wait.
 
 A `trace` client captures SGLang GPU traces (Chrome/Perfetto, one file per TP rank) of each
 of its points' steady state; the capture practice is fixed policy, like fixed-seq's client

@@ -114,7 +114,9 @@ Where the how lives: worker reference (commands, plan and profile fields)
   layouts) run 1 was 14-44% below run 2 at conc 4 and 1-21% at conc 8-32, so a median of two
   mixed a cold run into every number, and single-run 70000/300 points were all cold.  Each
   server still starts empty, so every server warms itself alike.  The user's norm (10-22):
-  repeats 2 regardless of shape and layout, report run 2.
+  repeats 2 regardless of shape and layout, report run 2.  A lockstep (TP1x2: two TP1 servers
+  measured under each other's load) reports per point its slowest server's run 2
+  (`results/lockstep_<name>/summary.csv`), not their sum or mean: the user's norm, the same day.
 - **Profiles are named `<model>/<recipe>` (`<model>` alone = `<model>/base`), `<model>` being
   the model family as the user names it; the GPU arch is a multiple-choice field in the
   file, not part of the name.**  Recipes overlay one another (`extends`; `false` removes),

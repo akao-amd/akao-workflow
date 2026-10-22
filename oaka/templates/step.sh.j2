@@ -157,11 +157,48 @@ run_client() {
     exit $rc
 }
 
+# lockstep_summary <name> <script>...: results/lockstep_<name>/summary.csv, one row per point:
+# the worst server's (lowest output tok/s) of the clients' summary rows, each a point's last
+# run.  The servers ran each point at the same time, so the slowest is what each of them can
+# be counted on for.  Written when every client has its summary.csv.
+lockstep_summary() {
+    local name=$1 c sums=()
+    shift
+    for c in "$@"; do
+        c=${c#client_}
+        sums+=("$RESULTS/${c%.sh}/summary.csv")
+    done
+    python3 - "$RESULTS/lockstep_$name" "${sums[@]}" <<'PY'
+import csv, os, sys
+out, sums = sys.argv[1], sys.argv[2:]
+if not all(os.path.exists(p) for p in sums):
+    sys.exit(0)
+cols, worst = None, {}
+for p in sums:
+    with open(p, newline="") as f:
+        rows = list(csv.reader(f))
+    cols = rows[0]
+    for row in rows[1:]:
+        point = tuple(row[1:4])
+        try:
+            tok = float(row[4])
+        except ValueError:
+            tok = float("-inf")
+        if point not in worst or tok < worst[point][0]:
+            worst[point] = (tok, row)
+os.makedirs(out, exist_ok=True)
+rows = sorted((row for _, row in worst.values()), key=lambda r: (int(r[1]), int(r[2]), int(r[3])))
+with open(os.path.join(out, "summary.csv"), "w", newline="") as f:
+    csv.writer(f).writerows([cols] + rows)
+print(f"lockstep summary (each point's slowest server): {os.path.join(out, 'summary.csv')}")
+PY
+}
+
 # run_lockstep <name> <script>...: the clients at the same time, each in its own process
 # group, every run of every point started together (the clients wait for each other in
 # logs/lockstep_<name>/).  A client that fails marks it aborted, so the others stop before
-# their next run.  Exit codes as run_client's; Ctrl-C (130) beats a failure (1), which
-# beats a gate (3).
+# their next run.  Then lockstep_summary.  Exit codes as run_client's; Ctrl-C (130) beats a
+# failure (1), which beats a gate (3).
 run_lockstep() {
     local name=$1 dir="$LOGS/lockstep_$1" rc worst=0 pid
     shift
@@ -188,6 +225,7 @@ run_lockstep() {
         unset "file_of[$pid]"
     done
     CLIENT_PIDS=()
+    [ $worst -ne 130 ] && lockstep_summary "$name" "$@"
     case $worst in
         0) return 0 ;;
         3) say "lockstep $name: gate failed; stopping" ;;
