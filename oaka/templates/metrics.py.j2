@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # {{ marker }}
-"""The numbers of a measurement step: gsm8k scores and fixed-seq median output tok/s per
-point.  scripts/run_all.sh compares steps with it, scripts/bisect_step.sh records each
-bisect commit with it.
+"""The numbers of a measurement step: gsm8k scores and fixed-seq output tok/s per point (its
+last repeat, the row the client's summary.csv keeps).  scripts/run_all.sh compares steps
+with it, scripts/bisect_step.sh records each bisect commit with it.
 
   python3 {{ self_path }} show <results-dir>
   python3 {{ self_path }} compare <results-dir> <package> aba|list <rev>... -- <label>... -- <status>...
   python3 {{ self_path }} record <bisect-dir> <short> <commit> <verdict> <note> <subject>
 """
-import csv, glob, json, os, statistics, sys
+import csv, glob, json, os, re, sys
 
 # Every client of the plan: (results subdirectory, kind, fixed-seq points as isl osl conc).
 CLIENTS = [
@@ -45,14 +45,18 @@ def collect(step_dir):
             rows = list(csv.DictReader(open(os.path.join(path, "summary.csv"))))
         except OSError:
             rows = []
-        runs = {}
+        last = {}
         for r in rows:
             try:
-                runs.setdefault(f"{d}:isl{r['isl']}_osl{r['osl']}_c{r['conc']}", []).append(float(r["output_tok_s"]))
+                k = f"{d}:isl{r['isl']}_osl{r['osl']}_c{r['conc']}"
+                m = re.search(r"_c\d+_r(\d+)", r["file"])
+                run = int(m[1]) if m else 0
+                if k not in last or run > last[k][0]:
+                    last[k] = (run, float(r["output_tok_s"]))
             except (KeyError, TypeError, ValueError):
                 pass
-        for k, v in runs.items():
-            vals[k] = statistics.median(v)
+        for k, (_, v) in last.items():
+            vals[k] = v
     return vals
 
 

@@ -122,10 +122,12 @@ pub enum ClientSpec {
         conc: Vec<u32>,
         #[serde(default = "default_range_ratio")]
         range_ratio: f64,
+        /// Runs per point on the same server; the last one is the point's number (summary.csv,
+        /// the gate, compare.csv), the earlier ones warm the server's kernels for it.
         #[serde(default = "default_repeats")]
         repeats: u32,
         off_spec: Option<OffSpec>,
-        /// Gate: every point's median output tok/s over its repeats must reach this.
+        /// Gate: every point's output tok/s (its last repeat) must reach this.
         min_output_tok_s: Option<f64>,
         /// Clients with the same name run at the same time, each run of each point started
         /// together (servers measured under each other's load).
@@ -158,8 +160,10 @@ fn default_min_score() -> f64 {
 fn default_range_ratio() -> f64 {
     0.8
 }
+/// Two: the first run of a point compiles the kernels of its batch shapes on a cold server
+/// (ww43 h13-17: 14-44% slower at conc 4), so the second is the number.
 fn default_repeats() -> u32 {
-    1
+    2
 }
 
 pub const PROMPTS_PER_CONC: u32 = 10;
@@ -907,7 +911,7 @@ server = "a"
         match &c.plan.clients[0] {
             ClientSpec::FixedSeq {
                 range_ratio, repeats, ..
-            } => assert_eq!((*range_ratio, *repeats), (0.8, 1)),
+            } => assert_eq!((*range_ratio, *repeats), (0.8, 2)),
             _ => panic!(),
         }
         fs::remove_dir_all(dir).unwrap();
@@ -1023,7 +1027,7 @@ server = "a"
             "lockstep \"ab\" has no other client",
         );
         bad(
-            &pair(both, &format!("{both}\nrepeats = 2")),
+            &pair(both, &format!("{both}\nrepeats = 3")),
             Machine::default(),
             "client #4 (fixed-seq): lockstep \"ab\" needs the same isl_osl, conc and repeats as client #3",
         );

@@ -33,6 +33,10 @@ read an A-B-A, the bisect journey). The rules that are yours to keep:
 - **The InferenceX client policy is fixed.** Anything beyond ISL/OSL, concurrency, range
   ratio and repeats goes through `off_spec` (results marked `OFFSPEC`); never call
   `bench_serving` yourself.
+- **A fixed-seq point's number is its last repeat** (`summary.csv`). Keep `repeats` at its
+  default 2 for every shape and layout, however long the point (the user's norm), and report
+  run 2: never an average or median of the runs. Run 1 compiles kernels while measured; it
+  stays in the results as raw data, quoted only to show that gap.
 - **Read `oaka check --json` and `oaka doctor --json`**, not their wording. Something
   environmental fails? `oaka doctor` names the missing piece and its fix.
 - **A profile names its server** (`engine`: SGLang, vllm or ATOM). An image may have only

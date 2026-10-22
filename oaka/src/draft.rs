@@ -58,8 +58,8 @@ fn client_block(kind: &str, server: &str, commented: bool) -> String {
         _ => format!(
             "[[client]]\nkind = \"fixed-seq\"        # InferenceX fixed-seq-len throughput\n\
              server = \"{server}\"\nisl_osl = [[1024, 1024], [8192, 1024]]\nconc = [4, 8, 16, 32, 64]\n\
-             range_ratio = 0.8\nrepeats = 1\n\
-             # min_output_tok_s = 0       # gate: every point's median must reach it (bisect's verdict)\n"
+             range_ratio = 0.8\nrepeats = 2                 # the last run is the number; the first warms the server\n\
+             # min_output_tok_s = 0       # gate: every point's number must reach it (bisect's verdict)\n"
         ),
     };
     if commented {

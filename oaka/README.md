@@ -54,7 +54,8 @@ oaka profile ls | show <p> | diff <a> <b> | save <server> --as <model>/<recipe>
 
 - Output: `logs/`, `results/<NN>_<kind>_<server>/`; a labeled step uses `logs/<label>/` and
   `results/<label>/` (emptied first).  Rerunning overwrites same-named points; `fixed-seq`
-  writes `summary.csv` for the points of that run.
+  writes `summary.csv` for the points of that run, one row per point: its last repeat
+  (see Plan).  Every repeat's JSON and log stay next to it.
 - Exit codes of `run_all.sh`/`step.sh`: 0 ok, 3 a gate failed (gsm8k score or fixed-seq
   throughput below its minimum), 2 the stack did not install, 1 anything else, 130 Ctrl-C.
   A plan run per revision exits 1 when any step failed; a bisect exits 0 when it named a
@@ -86,9 +87,9 @@ server = "quant"
 isl_osl = [[1024, 1024], [8192, 1024]]
 conc = [4, 8, 16, 32, 64]
 range_ratio = 0.8
-repeats = 1
+repeats = 2                # default; the last run is the point's number (see below)
 # off_spec = { prompts_per_conc = 4 }   # results get OFFSPEC in their names
-# min_output_tok_s = 3000  # gate: each point's median output tok/s over its repeats must reach it
+# min_output_tok_s = 3000  # gate: each point's output tok/s (its last repeat) must reach it
 # lockstep = "pair"        # run with the other fixed-seq clients named "pair" (see below)
 
 [[client]]
@@ -106,7 +107,13 @@ commit = "aa5551d9b6"
 The client policy is fixed; the plan only picks what is meant to vary:
 - `fixed-seq` runs InferenceX's own `python3 -m infx.bench fixed-seq point` (backend `vllm`,
   tokenizer = model path, model = the served name; 10 prompts per concurrency).  Warmups,
-  `--ignore-eos`, request rate and percentiles are InferenceX's.
+  `--ignore-eos`, request rate and percentiles are InferenceX's.  Each point runs `repeats`
+  times (default 2) back to back on the same server, and **the last run is the point's
+  number**: `summary.csv`, the gate and `compare.csv` take it, never an average or median
+  of the runs.  The first run of a point compiles the kernels of its batch shapes on a
+  server that starts on empty caches (ww43 h13-17: 14-44% slower at conc 4, still 1-21% at
+  conc 8-32), and InferenceX's warmups do not reach those shapes.  With `repeats = 1` the
+  number is that cold run.
 - `gsm8k` runs `sgl-eval run gsm8k` with temperature 1.0, top-p 1.0, seed 42, 8192 max
   tokens, 64 threads.
 
@@ -177,15 +184,15 @@ it.  It always installs; there is no "already installed" shortcut.
 
 **Running the plan per revision** (`commits`): each step installs one revision and runs
 `step.sh <n>_<sha>`; a failed step is recorded and the next one still runs.  At the end
-`results/compare.csv` (also printed) lists every gsm8k score and fixed-seq median per step.
+`results/compare.csv` (also printed) lists every gsm8k score and fixed-seq number per step.
 **A-B-A** answers "did commit B change the numbers?": `commits = [A, B, A]` with
 `clean = "never"`.  The table adds B/A1 (the effect) and A2/A1, which must come back to ~1,
 or something survived the swap (a JIT cache, an install).  Trust B/A1 only when it is
-larger than the noise: with one run per step, 1-2% is run-to-run spread (ww42: B/A1 = 1.014
-between two commits that differ only in diffusion code), so use `repeats` >= 3.  Every
-server compiles its kernels while it is measured (ww42: 666 vs 730 tok/s on identical code
-between a cold and a warm server); since each starts on empty caches, every step pays that
-alike.
+larger than the noise: 1-2% is run-to-run spread (ww42: B/A1 = 1.014 between two commits
+that differ only in diffusion code); more repeats only warm the server longer, so confirm a
+small effect with more steps (A-B-A-B-A).  Every server compiles its kernels while it is
+measured (ww42: 666 vs 730 tok/s on identical code between a cold and a warm server); each
+starts on empty caches and reports a warmed run, so every step pays that alike.
 
 **Bisect** answers "which commit regressed?" (`bisect = { good, bad }`).  The journey:
 (1) the good and bad commits come from the two runs' server logs (`[server ...] pip` lines);

@@ -252,7 +252,8 @@ http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
 /// Output tok/s is conc times the installed stand-in package's SPEED (100 without one).
 /// Each point appends `<result file> <start> <end>` to state/points; FAKE_INFX_SLOW
 /// (`<port>:<seconds>`) makes the points against one server take that long, FAKE_INFX_FAIL
-/// (`<port>:<conc>`) fails that server's points at that concurrency.
+/// (`<port>:<conc>`) fails that server's points at that concurrency; with FAKE_INFX_COLD a
+/// point's first run (`_r1`) is half as fast, as on a server that compiles while measured.
 const FAKE_INFX: &str = r#"
 import json, os, sys, time
 try:
@@ -275,6 +276,8 @@ if os.environ.get("FAKE_INFX_FAIL") == f"{port}:{c}":
     sys.exit("fake infx: failing as asked")
 with open(os.path.join(os.environ["FAKE_STATE"], "points"), "a") as f:
     f.write(f"{os.path.basename(o['result'])} {start} {time.time()}\n")
+if os.environ.get("FAKE_INFX_COLD") and o["result"].endswith("_r1.json"):
+    speed /= 2
 json.dump({"output_throughput": speed * c, "total_token_throughput": 200.0 * c, "mean_ttft_ms": 10.0,
            "mean_tpot_ms": 1.0, "completed": int(o["num-prompts"]), "argv": a}, open(o["result"], "w"))
 "#;
@@ -676,16 +679,32 @@ fn full_plan_runs_and_cleans_up() {
     // Server a has no port, so compile picks one and keeps it in plan.lock.toml.
     let a = "[[server]]\nname = 'a'\nprofile = 'm/base'\ngpus = [0]\n";
     let plan = format!(
-        "{a}{}{GSM8K}{FIXED_SEQ}",
+        "{a}{}{GSM8K}{FIXED_SEQ}min_output_tok_s = 160\n",
         server("b", 1, "[server.args]\npage-size = 64")
     );
-    let (code, out) = sb.run(&plan, &[]);
+    let (code, out) = sb.run(&plan, &[("FAKE_INFX_COLD", "1")]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("[gsm8k] score 0.95 (min 0.90) PASS"), "{out}");
 
-    // fixed-seq: InferenceX gets 10 prompts per concurrency and the vllm backend.
+    // fixed-seq: two runs per point by default; the second is the number (summary.csv and
+    // the gate), the cold first one is only kept and printed.  Its median (150) would fail.
     let summary = sb.read("results/02_fixed-seq_b/summary.csv");
     assert_eq!(summary.lines().count(), 3, "{summary}");
+    assert!(
+        summary.contains("b_isl128_osl32_c2_r2,128,32,2,200.0,")
+            && summary.contains("b_isl128_osl32_c4_r2,128,32,4,400.0,")
+            && !summary.contains("_r1,"),
+        "{summary}"
+    );
+    assert!(sb
+        .work()
+        .join("results/02_fixed-seq_b/b_isl128_osl32_c2_r1.json")
+        .exists());
+    assert!(
+        out.contains("isl=128 osl=32 conc=2 200.0 tok/s (min 160) PASS"),
+        "{out}"
+    );
+    // InferenceX gets 10 prompts per concurrency and the vllm backend.
     let point = sb.read("results/02_fixed-seq_b/b_isl128_osl32_c4_r1.json");
     for want in [
         r#""--num-prompts", "40""#,
@@ -744,7 +763,7 @@ fn lockstep_clients_run_together() {
     for s in ["a", "b"] {
         let n = if s == "a" { "02" } else { "03" };
         let summary = sb.read(&format!("results/{n}_fixed-seq_{s}/summary.csv"));
-        assert_eq!(summary.lines().count(), 5, "{summary}");
+        assert_eq!(summary.lines().count(), 3, "{summary}");
     }
     // Per run: (start, end) of each server, in run order.
     let points = fs::read_to_string(sb.root.join("state/points")).unwrap();
