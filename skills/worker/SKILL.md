@@ -272,6 +272,15 @@ later see what you did and rerun it without you? Keep names descriptive
   Record the base commit before the first edit; snapshot each coherent change as
   `NNNN_<desc>.patch` (number in order, never overwrite); log a row per patch (file, repo,
   base, what, why, outcome). `patch_revision.md` alone should tell the story.
+- **Environments, never dumped whole.** Your login environment holds `GH_TOKEN`,
+  `AMD_LLM_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_CUSTOM_HEADERS` (a subscription key) and
+  `CLAUDE_CODE_MESSAGING_TOKEN`, and every process you start inherits them. To record what a
+  server ran with, write an allowlist of the variables that matter (`SGLANG_*`, `AITER_*`,
+  `HIP_*`, `HSA_*`, `ROCR_*`, `TRITON_*`, `PYTHONPATH`, ...), never `env`, `/proc/<pid>/environ`
+  or `docker inspect` unfiltered. Check scripts you copy from another task for the same thing:
+  a full-environment snapshotter, copied from task to task, put all five secrets in plain text
+  into `server_envs/` on three boxes in one day (ww43). If you find a secret in a file, replace its
+  value with `<masked>` where you may write, and say in your report where it is where you may not.
 - **`english.md`** — the user is a non-native speaker improving their English. When a prompt
   has an awkward phrasing, quietly append `Original / Better / Why` (one line each). Only
   real improvements; never interrupt the task, and never correct them in replies unless
