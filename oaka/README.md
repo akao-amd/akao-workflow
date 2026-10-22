@@ -69,7 +69,7 @@ profile = "gpt-oss-120b"     # = gpt-oss-120b/base
 gpus = [7]                 # required; --tp = their count unless the profile pins tp
 # port = 29911             # default: random free port in 29900-30100 (not 30000), kept in plan.lock.toml
 # model = "/model/..."     # default: the profile's model
-[server.env]               # overlays the profile; NAME = false unsets
+[server.env]               # overlays the profile; NAME = false drops the profile's (see [env] below)
 SGLANG_USE_AITER_MOE_GU_ITLV = "0"
 [server.args]              # overlays the profile; flag = false drops
 page-size = 64
@@ -273,12 +273,17 @@ model = "/model/<dir>"
 tp = 1                     # optional pin
 
 [env]
-NAME = "value"             # NAME = false unsets an inherited one
+NAME = "value"             # NAME = false drops an inherited one
 
 [args]                     # sglang.launch_server flags without --
 flag = true                # --flag; false drops an inherited flag
 key = 1                    # --key 1; a list gives --key v1 v2
 ```
+
+`NAME = false` removes the parent's `export NAME=...` from `server_<name>.sh`; it does not `unset`
+NAME.  The server then has whatever the environment oaka runs in has: in an image that exports
+the variable (e.g. `HIP_FORCE_DEV_KERNARG=1` in the gfx1250 sgl-dev images), the image's value.
+To measure a variable truly unset, start the run without it (`env -u NAME oaka run`).
 
 The model, tp and port flags and `HIP_VISIBLE_DEVICES` come from the plan and are rejected
 in profiles and plans (in every engine's spelling: `model-path`, `model`, `tp`, `tp-size`,
