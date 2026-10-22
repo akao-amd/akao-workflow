@@ -26,7 +26,8 @@ fn servers_exclusive() -> RwLockWriteGuard<'static, ()> {
 
 /// `python3 -m sglang.launch_server`: listens on --port, prints sglang's ready line, keeps
 /// a child process like sglang's scheduler, and stops both on SIGTERM.
-/// `--crash` exits like an argparse error; FAKE_READY_DELAY delays readiness.
+/// `--crash` exits like an argparse error; FAKE_READY_DELAY delays readiness;
+/// `--exit-after-ready` exits half a second after it said it is ready.
 ///
 /// It also serves what a trace client uses, over a simulated scheduler: `POST /v1/completions`
 /// (`prompt_len` and `max_tokens` from the body; one EXTEND step admits every waiting request,
@@ -176,6 +177,10 @@ http.server.ThreadingHTTPServer.daemon_threads = True
 srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), H)
 time.sleep(float(os.environ.get("FAKE_READY_DELAY", "0")))
 print("The server is fired up and ready to roll!", flush=True)
+if "--exit-after-ready" in args:
+    def leave():
+        child.terminate(); child.wait(); os._exit(0)
+    threading.Timer(0.5, leave).start()
 srv.serve_forever()
 "#;
 
@@ -206,6 +211,41 @@ class Health(http.server.BaseHTTPRequestHandler):
         pass
 print("INFO:     Started server process", flush=True)
 http.server.HTTPServer(("127.0.0.1", port), Health).serve_forever()
+"#;
+
+/// `python3 -m sglang_router.launch_router --pd-disaggregation --prefill URL BOOT ... --decode URL
+/// ... --port P`: records its argv in state/router_<port>.json, and answers `POST /generate` with
+/// 200 once FAKE_ROUTER_DELAY has passed and every server behind it accepts connections, 503
+/// before (as a router whose servers are not registered yet); with FAKE_ROUTER_HANG it never
+/// answers.  Stops on SIGTERM.
+const FAKE_ROUTER: &str = r#"
+import http.server, json, os, signal, socket, sys, time
+args = sys.argv[1:]
+port = int(args[args.index("--port") + 1])
+state = os.environ["FAKE_STATE"]
+with open(os.path.join(state, "pids"), "a") as f:
+    f.write(f"{os.getpid()}\n")
+json.dump({"argv": args}, open(os.path.join(state, f"router_{port}.json"), "w"))
+urls = [args[i + 1] for i, a in enumerate(args) if a in ("--prefill", "--decode")]
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+ready_at = time.time() + float(os.environ.get("FAKE_ROUTER_DELAY", "0"))
+def up(url):
+    try:
+        socket.create_connection(("127.0.0.1", int(url.rsplit(":", 1)[1])), timeout=1).close()
+        return True
+    except OSError:
+        return False
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if os.environ.get("FAKE_ROUTER_HANG"):
+            time.sleep(600)
+        ok = self.path == "/generate" and time.time() >= ready_at and all(map(up, urls))
+        self.send_response(200 if ok else 503)
+        self.end_headers()
+    def log_message(self, *a):
+        pass
+http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
 "#;
 
 /// `python3 -m infx.bench fixed-seq point --k v ...`: writes a result JSON that echoes argv.
@@ -367,6 +407,8 @@ impl Sandbox {
         };
         write("py/sglang/__init__.py", "");
         write("py/sglang/launch_server.py", FAKE_SGLANG);
+        write("py/sglang_router/__init__.py", "");
+        write("py/sglang_router/launch_router.py", FAKE_ROUTER);
         write("py/vllm/__init__.py", "");
         write("bin/vllm", &format!("#!/usr/bin/env python3\n{FAKE_OPENAI_SERVER}"));
         write("py/atom/__init__.py", "");
@@ -1416,6 +1458,210 @@ fn vllm_and_atom_servers_start_by_health_and_stop() {
     );
 }
 
+/// A PD profile's prefill and decode servers start first, each on its share of the GPUs and
+/// with its role's flags; the router starts once they are ready, on the plan's port, and is
+/// ready when a generation goes through.  The clients reach the servers through it.
+#[test]
+fn pd_servers_start_behind_their_router() {
+    let _servers = servers_shared();
+    let sb = Sandbox::new("pd");
+    fs::write(
+        sb.root.join("lib/profiles/m/pd.toml"),
+        "extends = 'm/base'\n[pd.decode.args]\nmem-fraction-static = 0.8\n[pd.router.args]\npolicy = 'round_robin'\n",
+    )
+    .unwrap();
+    let port = ephemeral_port();
+    let plan = format!(
+        "[[server]]\nname = 'pd'\nprofile = 'm/pd'\ngpus = [0, 1]\nport = {port}\n\
+         [[client]]\nkind = 'fixed-seq'\nserver = 'pd'\nisl_osl = [[128, 32]]\nconc = [4]\n"
+    );
+    // The servers' own ports, which compile would pick in 29900-30100 where tests running in
+    // parallel pick theirs: from the lock instead, which compile keeps.
+    fs::write(
+        sb.work().join("plan.lock.toml"),
+        format!(
+            "[port]\n\"pd.prefill0\" = {}\n\"pd.prefill0.bootstrap\" = {}\n\"pd.decode0\" = {}\n",
+            ephemeral_port(),
+            ephemeral_port(),
+            ephemeral_port()
+        ),
+    )
+    .unwrap();
+    // The router answers 503 for its first second, as when its servers are not registered yet.
+    let (code, out) = sb.run(&plan, &[("FAKE_ROUTER_DELAY", "1")]);
+    assert_eq!(code, 0, "{out}");
+    let at = |needle: &str| out.find(needle).unwrap_or_else(|| panic!("{needle:?} not in {out}"));
+    assert!(at("server pd.router started") > at("server pd.prefill0 ready"));
+    assert!(at("server pd.router started") > at("server pd.decode0 ready"));
+    at("server pd.router ready (POST /generate)");
+
+    let argv = |file: String| -> Vec<String> {
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(sb.root.join("state").join(file)).unwrap()).unwrap();
+        v["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w.as_str().unwrap().to_string())
+            .collect()
+    };
+    let router = argv(format!("router_{port}.json")).join(" ");
+    let lock = sb.read("plan.lock.toml");
+    let lock: toml::Table = toml::from_str(&lock).unwrap();
+    let slot = |k: &str| lock["port"][k].as_integer().unwrap();
+    let (p, b, d) = (slot("pd.prefill0"), slot("pd.prefill0.bootstrap"), slot("pd.decode0"));
+    assert!(
+        router.contains(&format!(
+            "--pd-disaggregation --prefill http://127.0.0.1:{p} {b} --decode http://127.0.0.1:{d} \
+             --host 127.0.0.1 --port {port} --policy round_robin"
+        )),
+        "{router}"
+    );
+    let prefill = argv(format!("server_{p}.json")).join(" ");
+    assert!(
+        prefill.contains(&format!(
+            "--disaggregation-mode prefill --disaggregation-bootstrap-port {b}"
+        )),
+        "{prefill}"
+    );
+    let decode = argv(format!("server_{d}.json")).join(" ");
+    assert!(
+        decode.contains("--disaggregation-mode decode --trust-remote-code --mem-fraction-static 0.8"),
+        "{decode}"
+    );
+    let records = sb.server_record().join("\n");
+    assert!(
+        records.contains(r#""gpus": "0""#) && records.contains(r#""gpus": "1""#),
+        "{records}"
+    );
+    let point = sb.read("results/01_fixed-seq_pd/pd_isl128_osl32_c4_r1.json");
+    assert!(
+        point.contains(&format!("http://127.0.0.1:{port}")),
+        "the client goes through the router: {point}"
+    );
+    assert!(sb
+        .read("logs/server_pd.router.log")
+        .contains("[server pd.router] cmd python3 -m sglang_router.launch_router"));
+    sb.assert_no_leftovers();
+
+    // Agents see the PD servers.
+    let v: serde_json::Value = serde_json::from_slice(&sb.oaka(&["check", "--json"]).output().unwrap().stdout).unwrap();
+    assert_eq!(v["servers"][0]["pd"][1]["name"], "pd.decode0", "{v}");
+    assert_eq!(v["servers"][0]["pd"][1]["gpus"], serde_json::json!([1]), "{v}");
+
+    // A prefill server that dies at startup stops the run; the router never starts.
+    fs::write(
+        sb.root.join("lib/profiles/m/pd.toml"),
+        "extends = 'm/base'\n[pd.prefill.args]\ncrash = true\n",
+    )
+    .unwrap();
+    let (code, out) = sb.run(&plan, &[("FAKE_READY_DELAY", "2")]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("server pd.prefill0 died during startup"), "{out}");
+    assert!(!out.contains("server pd.router started"), "{out}");
+    sb.assert_no_leftovers();
+
+    // A decode server that exits once ready fails the run while its router is being waited for.
+    fs::write(
+        sb.root.join("lib/profiles/m/pd.toml"),
+        "extends = 'm/base'\n[pd.decode.args]\nexit-after-ready = true\n",
+    )
+    .unwrap();
+    let (code, out) = sb.run(&plan, &[("FAKE_ROUTER_DELAY", "3")]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("server pd.decode0 died during startup"), "{out}");
+    assert!(!out.contains("server pd.router ready"), "{out}");
+    sb.assert_no_leftovers();
+}
+
+/// Ctrl-C while step.sh waits for a router's answer stops everything at once, not after the
+/// probe's timeout.
+#[test]
+fn ctrl_c_while_probing_a_router_stops_servers() {
+    let _servers = servers_shared();
+    use std::os::unix::process::CommandExt;
+    let sb = Sandbox::new("pd-int");
+    fs::write(sb.root.join("lib/profiles/m/pd.toml"), "extends = 'm/base'\n[pd]\n").unwrap();
+    let port = ephemeral_port();
+    let plan = format!("[[server]]\nname = 'pd'\nprofile = 'm/pd'\ngpus = [0, 1]\nport = {port}\n{GSM8K}")
+        .replace("server = 'a'", "server = 'pd'");
+    fs::write(sb.work().join("plan.toml"), plan).unwrap();
+    fs::write(
+        sb.work().join("plan.lock.toml"),
+        format!(
+            "[port]\n\"pd.prefill0\" = {}\n\"pd.prefill0.bootstrap\" = {}\n\"pd.decode0\" = {}\n",
+            ephemeral_port(),
+            ephemeral_port(),
+            ephemeral_port()
+        ),
+    )
+    .unwrap();
+    let mut child = sb
+        .oaka(&["run"])
+        .env("FAKE_ROUTER_HANG", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let probing = || {
+        fs::read_dir(sb.root.join("state"))
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("router_"))
+    };
+    while !probing() {
+        assert!(Instant::now() < deadline, "router never started");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    std::thread::sleep(Duration::from_secs(2));
+    let group = format!("-{}", child.id());
+    let t0 = Instant::now();
+    for _ in 0..2 {
+        Command::new("kill").args(["-INT", "--", &group]).status().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(130));
+    assert!(t0.elapsed() < Duration::from_secs(15), "took {:?}", t0.elapsed());
+    sb.assert_no_leftovers();
+}
+
+/// A plan override that changes only a PD role's value (here: back to the profile's own value
+/// over the decode role's) is listed, and `profile save` keeps it.
+#[test]
+fn role_only_overrides_are_listed_and_saved() {
+    let sb = Sandbox::new("pd-save");
+    fs::write(
+        sb.root.join("lib/profiles/m/pd.toml"),
+        "extends = 'm/base'\n[args]\nmem-fraction-static = 0.9\n[pd.decode.args]\nmem-fraction-static = 0.8\n",
+    )
+    .unwrap();
+    fs::write(
+        sb.work().join("plan.toml"),
+        "[[server]]\nname = 'pd'\nprofile = 'm/pd'\ngpus = [0, 1]\n[server.args]\nmem-fraction-static = 0.9\n",
+    )
+    .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&sb.oaka(&["check", "--json"]).output().unwrap().stdout).unwrap();
+    assert_eq!(
+        v["servers"][0]["overrides"],
+        serde_json::json!(["args --mem-fraction-static 0.9"]),
+        "{v}"
+    );
+    let out = sb
+        .oaka(&["profile", "save", "pd", "--as", "m/pd-saved"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let show =
+        String::from_utf8_lossy(&sb.oaka(&["profile", "show", "m/pd-saved"]).output().unwrap().stdout).into_owned();
+    assert!(
+        show.contains("#   decode: --disaggregation-mode decode\n"),
+        "the decode role is back to 0.9: {show}"
+    );
+}
+
 #[test]
 fn doctor_reports_engines() {
     let sb = Sandbox::new("doctor-engines");
@@ -1425,6 +1671,20 @@ fn doctor_reports_engines() {
     for (engine, file) in [("vllm", "py/vllm/__init__.py"), ("atom", "py/atom/__init__.py")] {
         let want = format!("{engine:<11} {}", sb.root.join(file).display());
         assert!(text.contains(&format!("ok    {want}")), "{want:?} not in {text}");
+    }
+    // PD profiles' router is found; Mooncake (unless this machine has one) is missing for them.
+    let want = format!(
+        "ok    pd router   {}",
+        sb.root.join("py/sglang_router/__init__.py").display()
+    );
+    assert!(text.contains(&want), "{want:?} not in {text}");
+    fs::write(sb.root.join("lib/profiles/m/pd.toml"), "extends = 'm/base'\n[pd]\n").unwrap();
+    let text = String::from_utf8_lossy(&sb.oaka(&["doctor"]).output().unwrap().stdout).into_owned();
+    if !text.contains("ok    pd mooncake") {
+        assert!(
+            text.contains("warn  pd mooncake python3 cannot find mooncake; PD profiles m/pd use it"),
+            "{text}"
+        );
     }
     // Without ATOM (unless this machine has a real one), its profile is the reason to warn.
     fs::remove_dir_all(sb.root.join("py/atom")).unwrap();

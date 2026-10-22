@@ -2,7 +2,7 @@
 //! is `ok`, `warn` or `FAIL` with the fix; any FAIL makes the command fail.
 
 use crate::compile::infx_root;
-use crate::profile::{Engine, Library};
+use crate::profile::{Arg, Engine, Library, Profile, ROUTER_MODULE};
 use crate::stack;
 use crate::sys;
 use anyhow::{bail, Result};
@@ -134,6 +134,7 @@ pub fn run(lib: &Library, json: bool) -> Result<()> {
     }
 
     check_engines(&mut r, lib);
+    check_pd(&mut r, lib);
 
     match std::env::var("AKAO_ARTIFACT_ROOT") {
         Err(_) => r.warn(
@@ -256,13 +257,16 @@ fn check_gpu_index(r: &mut Report) {
     );
 }
 
+/// Where python3 finds a package (without importing it), or None.
+fn module_origin(module: &str) -> Option<String> {
+    let find =
+        format!("import importlib.util as u; s = u.find_spec({module:?}); print(s.origin if s and s.origin else '')");
+    output(&["python3", "-c", &find], &[]).filter(|o| !o.is_empty())
+}
+
 /// Where python3 finds an engine's package (without importing it), or None.
 fn engine_origin(engine: Engine) -> Option<String> {
-    let find = format!(
-        "import importlib.util as u; s = u.find_spec({:?}); print(s.origin if s and s.origin else '')",
-        engine.module()
-    );
-    let origin = output(&["python3", "-c", &find], &[]).filter(|o| !o.is_empty())?;
+    let origin = module_origin(engine.module())?;
     match engine {
         // `atom` is a common name: it must be the one with ATOM's OpenAI server.
         Engine::Atom => Path::new(&origin)
@@ -317,6 +321,41 @@ fn check_engines(r: &mut Report, lib: &Library) {
             "engines",
             "python3 finds none of sglang, vllm, atom: no server can start in this container",
         );
+    }
+}
+
+/// What `[pd]` profiles need besides SGLang: the router, and Mooncake where they transfer KV
+/// with it (SGLang's default).  Shown when found; a warning when a PD profile for this
+/// machine needs one that is missing.
+fn check_pd(r: &mut Report, lib: &Library) {
+    let (arch, rocm) = (sys::arch(), sys::rocm().map(|(v, _)| v));
+    let pd: Vec<Profile> = lib
+        .list()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|n| lib.resolve(n).ok())
+        .filter(|p| p.pd.is_some() && p.fits(arch.as_deref(), rocm.as_deref()))
+        .collect();
+    let mooncake = |p: &&Profile| match p.arg("disaggregation-transfer-backend") {
+        None => true,
+        Some(Arg::Value(v)) => v == "mooncake",
+        Some(_) => false,
+    };
+    for (check, module, users) in [
+        ("pd router", ROUTER_MODULE, pd.iter().collect::<Vec<_>>()),
+        ("pd mooncake", "mooncake", pd.iter().filter(mooncake).collect()),
+    ] {
+        match module_origin(module) {
+            Some(origin) => r.ok(check, origin),
+            None if !users.is_empty() => r.warn(
+                check,
+                format!(
+                    "python3 cannot find {module}; PD profiles {} use it",
+                    users.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(" ")
+                ),
+            ),
+            None => {}
+        }
     }
 }
 

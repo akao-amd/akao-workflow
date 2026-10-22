@@ -45,9 +45,9 @@ oaka profile ls | show <p> | diff <a> <b> | save <server> --as <model>/<recipe>
 
   | Script | Does |
   |---|---|
-  | `server_<name>.sh` | one server, in the foreground, on empty compile caches of its own: `TRITON_CACHE_DIR`, `XDG_CACHE_HOME` and the engine's (SGLang `SGLANG_CACHE_DIR`, vllm `VLLM_CACHE_ROOT`) under `logs/cache_<name>/`, emptied at every start (`step.sh`: in the step's logs, removed when it stops the servers).  The plan's or profile's env may point any of them elsewhere, e.g. to a shared warm cache |
+  | `server_<name>.sh` | one server (for a PD profile: `server_<name>.prefill<i>.sh`, `server_<name>.decode<i>.sh` and `server_<name>.router.sh`; see Prefill-decode disaggregation), in the foreground, on empty compile caches of its own: `TRITON_CACHE_DIR`, `XDG_CACHE_HOME` and the engine's (SGLang `SGLANG_CACHE_DIR`, vllm `VLLM_CACHE_ROOT`) under `logs/cache_<name>/`, emptied at every start (`step.sh`: in the step's logs, removed when it stops the servers).  The plan's or profile's env may point any of them elsewhere, e.g. to a shared warm cache |
   | `client_<NN>_<kind>_<server>.sh` | one client against its running server |
-  | `step.sh [<label>]` | one measurement: start every server, wait until it is ready (SGLang: its ready line; vllm, ATOM: `GET /health` answers 200; a crash marker, exit or 30 min timeout fails it), the clients in plan order, stop the servers (also on failure and Ctrl-C) |
+  | `step.sh [<label>]` | one measurement: start every server, wait until it is ready (SGLang: its ready line; vllm, ATOM: `GET /health` answers 200; a PD router, started after its servers: a one-token `POST /generate` through it answers 200; a crash marker, exit or 30 min timeout of it or of any server started before fails it), the clients in plan order, stop the servers (also on failure and Ctrl-C) |
   | `run_all.sh` | the whole plan; what `oaka run` executes |
   | `stack.sh`, `install_<package>.sh` | plans with `[stack]`: install and verify the stack |
   | `bisect_step.sh`, `metrics.py` | plans whose stack varies: one bisect step; the numbers of a step |
@@ -282,7 +282,9 @@ key = 1                    # --key 1; a list gives --key v1 v2
 
 The model, tp and port flags and `HIP_VISIBLE_DEVICES` come from the plan and are rejected
 in profiles and plans (in every engine's spelling: `model-path`, `model`, `tp`, `tp-size`,
-`tensor-parallel-size`, `port`, `server-port`).  `arch` and `description` are not inherited.
+`tensor-parallel-size`, `port`, `server-port`), and so is an abbreviation of one (argparse
+takes a prefix).  A flag name is letters, digits, `-`, `_` and `.`: no `=`, the value goes on
+the right.  `arch` and `description` are not inherited.
 
 **Engines.**  `engine` picks the server; the rest of the profile works the same for each:
 
@@ -301,6 +303,41 @@ and Triton only.
 `profile save` writes a server's plan overrides as a new profile that `extends` the one
 it started from, with `arch` copied unless `--arch` (`gfx950`, or `gfx950:10.1` with a ROCm
 version), and a dated history comment naming the task; add the evidence to it by hand.
+
+**Prefill-decode disaggregation** (`[pd]`).  A profile with a `[pd]` table makes its plan
+server SGLang prefill and decode servers behind `sglang_router` (SGLang only):
+
+```toml
+extends = "gpt-oss-120b/base1021-tp2"
+[args]                     # every prefill and decode server's (the profile's as usual)
+disaggregation-transfer-backend = "mooncake"
+[pd.prefill]
+count = 1                  # default 1; a bare [pd] is one prefill + one decode server
+[pd.prefill.args]          # only the prefill servers'; also [pd.prefill.env], and the same for decode
+[pd.decode]
+count = 1
+[pd.decode.args]
+mem-fraction-static = 0.8
+[pd.router.args]           # python3 -m sglang_router.launch_router flags; also [pd.router.env]
+policy = "round_robin"
+```
+
+- The plan's `gpus` are shared out in order, `tp` each: prefill servers first, then decode
+  (1 prefill + 1 decode at tp 2 = 4 GPUs; without a pinned `tp`, an equal share each).
+- The plan server's port is the router's, so its clients go through the router unchanged
+  (no `trace` clients: they profile one SGLang server).  Each prefill and decode server gets a
+  port of its own and each prefill server a bootstrap port, picked and kept in
+  `plan.lock.toml` as `<name>.prefill0`, `<name>.prefill0.bootstrap`, `<name>.decode0`, ...
+- oaka sets `--disaggregation-mode` and `--disaggregation-bootstrap-port` on the servers and
+  `--pd-disaggregation --prefill <url> <bootstrap> --decode <url> --host 127.0.0.1 --port <port>`
+  on the router; profiles and plans may not.
+- Overlays: every `[env]`/`[args]`, a profile's or the plan's `[server.env]`/`[server.args]`,
+  reaches every prefill and decode server; a role's own go on top of its profile's (`false`
+  drops), so a later child's `[args]` and the plan's still win over a parent's role.  `[pd]`
+  is inherited through `extends`; a child's role tables overlay the parent's, its `count`
+  replaces.
+- `oaka doctor` shows `pd router` (`sglang_router`) and `pd mooncake`, and warns when a PD
+  profile for this machine needs one that is missing.
 
 **What a profile is for** (`arch`): a list of targets, each a GPU arch (any ROCm) or an
 `[arch, ROCm version]` pair, `*` for any in either place; one of them must fit the

@@ -417,6 +417,15 @@ reference is `oaka/README.md`.  The invariants that code changes must keep:
   Everything else (overlays, targets, clients, ports, teardown) is engine-neutral; keep it
   so.  A new engine = an `Engine` variant (with its cache variable, `cache_env`), a stand-in in `oaka/tests/run_all.rs`, the
   stack guard's pattern in `stack.sh.j2`, and its row in `oaka/README.md`.
+- **PD profiles** (`[pd]`, `profile::Pd`): one plan server = SGLang prefill and decode servers
+  (`Server::pd_servers`, `<name>.prefill0`, ...: `.` is in no plan server's name) plus a router
+  on the server's port (`router.sh.j2`); extra ports are lock slots (`Server::port_slots`).
+  Roles are resolved alongside the profile (`Profile::overlay` reaches them), so a later
+  child's or the plan's overlay wins over a parent's role.  oaka owns the disaggregation mode
+  and bootstrap port (`PD_RESERVED_ARGS`) and the router's servers, host and port
+  (`ROUTER_RESERVED_ARGS`), abbreviations included.  step.sh starts routers after their servers
+  (`stages`) and waits for a one-token `POST /generate`; the stand-in router in
+  `oaka/tests/run_all.rs` answers 503 until its servers listen.
 - **Overlays**: `[env]`/`[args]` in a child profile or a plan overlay the parent, in order;
   `false` removes an inherited entry.  `profile save` writes exactly that delta.
 - **Library files are self-contained**: a profile may reference only another profile

@@ -20,7 +20,9 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
   `GET /health` with 503 until `FAKE_READY_DELAY`, then 200: their servers' flags, readiness,
   a crash at startup, and `doctor`'s engine lines; the artifact root's `doctor` line and
   `check` warnings run with `AKAO_ARTIFACT_ROOT` set per case (removed from the sandbox
-  otherwise).
+  otherwise).  A stand-in `sglang_router.launch_router` (PYTHONPATH) answers `POST /generate`
+  with 503 until `FAKE_ROUTER_DELAY` has passed and its servers listen: a PD profile's servers,
+  their flags and GPUs, the router started after them, a prefill crash before it starts.
   The stand-ins are short Python strings at the top of that file; extend them there.
 - The stack cases use a stand-in package `fakepkg` in a scratch git repo (one commit per
   `SPEED`, which the fake InferenceX reports as tok/s; a `BROKEN` file makes its recipe

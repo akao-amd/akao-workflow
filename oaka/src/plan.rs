@@ -1,6 +1,6 @@
 //! `plan.toml` in a Work Directory, its validation, and `plan.lock.toml`.
 
-use crate::profile::{targets_text, Arg, Engine, Library, Profile, Target};
+use crate::profile::{targets_text, Arg, Engine, Library, Profile, Role, Target};
 use crate::stack::{self, Stacks};
 use crate::sys;
 use anyhow::{bail, Context, Result};
@@ -223,6 +223,40 @@ impl Server {
             _ => self.model.clone(),
         }
     }
+
+    /// A PD server's SGLang servers, `<name>.prefill0`, ..., `<name>.decode0`, ..., each with
+    /// its share of the GPUs, in order; empty for any other server.  (`.` is in no server
+    /// name, so these cannot clash with the plan's.)
+    pub fn pd_servers(&self) -> Vec<(String, Role, Vec<u32>)> {
+        let Some(pd) = &self.effective.pd else {
+            return Vec::new();
+        };
+        let tp = self.tp as usize;
+        pd.instances()
+            .into_iter()
+            .enumerate()
+            .map(|(k, (role, i))| {
+                (
+                    format!("{}.{}{i}", self.name, role.as_str()),
+                    role,
+                    self.gpus[k * tp..(k + 1) * tp].to_vec(),
+                )
+            })
+            .collect()
+    }
+
+    /// The ports compile gives this server, by name: its own (for a PD server, the router's:
+    /// what clients use), then each PD server's, and each prefill server's bootstrap port.
+    pub fn port_slots(&self) -> Vec<String> {
+        let mut slots = vec![self.name.clone()];
+        for (name, role, _) in self.pd_servers() {
+            slots.push(name.clone());
+            if role == Role::Prefill {
+                slots.push(format!("{name}.bootstrap"));
+            }
+        }
+        slots
+    }
 }
 
 /// The result of `oaka check`: the plan resolved against the library and the machine.
@@ -329,16 +363,35 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: &Machine) -> R
         if sorted.len() != s.gpus.len() {
             bail!("{at}: gpus lists a GPU twice");
         }
-        let tp = match base.tp {
-            Some(tp) if tp as usize != s.gpus.len() => {
+        // A PD profile starts several servers, each on tp GPUs of the server's, in order.
+        let n = base.instances() as usize;
+        let tp = match (base.tp, &base.pd) {
+            (Some(tp), None) if tp as usize != s.gpus.len() => {
                 bail!(
                     "{at}: profile {} pins tp = {tp} but gpus lists {}",
                     s.profile,
                     s.gpus.len()
                 )
             }
-            Some(tp) => tp,
-            None => s.gpus.len() as u32,
+            (Some(tp), Some(pd)) if tp as usize * n != s.gpus.len() => bail!(
+                "{at}: profile {} runs {} prefill + {} decode servers of tp = {tp}, which need {} GPUs, \
+                 but gpus lists {}",
+                s.profile,
+                pd.prefill.count,
+                pd.decode.count,
+                tp as usize * n,
+                s.gpus.len()
+            ),
+            (None, Some(pd)) if s.gpus.len() % n != 0 => bail!(
+                "{at}: profile {} runs {} prefill + {} decode servers, each on an equal share of gpus, \
+                 but gpus lists {}",
+                s.profile,
+                pd.prefill.count,
+                pd.decode.count,
+                s.gpus.len()
+            ),
+            (Some(tp), _) => tp,
+            (None, _) => (s.gpus.len() / n) as u32,
         };
         if let Some(gpus) = &machine.gpus {
             if let Some(g) = s.gpus.iter().find(|g| **g as usize >= gpus.len()) {
@@ -430,6 +483,13 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: &Machine) -> R
                     bail!("{at}: range_ratio must be within (0, 1]");
                 }
                 let s = servers.iter().find(|s| s.name == c.server()).unwrap();
+                if s.effective.pd.is_some() {
+                    bail!(
+                        "{at}: server {} is prefill and decode servers behind a router; a trace profiles \
+                         one SGLang server",
+                        s.name
+                    );
+                }
                 if s.effective.engine != Engine::Sglang {
                     bail!(
                         "{at}: server {} runs {}; traces need SGLang's profiler",
@@ -850,6 +910,59 @@ server = "a"
             } => assert_eq!((*range_ratio, *repeats), (0.8, 1)),
             _ => panic!(),
         }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn pd_servers_share_out_the_gpus() {
+        let (lib, dir) = lib();
+        fs::write(
+            lib.profile_path("m/pd"),
+            "extends = 'm/tp2'\narch = ['gfx950']\n[pd.decode]\ncount = 2\n",
+        )
+        .unwrap();
+        fs::write(lib.profile_path("m/pd-any"), "extends = 'm/base'\n[pd]\n").unwrap();
+        let plan =
+            |profile: &str, gpus: &str| format!("[[server]]\nname = 'pd'\nprofile = '{profile}'\ngpus = {gpus}\n");
+        let c = checked(&lib, &plan("m/pd", "[2, 3, 4, 5, 6, 7]"), eight("gfx950")).unwrap();
+        let s = &c.servers[0];
+        assert_eq!(s.tp, 2);
+        let names: Vec<(String, Role, Vec<u32>)> = s.pd_servers();
+        assert_eq!(
+            names,
+            [
+                ("pd.prefill0".to_string(), Role::Prefill, vec![2, 3]),
+                ("pd.decode0".to_string(), Role::Decode, vec![4, 5]),
+                ("pd.decode1".to_string(), Role::Decode, vec![6, 7]),
+            ]
+        );
+        assert_eq!(
+            s.port_slots(),
+            ["pd", "pd.prefill0", "pd.prefill0.bootstrap", "pd.decode0", "pd.decode1"]
+        );
+        // No tp pin: an equal share each.  An empty [pd] is one prefill and one decode server.
+        let c = checked(&lib, &plan("m/pd-any", "[0, 1, 2, 3]"), Machine::default()).unwrap();
+        assert_eq!((c.servers[0].tp, c.servers[0].pd_servers().len()), (2, 2));
+
+        let bad = |text: &str, needle: &str| {
+            let e = format!("{:#}", checked(&lib, text, Machine::default()).err().expect(needle));
+            assert!(e.contains(needle), "{e:?} lacks {needle:?}");
+        };
+        bad(
+            &plan("m/pd", "[0, 1, 2, 3]"),
+            "runs 1 prefill + 2 decode servers of tp = 2, which need 6 GPUs, but gpus lists 4",
+        );
+        bad(
+            &plan("m/pd-any", "[0, 1, 2]"),
+            "each on an equal share of gpus, but gpus lists 3",
+        );
+        bad(
+            &format!(
+                "{}[[client]]\nkind = 'trace'\nserver = 'pd'\nisl_osl = [[1024, 1024]]\nconc = [16]\n",
+                plan("m/pd-any", "[0, 1]")
+            ),
+            "server pd is prefill and decode servers behind a router; a trace profiles one SGLang server",
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

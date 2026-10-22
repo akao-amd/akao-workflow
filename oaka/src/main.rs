@@ -8,7 +8,7 @@ mod sys;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use profile::{targets_text, Arg, Library, Profile, ProfileFile, Target};
+use profile::{flag_words, targets_text, Arg, Library, Profile, ProfileFile, Role, Target, ROUTER_COMMAND};
 use std::path::{Path, PathBuf};
 use toml::Value;
 
@@ -197,6 +197,9 @@ fn checked_json(c: &plan::Checked) -> serde_json::Value {
             "name": s.name, "profile": s.base.name, "engine": s.effective.engine.as_str(), "model": s.model,
             "gpus": s.gpus, "tp": s.tp,
             "port": s.port, "overrides": compile::overrides(s),
+            "pd": s.effective.pd.as_ref().map(|_| s.pd_servers().iter().map(|(name, role, gpus)| json!({
+                "name": name, "role": role.as_str(), "gpus": gpus,
+            })).collect::<Vec<_>>()),
         })).collect::<Vec<_>>(),
         "clients": c.plan.clients.iter().enumerate().map(|(i, cl)| json!({
             "index": i + 1, "kind": cl.kind(), "server": cl.server(), "lockstep": cl.lockstep(),
@@ -218,6 +221,13 @@ fn describe(c: &plan::Checked) {
         );
         for o in compile::overrides(s) {
             println!("  override {o}");
+        }
+        let pd = s.pd_servers();
+        for (name, role, gpus) in &pd {
+            println!("  {} server {name}: gpus {gpus:?}, tp {}", role.as_str(), s.tp);
+        }
+        if !pd.is_empty() {
+            println!("  router {}.router: the server's port, for its clients", s.name);
         }
     }
     for (i, cl) in c.plan.clients.iter().enumerate() {
@@ -364,7 +374,15 @@ fn show(lib: &Library, name: &str) -> Result<()> {
     let tp = p.tp.map(|t| t.to_string()).unwrap_or_else(|| "<number of gpus>".into());
     let mut lines: Vec<String> = p
         .engine
-        .fixed_args(&model, &tp, "<plan port>")
+        .fixed_args(
+            &model,
+            &tp,
+            if p.pd.is_some() {
+                "<its own port>"
+            } else {
+                "<plan port>"
+            },
+        )
         .iter()
         .map(|w| w.join(" "))
         .collect();
@@ -375,6 +393,34 @@ fn show(lib: &Library, name: &str) -> Result<()> {
     );
     for (i, line) in lines.iter().enumerate() {
         println!("    {line}{}", if i + 1 < lines.len() { " \\" } else { "" });
+    }
+    if let Some(pd) = &p.pd {
+        println!(
+            "# [pd]: {} prefill + {} decode servers of the command above, {tp} GPUs each, behind a router",
+            pd.prefill.count, pd.decode.count
+        );
+        for role in [Role::Prefill, Role::Decode] {
+            let mut words = vec![format!("--disaggregation-mode {}", role.as_str())];
+            if role == Role::Prefill {
+                words.push("--disaggregation-bootstrap-port <port>".into());
+            }
+            words.extend(pd.role_delta(role, &p).into_iter().map(|(_, text)| text));
+            println!("#   {}: {}", role.as_str(), words.join(" "));
+        }
+        for (k, v) in &pd.router_env {
+            println!("{k}={}", sys::q(v));
+        }
+        let mut router = vec![
+            format!("{ROUTER_COMMAND} --pd-disaggregation"),
+            "--prefill <url> <bootstrap port> ... --decode <url> ...".into(),
+            "--host 127.0.0.1 --port <plan port>".into(),
+        ];
+        router.extend(
+            flag_words(&pd.router_args)
+                .iter()
+                .map(|w| w.iter().map(|x| sys::q(x)).collect::<Vec<_>>().join(" ")),
+        );
+        println!("{}", router.join(" \\\n    "));
     }
     Ok(())
 }
@@ -414,6 +460,20 @@ fn delta(base: &Profile, eff: &Profile) -> ProfileFile {
         if eff.arg(k).is_none() {
             f.args.insert(k.clone(), Value::Boolean(false));
         }
+    }
+    // What changed only a PD role's value: saved as the overlay that did it.
+    let (env, args) = profile::role_only_changes(base, eff);
+    for k in env {
+        let v = eff
+            .env
+            .iter()
+            .find(|(n, _)| *n == k)
+            .map(|(_, v)| Value::String(v.clone()));
+        f.env.insert(k, v.unwrap_or(Value::Boolean(false)));
+    }
+    for k in args {
+        let v = eff.arg(&k).map(arg_value);
+        f.args.insert(k, v.unwrap_or(Value::Boolean(false)));
     }
     f
 }
@@ -460,6 +520,37 @@ fn diff(a: &Profile, b: &Profile) -> Vec<String> {
             seen.push(k);
             field("args", arg(a, k), arg(b, k));
         }
+    }
+    let (pa, pb) = (pd_lines(a), pd_lines(b));
+    let mut seen = Vec::new();
+    for (k, _) in pa.iter().chain(&pb) {
+        if !seen.contains(&k) {
+            seen.push(k);
+            let line = |p: &[(String, String)]| p.iter().find(|(n, _)| n == k).map(|(_, l)| l.clone());
+            field("pd", line(&pa), line(&pb));
+        }
+    }
+    out
+}
+
+/// A profile's `[pd]` as (key, line) pairs for `diff`.
+fn pd_lines(p: &Profile) -> Vec<(String, String)> {
+    let Some(pd) = &p.pd else { return Vec::new() };
+    let mut out = vec![(
+        "servers".to_string(),
+        format!("{} prefill + {} decode", pd.prefill.count, pd.decode.count),
+    )];
+    for role in [Role::Prefill, Role::Decode] {
+        for (key, line) in pd.role_delta(role, p) {
+            out.push((format!("{} {key}", role.as_str()), format!("{} {line}", role.as_str())));
+        }
+    }
+    for (k, v) in &pd.router_env {
+        out.push((format!("router env {k}"), format!("router env {k}={}", sys::q(v))));
+    }
+    for (w, (k, _)) in flag_words(&pd.router_args).iter().zip(&pd.router_args) {
+        let line = w.iter().map(|x| sys::q(x)).collect::<Vec<_>>().join(" ");
+        out.push((format!("router args {k}"), format!("router {line}")));
     }
     out
 }

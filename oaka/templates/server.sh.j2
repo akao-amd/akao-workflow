@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # {{ marker }}
 # Server {{ name }}: profile {{ profile }} ({{ engine }})
+{% if role %}
+# The {{ role | comment }}
+{% endif %}
 {% if description %}
 #   {{ description | comment }}
 {% endif %}

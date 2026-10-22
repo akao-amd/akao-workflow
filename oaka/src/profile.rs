@@ -26,6 +26,14 @@ pub const RESERVED_ARGS: &[&str] = &[
     "server-port",
 ];
 pub const RESERVED_ENV: &[&str] = &["HIP_VISIBLE_DEVICES"];
+/// What oaka sets on the SGLang servers of a `[pd]` profile: each one's role and the prefill
+/// servers' bootstrap port, which the router is told.
+pub const PD_RESERVED_ARGS: &[&str] = &["disaggregation-mode", "disaggregation-bootstrap-port"];
+/// What oaka sets on a `[pd]` profile's router: its servers, and where it listens.
+pub const ROUTER_RESERVED_ARGS: &[&str] = &["pd-disaggregation", "prefill", "decode", "host", "port"];
+/// The router in front of a `[pd]` profile's servers.
+pub const ROUTER_COMMAND: &str = "python3 -m sglang_router.launch_router";
+pub const ROUTER_MODULE: &str = "sglang_router";
 
 /// The server a profile launches.  Each takes oaka's model, tp and port in its own
 /// spelling, and says differently when it is ready.
@@ -123,6 +131,183 @@ pub struct ProfileFile {
     pub env: Table,
     #[serde(default)]
     pub args: Table,
+    /// Prefill-decode disaggregation: the plan server becomes SGLang prefill and decode
+    /// servers behind a router; inherited through `extends`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pd: Option<PdFile>,
+}
+
+/// `[pd]` as written: `[pd.prefill]` and `[pd.decode]` (each a `count`, default 1, and
+/// `env`/`args` overlaid on the profile's for that role only), `[pd.router]` (`env`/`args`
+/// of `sglang_router.launch_router`).
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PdFile {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefill: Option<RoleFile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decode: Option<RoleFile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub router: Option<RouterFile>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoleFile {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
+    #[serde(default)]
+    pub env: Table,
+    #[serde(default)]
+    pub args: Table,
+}
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouterFile {
+    #[serde(default)]
+    pub env: Table,
+    #[serde(default)]
+    pub args: Table,
+}
+
+/// A server's env vars and flags, in order.
+pub type Env = Vec<(String, String)>;
+pub type Args = Vec<(String, Arg)>;
+
+/// The two kinds of SGLang server of a PD profile.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Role {
+    Prefill,
+    Decode,
+}
+
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::Prefill => "prefill",
+            Role::Decode => "decode",
+        }
+    }
+}
+
+/// One role's servers: how many, and their env and args (the profile's, with the role's
+/// overlays applied where they stand in the `extends` chain).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoleSpec {
+    pub count: u32,
+    pub env: Env,
+    pub args: Args,
+}
+
+/// `[pd]` with its `extends` chain applied.  The roles are resolved alongside the profile:
+/// every `[env]`/`[args]` overlay (a profile's, then the plan's) reaches both roles, and a
+/// role's own overlay goes on top of its profile's, so a later child or the plan still wins.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pd {
+    pub prefill: RoleSpec,
+    pub decode: RoleSpec,
+    pub router_env: Env,
+    pub router_args: Args,
+}
+
+impl Pd {
+    /// Both roles start from the profile's env and args as resolved so far.
+    fn new(env: &Env, args: &Args) -> Pd {
+        let role = || RoleSpec {
+            count: 1,
+            env: env.clone(),
+            args: args.clone(),
+        };
+        Pd {
+            prefill: role(),
+            decode: role(),
+            router_env: Vec::new(),
+            router_args: Vec::new(),
+        }
+    }
+
+    pub fn role(&self, role: Role) -> &RoleSpec {
+        match role {
+            Role::Prefill => &self.prefill,
+            Role::Decode => &self.decode,
+        }
+    }
+
+    /// Prefill servers first, then decode: (role, index within the role).
+    pub fn instances(&self) -> Vec<(Role, u32)> {
+        let each = |r: Role| (0..self.role(r).count).map(move |i| (r, i));
+        each(Role::Prefill).chain(each(Role::Decode)).collect()
+    }
+
+    /// How a role's servers differ from the profile's (`common`): (key, text) pairs, the
+    /// text `env K=V`, `env K unset`, `--flag v` or `--flag dropped`.
+    pub fn role_delta(&self, role: Role, common: &Profile) -> Vec<(String, String)> {
+        let r = self.role(role);
+        let mut out = Vec::new();
+        for (k, v) in &r.env {
+            if !common.env.iter().any(|(ck, cv)| ck == k && cv == v) {
+                out.push((format!("env {k}"), format!("env {k}={}", crate::sys::q(v))));
+            }
+        }
+        for (k, _) in &common.env {
+            if !r.env.iter().any(|(rk, _)| rk == k) {
+                out.push((format!("env {k}"), format!("env {k} unset")));
+            }
+        }
+        for (words, (k, v)) in flag_words(&r.args).iter().zip(&r.args) {
+            if common.arg(k) != Some(v) {
+                let text = words.iter().map(|w| crate::sys::q(w)).collect::<Vec<_>>().join(" ");
+                out.push((format!("args {k}"), text));
+            }
+        }
+        for (k, _) in &common.args {
+            if !r.args.iter().any(|(rk, _)| rk == k) {
+                out.push((format!("args {k}"), format!("--{k} dropped")));
+            }
+        }
+        out
+    }
+
+    /// An `[env]`/`[args]` overlay of a profile or a plan, on both roles.
+    fn overlay_roles(&mut self, env: &Table, args: &Table) -> Result<()> {
+        for r in [&mut self.prefill, &mut self.decode] {
+            overlay_env(&mut r.env, env)?;
+            overlay_args(&mut r.args, args)?;
+        }
+        Ok(())
+    }
+
+    /// A profile's `[pd]` tables.
+    fn overlay(&mut self, f: &PdFile) -> Result<()> {
+        for (role, file) in [(Role::Prefill, &f.prefill), (Role::Decode, &f.decode)] {
+            let Some(file) = file else { continue };
+            let at = format!("[pd.{}]", role.as_str());
+            let spec = match role {
+                Role::Prefill => &mut self.prefill,
+                Role::Decode => &mut self.decode,
+            };
+            if let Some(n) = file.count {
+                if n == 0 {
+                    bail!("{at}: count must be at least 1");
+                }
+                spec.count = n;
+            }
+            overlay_env(&mut spec.env, &file.env).with_context(|| at.clone())?;
+            overlay_args(&mut spec.args, &file.args).with_context(|| at.clone())?;
+        }
+        if let Some(r) = &f.router {
+            overlay_env(&mut self.router_env, &r.env).context("[pd.router]")?;
+            overlay_flags(
+                &mut self.router_args,
+                &r.args,
+                ROUTER_RESERVED_ARGS,
+                "for the router from [pd]",
+            )
+            .context("[pd.router]")?;
+        }
+        Ok(())
+    }
 }
 
 /// What a profile is for: a GPU arch and a ROCm version, either `*` for any.  Written as
@@ -227,23 +412,19 @@ pub struct Profile {
     pub tp: Option<u32>,
     pub env: Vec<(String, String)>,
     pub args: Vec<(String, Arg)>,
+    pub pd: Option<Pd>,
 }
 
 impl Profile {
+    /// How many servers a plan server of this profile starts besides a router: 1, or a PD
+    /// profile's prefill and decode servers.  Each takes `tp` GPUs.
+    pub fn instances(&self) -> u32 {
+        self.pd.as_ref().map_or(1, |pd| pd.prefill.count + pd.decode.count)
+    }
+
     /// `--flag value ...` for everything in `args`, in order.
     pub fn launch_args(&self) -> Vec<Vec<String>> {
-        self.args
-            .iter()
-            .map(|(k, v)| {
-                let mut words = vec![format!("--{k}")];
-                match v {
-                    Arg::Flag => {}
-                    Arg::Value(s) => words.push(s.clone()),
-                    Arg::List(l) => words.extend(l.iter().cloned()),
-                }
-                words
-            })
-            .collect()
+        flag_words(&self.args)
     }
 
     /// Whether some target fits this arch and ROCm version (None = unknown, not held
@@ -263,8 +444,27 @@ impl Profile {
     /// Apply an `[env]` / `[args]` overlay (from a child profile or a plan).
     pub fn overlay(&mut self, env: &Table, args: &Table) -> Result<()> {
         overlay_env(&mut self.env, env)?;
-        overlay_args(&mut self.args, args)
+        overlay_args(&mut self.args, args)?;
+        if let Some(pd) = &mut self.pd {
+            pd.overlay_roles(env, args)?;
+        }
+        Ok(())
     }
+}
+
+/// `--flag value ...` for each of `args`, in order: one argument group each.
+pub fn flag_words(args: &[(String, Arg)]) -> Vec<Vec<String>> {
+    args.iter()
+        .map(|(k, v)| {
+            let mut words = vec![format!("--{k}")];
+            match v {
+                Arg::Flag => {}
+                Arg::Value(s) => words.push(s.clone()),
+                Arg::List(l) => words.extend(l.iter().cloned()),
+            }
+            words
+        })
+        .collect()
 }
 
 fn scalar(v: &Value) -> Option<String> {
@@ -303,12 +503,69 @@ pub fn overlay_env(env: &mut Vec<(String, String)>, t: &Table) -> Result<()> {
 }
 
 pub fn overlay_args(args: &mut Vec<(String, Arg)>, t: &Table) -> Result<()> {
+    if let Some((k, r)) = t.keys().find_map(|k| {
+        PD_RESERVED_ARGS
+            .iter()
+            .find(|r| r.starts_with(k.as_str()))
+            .map(|r| (k, r))
+    }) {
+        bail!("args {k}: --{r} is set by oaka from the profile's [pd]; remove it");
+    }
+    overlay_flags(args, t, RESERVED_ARGS, "from the plan")
+}
+
+/// Env vars and flags an overlay changed that show only in a PD role of `eff` (vs `base`): its
+/// role values differ while the profile's own are the same, e.g. a plan setting a flag back to
+/// the profile's value over a role's own.  An overlay reaches every role alike, so `eff`'s own
+/// value (or its absence) is what the overlay set.
+pub fn role_only_changes(base: &Profile, eff: &Profile) -> (Vec<String>, Vec<String>) {
+    let (mut env, mut args) = (Vec::new(), Vec::new());
+    let (Some(bp), Some(ep)) = (&base.pd, &eff.pd) else {
+        return (env, args);
+    };
+    let get_env = |e: &Env, k: &str| e.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let get_arg = |a: &Args, k: &str| a.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    for role in [Role::Prefill, Role::Decode] {
+        let (b, e) = (bp.role(role), ep.role(role));
+        for k in b.env.iter().chain(&e.env).map(|(k, _)| k) {
+            if get_env(&b.env, k) != get_env(&e.env, k)
+                && get_env(&base.env, k) == get_env(&eff.env, k)
+                && !env.contains(k)
+            {
+                env.push(k.clone());
+            }
+        }
+        for k in b.args.iter().chain(&e.args).map(|(k, _)| k) {
+            if get_arg(&b.args, k) != get_arg(&e.args, k) && base.arg(k) == eff.arg(k) && !args.contains(k) {
+                args.push(k.clone());
+            }
+        }
+    }
+    (env, args)
+}
+
+/// A flag as written in `[args]`: `[A-Za-z0-9][A-Za-z0-9_.-]*`.
+fn valid_flag(k: &str) -> bool {
+    let mut c = k.chars();
+    matches!(c.next(), Some(f) if f.is_ascii_alphanumeric())
+        && c.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// Overlay `t` onto `args`; the `reserved` keys are oaka's, set `why`.
+fn overlay_flags(args: &mut Vec<(String, Arg)>, t: &Table, reserved: &[&str], why: &str) -> Result<()> {
     for (k, v) in t {
         if k.starts_with('-') {
             bail!("args key {k:?}: write flags without the leading dashes");
         }
-        if RESERVED_ARGS.contains(&k.as_str()) {
-            bail!("args {k}: --{k} is set by oaka from the plan; remove it");
+        if !valid_flag(k) {
+            bail!("args key {k:?}: a flag name is letters, digits, '-', '_' and '.' (no '=': the value goes on the right)");
+        }
+        if reserved.contains(&k.as_str()) {
+            bail!("args {k}: --{k} is set by oaka {why}; remove it");
+        }
+        // argparse takes an unambiguous prefix for the whole option.
+        if let Some(r) = reserved.iter().find(|r| r.starts_with(k.as_str())) {
+            bail!("args {k}: --{k} abbreviates --{r}, which oaka sets {why}; remove it");
         }
         let arg = match v {
             Value::Boolean(false) => {
@@ -324,6 +581,15 @@ pub fn overlay_args(args: &mut Vec<(String, Arg)>, t: &Table) -> Result<()> {
             ),
             _ => Arg::Value(scalar(v).with_context(|| format!("args {k}: unsupported value {v}"))?),
         };
+        // argparse reads such a word as the next flag, not as this one's value.
+        let words = match &arg {
+            Arg::Flag => vec![],
+            Arg::Value(w) => vec![w],
+            Arg::List(l) => l.iter().collect(),
+        };
+        if let Some(w) = words.iter().find(|w| w.starts_with("--")) {
+            bail!("args {k}: value {w:?} would be read as a flag; give each flag a key of its own");
+        }
         set(args, k, arg);
     }
     Ok(())
@@ -447,12 +713,25 @@ impl Library {
             tp: None,
             env: Vec::new(),
             args: Vec::new(),
+            pd: None,
         };
         for (n, f) in chain.iter().rev() {
             p.engine = f.engine.unwrap_or(p.engine);
             p.model = f.model.clone().or(p.model);
             p.tp = f.tp.or(p.tp);
             p.overlay(&f.env, &f.args).with_context(|| format!("profile {n}"))?;
+            if let Some(pd) = &f.pd {
+                let (env, args) = (&p.env, &p.args);
+                p.pd.get_or_insert_with(|| Pd::new(env, args))
+                    .overlay(pd)
+                    .with_context(|| format!("profile {n}"))?;
+            }
+        }
+        if p.pd.is_some() && p.engine != Engine::Sglang {
+            bail!(
+                "profile {name}: [pd] runs SGLang prefill and decode servers, but its engine is {}",
+                p.engine
+            );
         }
         Ok(p)
     }
@@ -517,6 +796,7 @@ mod tests {
             tp: None,
             env: vec![],
             args,
+            pd: None,
         };
         assert_eq!(
             p.launch_args(),
@@ -575,6 +855,106 @@ mod tests {
         assert!(canonical("../x").is_err());
         assert!(!valid_name("a/b/c"));
         assert!(!valid_name("../x"));
+    }
+
+    #[test]
+    fn pd_is_inherited_and_overlaid() {
+        let dir = std::env::temp_dir().join(format!("oaka-test-pd-{}", std::process::id()));
+        let lib = Library { root: dir.clone() };
+        fs::create_dir_all(lib.profiles_dir().join("m")).unwrap();
+        let write = |n: &str, text: &str| fs::write(lib.profile_path(n), text).unwrap();
+        write(
+            "m/base",
+            "model = '/model/m'\ntp = 2\n[args]\npage-size = 64\nmem-fraction-static = 0.9\n",
+        );
+        write(
+            "m/pd",
+            "extends = 'm/base'\n[pd.decode]\ncount = 2\n[pd.decode.args]\nmem-fraction-static = 0.8\n\
+             [pd.router.args]\npolicy = 'round_robin'\n",
+        );
+        write(
+            "m/pd2",
+            "extends = 'm/pd'\n[pd.prefill.env]\nX = '1'\n[pd.decode.args]\npage-size = false\n",
+        );
+        let p = lib.resolve("m/pd2").unwrap();
+        assert_eq!(p.instances(), 3);
+        let pd = p.pd.as_ref().unwrap();
+        assert_eq!(
+            pd.instances(),
+            [(Role::Prefill, 0), (Role::Decode, 0), (Role::Decode, 1)]
+        );
+        let decode = pd.role(Role::Decode);
+        assert!(decode.env.is_empty());
+        assert_eq!(
+            decode.args,
+            [("mem-fraction-static".to_string(), Arg::Value("0.8".into()))]
+        );
+        let prefill = pd.role(Role::Prefill);
+        assert_eq!(prefill.env, [("X".to_string(), "1".to_string())]);
+        assert_eq!(
+            prefill.args.len(),
+            2,
+            "the prefill servers keep the profile's args: {prefill:?}"
+        );
+        assert_eq!(
+            pd.role_delta(Role::Decode, &p),
+            [
+                (
+                    "args mem-fraction-static".to_string(),
+                    "--mem-fraction-static 0.8".to_string()
+                ),
+                ("args page-size".to_string(), "--page-size dropped".to_string()),
+            ]
+        );
+        // A later overlay wins over an inherited role's: a child's [args], then the plan's.
+        write("m/pd3", "extends = 'm/pd2'\n[args]\npage-size = 32\n");
+        let mut p3 = lib.resolve("m/pd3").unwrap();
+        p3.overlay(&Table::new(), &table("mem-fraction-static = 0.7")).unwrap();
+        let decode = &p3.pd.as_ref().unwrap().decode;
+        let arg = |k: &str| decode.args.iter().find(|(n, _)| n == k).unwrap().1.clone();
+        assert_eq!(arg("page-size"), Arg::Value("32".into()));
+        assert_eq!(arg("mem-fraction-static"), Arg::Value("0.7".into()));
+        assert_eq!(
+            pd.router_args,
+            [("policy".to_string(), Arg::Value("round_robin".into()))]
+        );
+        assert_eq!(lib.resolve("m/base").unwrap().instances(), 1);
+
+        let bad = |text: &str, needle: &str| {
+            write("m/bad", text);
+            let e = format!("{:#}", lib.resolve("m/bad").unwrap_err());
+            assert!(e.contains(needle), "{e:?} lacks {needle:?}");
+        };
+        bad("[pd.prefill]\ncount = 0\n", "[pd.prefill]: count must be at least 1");
+        bad(
+            "[pd.decode.args]\ndisaggregation-mode = 'prefill'\n",
+            "--disaggregation-mode is set by oaka from the profile's [pd]",
+        );
+        bad("[args]\ndisaggregation-bootstrap-port = 1\n", "from the profile's [pd]");
+        bad("[pd.router.args]\n'port=1' = true\n", "a flag name is letters, digits");
+        bad("[args]\n'tp=4' = true\n", "a flag name is letters, digits");
+        bad(
+            "[pd.router.args]\npolicy = ['round_robin', '--port=1']\n",
+            "value \"--port=1\" would be read as a flag",
+        );
+        bad(
+            "[pd.router.args]\npo = 1\n",
+            "--po abbreviates --port, which oaka sets for the router from [pd]",
+        );
+        bad(
+            "[pd.prefill.args]\ndisaggregation-mo = 'decode'\n",
+            "--disaggregation-mode is set by oaka from the profile's [pd]",
+        );
+        bad(
+            "[pd.router.args]\nport = 1\n",
+            "--port is set by oaka for the router from [pd]",
+        );
+        bad("[pd.router]\ncount = 2\n", "unknown field `count`");
+        bad(
+            "extends = 'm/pd'\nengine = 'vllm'\n",
+            "[pd] runs SGLang prefill and decode servers, but its engine is vllm",
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

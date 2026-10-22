@@ -3,7 +3,7 @@
 # Client {{ index }}: GSM8K accuracy gate on server {{ server }} (port {{ port }}).
 # Exits 3 when the score is below {{ min_score }}: do not trust perf numbers from this server.
 #
-# Needs the server running (scripts/server_{{ server }}.sh) and sgl-eval installed.
+# Needs the server running ({{ starts }}) and sgl-eval installed.
 #   bash {{ self_path }}
 set -uo pipefail
 
@@ -14,7 +14,7 @@ OUT="${RESULTS:-$WORKDIR/results}/{{ out }}"
 say() { echo "[client {{ index }} gsm8k {{ server }}] $*"; }
 
 if ! (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; then
-    say "FATAL: nothing listens on port $PORT; start scripts/server_{{ server }}.sh first"
+    say "FATAL: nothing listens on port $PORT; start {{ starts }} first"
     exit 1
 fi
 if ! command -v sgl-eval >/dev/null; then

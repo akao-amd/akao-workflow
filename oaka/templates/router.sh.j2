@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# {{ marker }}
+# Server {{ name }}: profile {{ profile }}'s [pd] router, on the plan server's port (what its
+# clients use), in front of its prefill and decode servers: {{ servers }}.
+#
+# Runs in the foreground; scripts/step.sh starts it once those servers are ready.
+#   bash {{ self_path }}
+set -euo pipefail
+
+PORT={{ port }}
+say() { echo "[server {{ name }}] $*"; }
+
+if (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; then
+    say "FATAL: port $PORT is already in use"
+    exit 1
+fi
+{% for kv in env %}
+export {{ kv[0] }}={{ kv[1] | q }}
+{% endfor %}
+
+ARGS=(
+{% for line in fixed %}
+    {{ line }}
+{% endfor %}
+{% for line in args %}
+    {{ line }}
+{% endfor %}
+)
+
+say "$(date -Is) $(realpath "$0")"
+python3 -m pip show sglang-router 2>/dev/null \
+    | grep -E '^(Name|Version|Location):' | sed 's/^/[server {{ name }}] pip /' || true
+say "cmd {{ command }} ${ARGS[*]}"
+
+exec {{ command }} "${ARGS[@]}"

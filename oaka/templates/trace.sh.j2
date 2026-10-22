@@ -15,7 +15,7 @@
 # captures.csv for every point.  Exits 3 when a point's traces are still incomplete after
 # the last pass (the other points still run), 1 on failure.
 #
-# Needs the server running (scripts/server_{{ server }}.sh).
+# Needs the server running ({{ starts }}).
 #   bash {{ self_path }}
 set -uo pipefail
 
@@ -28,7 +28,7 @@ MAX_PASSES=3
 say() { echo "[client {{ index }} trace {{ server }}] $*"; }
 
 if ! (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; then
-    say "FATAL: nothing listens on port $PORT; start scripts/server_{{ server }}.sh first"
+    say "FATAL: nothing listens on port $PORT; start {{ starts }} first"
     exit 1
 fi
 if [ ! -d "$INFX/infx" ]; then

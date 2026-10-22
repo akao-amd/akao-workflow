@@ -10,7 +10,7 @@
 # Gate: exits 3 when a point's median output tok/s over its runs is below {{ min_tok_s }}.
 {% endif %}
 #
-# Needs the server running (scripts/server_{{ server }}.sh).
+# Needs the server running ({{ starts }}).
 #   bash {{ self_path }}
 set -uo pipefail
 
@@ -22,7 +22,7 @@ OUT="${RESULTS:-$WORKDIR/results}/{{ out }}"
 say() { echo "[client {{ index }} fixed-seq {{ server }}] $*"; }
 
 if ! (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; then
-    say "FATAL: nothing listens on port $PORT; start scripts/server_{{ server }}.sh first"
+    say "FATAL: nothing listens on port $PORT; start {{ starts }} first"
     exit 1
 fi
 if [ ! -d "$INFX/infx" ]; then

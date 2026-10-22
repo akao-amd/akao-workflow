@@ -3,7 +3,7 @@
 //! The scripts never call oaka.  `oaka run` executes exactly these files.
 
 use crate::plan::{self, Checked, ClientSpec, OffSpec, Server, Vary, PROMPTS_PER_CONC};
-use crate::profile::Arg;
+use crate::profile::{flag_words, role_only_changes, Arg, Role, ROUTER_COMMAND};
 use crate::stack;
 use crate::sys::{self, q};
 use anyhow::{Context, Result};
@@ -32,6 +32,7 @@ fn templates() -> Result<Environment<'static>> {
     // A Python/JSON string literal (the json feature's tojson is not built in).
     env.add_filter("tojson_str", |v: minijinja::Value| format!("{:?}", v.to_string()));
     env.add_template("server.sh", include_str!("../templates/server.sh.j2"))?;
+    env.add_template("router.sh", include_str!("../templates/router.sh.j2"))?;
     env.add_template("gsm8k.sh", include_str!("../templates/gsm8k.sh.j2"))?;
     env.add_template("fixed_seq.sh", include_str!("../templates/fixed_seq.sh.j2"))?;
     env.add_template("run_all.sh", include_str!("../templates/run_all.sh.j2"))?;
@@ -90,7 +91,29 @@ pub fn overrides(s: &Server) -> Vec<String> {
             out.push(format!("args --{k} dropped"));
         }
     }
+    // What changed only a PD role's value (the plan's overlay reaches the roles too).
+    let (env, args) = role_only_changes(base, eff);
+    for k in env {
+        match eff.env.iter().find(|(n, _)| *n == k) {
+            Some((_, v)) => out.push(format!("env {k}={}", q(v))),
+            None => out.push(format!("env {k} unset")),
+        }
+    }
+    for k in args {
+        match eff.arg(&k) {
+            Some(v) => out.push(format!("args {}", arg_words(&k, v))),
+            None => out.push(format!("args --{k} dropped")),
+        }
+    }
     out
+}
+
+/// One script line per flag, its words shell-quoted.
+fn quoted_flags(args: &[(String, Arg)]) -> Vec<String> {
+    flag_words(args)
+        .iter()
+        .map(|w| w.iter().map(|x| q(x)).collect::<Vec<_>>().join(" "))
+        .collect()
 }
 
 pub struct Compiled {
@@ -107,36 +130,49 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
     let mut notes = Vec::new();
 
     // Ports: the plan's, else the lock's (kept even when busy: that is usually this
-    // plan's own server, started by hand), else a fresh random one.
+    // plan's own server, started by hand), else a fresh random one.  A PD server has more
+    // than its own (Server::port_slots); the plan gives only that one.
     let mut lock = plan::load_lock(dir)?;
-    lock.port.retain(|name, _| c.servers.iter().any(|s| s.name == *name));
+    let slots: Vec<(String, Option<u16>)> = c
+        .servers
+        .iter()
+        .flat_map(|s| {
+            s.port_slots()
+                .into_iter()
+                .enumerate()
+                .map(|(i, slot)| (slot, if i == 0 { s.port } else { None }))
+        })
+        .collect();
+    lock.port.retain(|name, _| slots.iter().any(|(slot, _)| slot == name));
     let mut ports: Vec<(String, u16)> = Vec::new();
-    for s in &c.servers {
+    for (slot, given) in &slots {
+        // Taken: what earlier slots got, the plan's ports, and the ports the lock keeps for
+        // other slots (a slot new to the plan must not take a later slot's).
         let taken: Vec<u16> = ports
             .iter()
             .map(|(_, p)| *p)
-            .chain(c.servers.iter().filter_map(|o| o.port))
+            .chain(slots.iter().filter_map(|(_, p)| *p))
+            .chain(lock.port.iter().filter(|(k, _)| *k != slot).map(|(_, p)| *p))
             .collect();
-        let port = match (s.port, lock.port.get(&s.name)) {
+        let port = match (given, lock.port.get(slot)) {
             (Some(p), _) => {
-                lock.port.remove(&s.name);
-                p
+                lock.port.remove(slot);
+                *p
             }
             (None, Some(p)) if !taken.contains(p) => *p,
             _ => {
                 let p = sys::pick_port(&taken).context("no free port in 29900-30100")?;
-                lock.port.insert(s.name.clone(), p);
-                notes.push(format!("server {}: picked port {p}", s.name));
+                lock.port.insert(slot.clone(), p);
+                notes.push(format!("server {slot}: picked port {p}"));
                 p
             }
         };
         if !sys::port_free(port) {
             notes.push(format!(
-                "server {}: port {port} is in use right now (already running?)",
-                s.name
+                "server {slot}: port {port} is in use right now (already running?)"
             ));
         }
-        ports.push((s.name.clone(), port));
+        ports.push((slot.clone(), port));
     }
     let port_of = |name: &str| ports.iter().find(|(n, _)| n == name).map(|(_, p)| *p).unwrap();
 
@@ -154,37 +190,93 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
         .iter()
         .filter_map(|p| c.stacks.get(&p.name).and_then(|lib| lib.pythonpath_in(&p.tree)))
         .collect();
-    for s in &c.servers {
-        let file = format!("server_{}.sh", s.name);
-        let args: Vec<String> = s
-            .effective
-            .launch_args()
-            .iter()
-            .map(|w| w.iter().map(|x| q(x)).collect::<Vec<_>>().join(" "))
-            .collect();
+    // One server_<name>.sh per server, or for a PD server one per prefill and decode server
+    // plus its router's.
+    let server_script = |name: &str,
+                         s: &Server,
+                         gpus: &[u32],
+                         vars: &[(String, String)],
+                         flags: &[(String, Arg)],
+                         pd_args: Vec<String>,
+                         role: Option<String>|
+     -> Result<(String, String)> {
+        let file = format!("server_{name}.sh");
+        let args = quoted_flags(flags);
         let fixed: Vec<String> = s
             .effective
             .engine
             .fixed_args(&q(&s.model), &s.tp.to_string(), "\"$PORT\"")
             .iter()
             .map(|w| w.join(" "))
+            .chain(pd_args)
             .collect();
-        let gpus: Vec<String> = s.gpus.iter().map(u32::to_string).collect();
+        let gpus: Vec<String> = gpus.iter().map(u32::to_string).collect();
         // Each cache variable gets its own empty dir below the server's cache root.
         let caches: Vec<(&str, &str)> = [("TRITON_CACHE_DIR", "triton"), ("XDG_CACHE_HOME", "xdg")]
             .into_iter()
             .chain(s.effective.engine.cache_env().map(|v| (v, s.effective.engine.as_str())))
             .collect();
         let text = env.get_template("server.sh")?.render(context! {
-            marker, name => s.name, profile => s.base.name, description => s.base.description,
+            marker, name, profile => s.base.name, description => s.base.description, role,
             overrides => overrides(s), self_path => format!("{SCRIPTS}/{file}"),
-            port => port_of(&s.name), gpus => gpus.join(","), env => s.effective.env,
+            port => port_of(name), gpus => gpus.join(","), env => vars,
             model => s.model, tp => s.tp, fixed, args, packages => PROVENANCE_PACKAGES,
             engine => s.effective.engine.as_str(), command => s.effective.engine.command(),
             pythonpath => pythonpath.join(":"), caches,
-            profiler_env => c.plan.traced(&s.name).then(|| format!("{}={}", plan::PROFILER_ENV.0, plan::PROFILER_ENV.1)),
+            profiler_env => c.plan.traced(name).then(|| format!("{}={}", plan::PROFILER_ENV.0, plan::PROFILER_ENV.1)),
             targets => s.base.arch.iter().map(|t| format!("({:?}, {:?})", t.arch(), t.rocm())).collect::<Vec<_>>().join(", "),
             targets_text => crate::profile::targets_text(&s.base.arch),
+        })?;
+        Ok((file, text))
+    };
+    for s in &c.servers {
+        let Some(pd) = &s.effective.pd else {
+            files.push(server_script(
+                &s.name,
+                s,
+                &s.gpus,
+                &s.effective.env,
+                &s.effective.args,
+                Vec::new(),
+                None,
+            )?);
+            continue;
+        };
+        let members = s.pd_servers();
+        let router = format!("{}.router", s.name);
+        for (name, role, gpus) in &members {
+            let r = pd.role(*role);
+            let mut pd_args = vec![format!("--disaggregation-mode {}", role.as_str())];
+            if *role == Role::Prefill {
+                pd_args.push(format!(
+                    "--disaggregation-bootstrap-port {}",
+                    port_of(&format!("{name}.bootstrap"))
+                ));
+            }
+            let role = format!(
+                "{} server of plan server {} (prefill-decode disaggregation); clients reach it through \
+                 {SCRIPTS}/server_{router}.sh",
+                role.as_str(),
+                s.name
+            );
+            files.push(server_script(name, s, gpus, &r.env, &r.args, pd_args, Some(role))?);
+        }
+        // The router: the plan server's port, in front of the prefill and decode servers.
+        let url = |name: &str| format!("http://127.0.0.1:{}", port_of(name));
+        let mut fixed = vec!["--pd-disaggregation".to_string()];
+        for (name, role, _) in &members {
+            fixed.push(match role {
+                Role::Prefill => format!("--prefill {} {}", url(name), port_of(&format!("{name}.bootstrap"))),
+                Role::Decode => format!("--decode {}", url(name)),
+            });
+        }
+        fixed.extend(["--host 127.0.0.1".to_string(), "--port \"$PORT\"".to_string()]);
+        let args = quoted_flags(&pd.router_args);
+        let file = format!("server_{router}.sh");
+        let text = env.get_template("router.sh")?.render(context! {
+            marker, name => router, profile => s.base.name, self_path => format!("{SCRIPTS}/{file}"),
+            port => port_of(&s.name), env => pd.router_env, fixed, args, command => ROUTER_COMMAND,
+            servers => members.iter().map(|(n, _, _)| n.as_str()).collect::<Vec<_>>().join(" "),
         })?;
         files.push((file, text));
     }
@@ -195,8 +287,20 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
         let s = c.servers.iter().find(|s| s.name == cl.server()).unwrap();
         let file = format!("client_{index}_{}_{}.sh", cl.kind(), s.name);
         let out = format!("{index}_{}_{}", cl.kind(), s.name);
+        // What has to run for the client: the server's script, or a PD server's in order.
+        let starts = match s.pd_servers() {
+            pd if pd.is_empty() => format!("{SCRIPTS}/server_{}.sh", s.name),
+            pd => format!(
+                "{}, then {SCRIPTS}/server_{}.router.sh",
+                pd.iter()
+                    .map(|(n, _, _)| format!("{SCRIPTS}/server_{n}.sh"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                s.name
+            ),
+        };
         let common = context! {
-            marker, index, server => s.name, port => port_of(&s.name), served => s.served_name(),
+            marker, index, server => s.name, port => port_of(&s.name), served => s.served_name(), starts,
             out, self_path => format!("{SCRIPTS}/{file}"),
         };
         let text = match cl {
@@ -273,22 +377,31 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
         }
     }
 
-    // How step.sh knows a server is ready: its log line, or `GET /health` on its port.
-    let servers: Vec<minijinja::Value> = c
-        .servers
-        .iter()
-        .map(|s| {
-            let health = if s.effective.engine.ready_by_log() {
-                "-".to_string()
-            } else {
-                port_of(&s.name).to_string()
-            };
-            context! { name => s.name, health }
-        })
-        .collect();
+    // How step.sh knows a server is ready: its log line, `GET /health` on its port, or (a PD
+    // server's router) a one-token generation through it.  Routers start once the servers
+    // behind them are ready.
+    let mut servers: Vec<minijinja::Value> = Vec::new();
+    let mut routers: Vec<minijinja::Value> = Vec::new();
+    for s in &c.servers {
+        let ready = if s.effective.engine.ready_by_log() {
+            "log".to_string()
+        } else {
+            format!("health {}", port_of(&s.name))
+        };
+        match s.effective.pd {
+            None => servers.push(context! { name => s.name, ready }),
+            Some(_) => {
+                for (name, _, _) in s.pd_servers() {
+                    servers.push(context! { name, ready });
+                }
+                routers.push(context! { name => format!("{}.router", s.name), ready => format!("generate {}", port_of(&s.name)) });
+            }
+        }
+    }
+    let stages: Vec<Vec<minijinja::Value>> = [servers, routers].into_iter().filter(|s| !s.is_empty()).collect();
     let text = env.get_template("step.sh")?.render(context! {
-        marker, self_path => format!("{SCRIPTS}/step.sh"), servers, runs,
-        ready_timeout_s => READY_TIMEOUT_S,
+        marker, self_path => format!("{SCRIPTS}/step.sh"), stages,
+        runs, ready_timeout_s => READY_TIMEOUT_S,
     })?;
     files.push(("step.sh".into(), text));
 
@@ -572,6 +685,127 @@ off_spec = { prompts_per_conc = 4 }
             assert!(removed.iter().any(|r| r == f), "{f} not removed: {removed:?}");
         }
         assert!(!read("server_a.sh").contains("SGLANG_PROFILE_V2"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pd_servers_compile_to_scripts_that_parse() {
+        let root = std::env::temp_dir().join(format!("oaka-compile-pd-{}-{}", std::process::id(), fastrand::u32(..)));
+        let lib = Library { root: root.join("lib") };
+        let work = root.join("work");
+        fs::create_dir_all(lib.profiles_dir().join("m")).unwrap();
+        fs::create_dir_all(&work).unwrap();
+        fs::write(
+            lib.profile_path("m/pd"),
+            "model = '/model/m'\ntp = 2\n[env]\nMC_FORCE_TCP = '1'\n[args]\nmem-fraction-static = 0.9\n\
+             disaggregation-transfer-backend = 'mooncake'\n\
+             [pd.decode.args]\nmem-fraction-static = 0.8\n[pd.router.env]\nRUST_LOG = 'info'\n\
+             [pd.router.args]\npolicy = 'round_robin'\n",
+        )
+        .unwrap();
+        let plan = "[[server]]\nname = 'pd'\nprofile = 'm/pd'\ngpus = [4, 5, 6, 7]\nport = 29950\n\
+                    [server.args]\npage-size = 64\n\
+                    [[client]]\nkind = 'fixed-seq'\nserver = 'pd'\nisl_osl = [[1024, 1024]]\nconc = [4]\n";
+        fs::write(work.join(plan::PLAN), plan).unwrap();
+        let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, &plan::Machine::default()).unwrap();
+        let out = compile(&checked).unwrap();
+        for f in &out.written {
+            let st = std::process::Command::new("bash").arg("-n").arg(f).status().unwrap();
+            assert!(st.success(), "bash -n {}", f.display());
+        }
+        assert!(
+            !work.join("scripts/server_pd.sh").exists(),
+            "a PD server has no script of its own"
+        );
+        let read = |f: &str| fs::read_to_string(work.join(SCRIPTS).join(f)).unwrap();
+        let lock = plan::load_lock(&work).unwrap().port;
+        let keys: Vec<&str> = lock.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            ["pd.decode0", "pd.prefill0", "pd.prefill0.bootstrap"],
+            "the plan gave pd's own"
+        );
+        let (p, b, d) = (lock["pd.prefill0"], lock["pd.prefill0.bootstrap"], lock["pd.decode0"]);
+
+        let prefill = read("server_pd.prefill0.sh");
+        assert!(prefill.contains(&format!("PORT={p}\n")), "{prefill}");
+        assert!(prefill.contains("export HIP_VISIBLE_DEVICES=4,5\n"), "{prefill}");
+        assert!(prefill.contains("export MC_FORCE_TCP=1\n"), "{prefill}");
+        assert!(
+            prefill.contains(&format!(
+                "    --tp 2\n    --port \"$PORT\"\n    --disaggregation-mode prefill\n    \
+                 --disaggregation-bootstrap-port {b}\n    --mem-fraction-static 0.9\n"
+            )),
+            "{prefill}"
+        );
+        assert!(
+            prefill.contains("    --page-size 64\n"),
+            "the plan's overrides reach every server: {prefill}"
+        );
+        assert!(prefill.contains("# The prefill server of plan server pd"), "{prefill}");
+        let decode = read("server_pd.decode0.sh");
+        assert!(decode.contains("export HIP_VISIBLE_DEVICES=6,7\n"), "{decode}");
+        assert!(
+            decode.contains("    --disaggregation-mode decode\n    --mem-fraction-static 0.8\n"),
+            "{decode}"
+        );
+        assert!(!decode.contains("bootstrap"), "{decode}");
+        assert!(decode.contains("/cache_pd.decode0)"), "{decode}");
+        let router = read("server_pd.router.sh");
+        assert!(
+            router.contains("PORT=29950\n"),
+            "the router has the plan's port: {router}"
+        );
+        assert!(
+            router.contains(&format!(
+                "    --pd-disaggregation\n    --prefill http://127.0.0.1:{p} {b}\n    --decode http://127.0.0.1:{d}\n    \
+                 --host 127.0.0.1\n    --port \"$PORT\"\n    --policy round_robin\n"
+            )),
+            "{router}"
+        );
+        assert!(router.contains("export RUST_LOG=info\n"), "{router}");
+        assert!(
+            router.contains("exec python3 -m sglang_router.launch_router \"${ARGS[@]}\""),
+            "{router}"
+        );
+        assert!(
+            read("client_01_fixed-seq_pd.sh").contains("PORT=29950"),
+            "clients use the router"
+        );
+        let step = read("step.sh");
+        assert!(
+            step.contains(
+                "start_server pd.prefill0\nstart_server pd.decode0\nwait_ready pd.prefill0 log || exit 1\n\
+                 wait_ready pd.decode0 log || exit 1\nstart_server pd.router\nwait_ready pd.router generate 29950 || exit 1\n"
+            ),
+            "{step}"
+        );
+        // A new server takes no port the lock keeps for another.
+        fs::write(
+            lib.profile_path("m/pd"),
+            fs::read_to_string(lib.profile_path("m/pd")).unwrap() + "[pd.prefill]\ncount = 2\n",
+        )
+        .unwrap();
+        fs::write(
+            work.join(plan::PLAN),
+            plan.replace("[4, 5, 6, 7]", "[2, 3, 4, 5, 6, 7]"),
+        )
+        .unwrap();
+        let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, &plan::Machine::default()).unwrap();
+        compile(&checked).unwrap();
+        let after = plan::load_lock(&work).unwrap().port;
+        assert_eq!(
+            (
+                after["pd.prefill0"],
+                after["pd.prefill0.bootstrap"],
+                after["pd.decode0"]
+            ),
+            (p, b, d)
+        );
+        let mut all: Vec<u16> = after.values().copied().collect();
+        all.sort();
+        all.dedup();
+        assert_eq!(all.len(), 5, "{after:?}");
         fs::remove_dir_all(root).unwrap();
     }
 

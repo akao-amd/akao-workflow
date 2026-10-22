@@ -217,6 +217,16 @@ Where the how lives: worker reference (commands, plan and profile fields)
   ATOM is `GET /health`, as InferenceX waits; SGLang keeps its log line (after warmup).
   Why: a mirrored InferenceX image may have no SGLang at all, and its recipe is the thing
   being studied.
+- **Prefill-decode disaggregation is a profile shape, not a plan shape (ww43).**  A `[pd]`
+  profile turns one plan server into SGLang prefill and decode servers plus a router on the
+  server's port; the plan still names one server and its GPUs, and its clients reach it
+  through the router unchanged.  Why: a PD deployment is a recipe (counts, transfer backend,
+  per-role flags) that should be saved and compared like any other, and keeping it one plan
+  server leaves clients, lockstep, stacks and gates untouched.  Each prefill and decode server
+  is its own script and process (`server_<name>.prefill0.sh`, ...), so readiness and the
+  TERM-then-group-KILL teardown are the ones every server already has; the router starts
+  after them and is ready when a one-token generation goes through it (its `/health` can
+  answer before its servers are registered).
 - **A mirror is a worker plus a brief, not an automatic translation.**  `akao mirror` reads
   one InferenceX entry at a git revision (retired entries stay reachable), refuses what one
   container cannot hold (multinode, non-AMD runners, frameworks without an engine, a box with

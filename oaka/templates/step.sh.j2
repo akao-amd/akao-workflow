@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # {{ marker }}
 # One measurement with whatever stack is installed: start every server, wait until each
-# is ready, run the clients in plan order (a lockstep's together, where its first is), then
+# is ready (a PD server's router after its prefill and decode servers), run the clients in plan order (a lockstep's together, where its first is), then
 # stop the servers (also on failure or Ctrl-C).  Each part is its own script and can be run by hand instead.
 #   bash {{ self_path }} [<label>]     # logs/<label>/ and results/<label>/ (emptied first);
 #                                      # no label: logs/ and results/, overwriting same-named points
@@ -27,6 +27,7 @@ CRASH_MARKS="Received sigquit from a child process|Scheduler hit an exception|Ca
 READY_TIMEOUT_S={{ ready_timeout_s }}
 
 PIDS=()
+declare -A PID_OF=()
 stop_servers() {
     [ -z "${PIDS[*]:-}" ] && return
     trap '' INT TERM PIPE   # a second Ctrl-C must not cut the cleanup short
@@ -47,7 +48,12 @@ stop_servers() {
     rm -rf "$LOGS"/cache_*
 }
 CLIENT_PIDS=()
+PROBE_PID=
 stop_clients() {
+    # A readiness probe still waiting on a router (started with SIGINT ignored, as background
+    # jobs of a script are).
+    [ -n "$PROBE_PID" ] && kill -KILL "$PROBE_PID" 2>/dev/null && wait "$PROBE_PID" 2>/dev/null
+    PROBE_PID=
     for pid in "${CLIENT_PIDS[@]}"; do kill -TERM -- "-$pid" 2>/dev/null; done
     CLIENT_PIDS=()
 }
@@ -60,6 +66,7 @@ start_server() {
     : >"$LOGS/server_$1.log"
     OAKA_SERVER_CACHE="$LOGS/cache_$1" setsid bash "$HERE/server_$1.sh" >"$LOGS/server_$1.log" 2>&1 &
     PIDS+=($!)
+    PID_OF[$1]=$!
     disown
     say "server $1 started (pid $!), log ${LOGS#"$WORKDIR"/}/server_$1.log"
 }
@@ -73,22 +80,63 @@ healthy() {
     [[ "$status" == HTTP/*" 200"* ]]
 }
 
-# wait_ready <name> <pid> <port>: ready by its log line (port -), or by GET /health on port.
+# generates <port>: a one-token POST /generate answers 200.  A PD router's /health can answer
+# before its prefill and decode servers are registered; a generation goes through both.  In
+# the background, with a short timeout: bash runs the INT/TERM traps only once a foreground
+# command ends, but at once during `wait`.
+generates() {
+    python3 - "$1" <<'PY' 2>/dev/null &
+import json, sys, urllib.request
+body = json.dumps({"text": "Hello", "sampling_params": {"max_new_tokens": 1, "temperature": 0}}).encode()
+req = urllib.request.Request(f"http://127.0.0.1:{sys.argv[1]}/generate", data=body,
+                             headers={"Content-Type": "application/json"})
+try:
+    sys.exit(0 if urllib.request.urlopen(req, timeout=30).status == 200 else 1)
+except Exception:
+    sys.exit(1)
+PY
+    PROBE_PID=$!
+    wait $PROBE_PID
+    local rc=$?
+    PROBE_PID=
+    return $rc
+}
+
+# died <name>: the server crashed or exited; says so with the end of its log.
+died() {
+    local log="$LOGS/server_$1.log"
+    grep -qE "$CRASH_MARKS" "$log" || ! kill -0 "${PID_OF[$1]}" 2>/dev/null || return 1
+    say "server $1 died during startup; last lines of ${log#"$WORKDIR"/}:"
+    tail -30 "$log"
+}
+
+# any_died: some server started so far died (said by `died`).
+any_died() {
+    local name
+    for name in "${!PID_OF[@]}"; do
+        died "$name" && return 0
+    done
+    return 1
+}
+
+# wait_ready <name> log | health <port> | generate <port>: ready by its log line, by GET
+# /health on the port, or by a generation through it, and every server started so far still
+# alive (a router can answer through some of its servers while another one is gone).
 wait_ready() {
-    local log="$LOGS/server_$1.log" deadline=$(( $(date +%s) + READY_TIMEOUT_S ))
+    local name=$1 how=$2 port=${3:-} deadline=$(( $(date +%s) + READY_TIMEOUT_S )) via
     while true; do
-        if [ "$3" = - ]; then
-            grep -q "$READY_MARK" "$log" && { say "server $1 ready"; return 0; }
-        else
-            healthy "$3" && { say "server $1 ready (GET /health)"; return 0; }
-        fi
-        if grep -qE "$CRASH_MARKS" "$log" || ! kill -0 "$2" 2>/dev/null; then
-            say "server $1 died during startup; last lines of ${log#"$WORKDIR"/}:"
-            tail -30 "$log"
-            return 1
-        fi
+        any_died && return 1
+        case $how in
+            log) via=""; grep -q "$READY_MARK" "$LOGS/server_$name.log" ;;
+            health) via=" (GET /health)"; healthy "$port" ;;
+            generate) via=" (POST /generate)"; generates "$port" ;;
+        esac && {
+            any_died && return 1
+            say "server $name ready$via"
+            return 0
+        }
         if [ "$(date +%s)" -ge $deadline ]; then
-            say "server $1 not ready after ${READY_TIMEOUT_S}s"
+            say "server $name not ready after ${READY_TIMEOUT_S}s"
             return 1
         fi
         sleep 1
@@ -149,11 +197,13 @@ run_lockstep() {
     exit $worst
 }
 
-{% for s in servers %}
+{% for stage in stages %}
+{% for s in stage %}
 start_server {{ s.name }}
 {% endfor %}
-{% for s in servers %}
-wait_ready {{ s.name }} "${PIDS[{{ loop.index0 }}]}" {{ s.health }} || exit 1
+{% for s in stage %}
+wait_ready {{ s.name }} {{ s.ready }} || exit 1
+{% endfor %}
 {% endfor %}
 
 {% for r in runs %}

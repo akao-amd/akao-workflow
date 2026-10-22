@@ -165,13 +165,15 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
         } else {
             server_name(profile, &names)
         };
-        // GPUs: one server takes all it was given; several take tp (pinned) or 1 each, in order.
+        // GPUs: one server takes all it was given; several take tp (pinned) or 1 each, in order
+        // (times its servers, for a PD profile).
         let want = if profiles.len() == 1 {
             free.len()
         } else if profile.is_empty() {
             1
         } else {
-            lib.resolve(profile)?.tp.unwrap_or(1) as usize
+            let p = lib.resolve(profile)?;
+            (p.tp.unwrap_or(1) * p.instances()) as usize
         };
         let mine: Vec<u32> = if free.len() >= want {
             free.drain(..want).collect()
