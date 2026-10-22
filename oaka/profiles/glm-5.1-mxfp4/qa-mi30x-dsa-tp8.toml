@@ -1,0 +1,40 @@
+# GLM-5.1-MXFP4 (amd/GLM-5.1-MXFP4) at TP8 with the server flags of SGLang's GLM-5.1 QA
+# test, the ROCM-25630 ticket shape (tilelang DSA prefill/decode, chunked prefill 131072,
+# mem 0.80).  That test is written for zai-org/GLM-5.1-FP8: this is the MXFP4 checkpoint on
+# the QA shape, not the QA model.
+#
+# Source: sgl-project/sglang,
+#   test/registered/amd/accuracy/mi30x/test_glm51_eval_amd.py (last changed 28262c20df),
+#   read at 5cc67dca2b on 2026-10-22 (ww43 glm51_acc 0001_rocm25630_glm51_accuracy).
+#
+# Flags: the "dsa" ModelConfig's other_args verbatim (--tp 8 pinned below, oaka owns the
+#   flag), plus `--device cuda`, which popen_launch_server appends.
+# Env: the test's env_vars (SGLANG_USE_AITER=1) and its CI job's (nightly-test-amd.yml,
+#   "Accuracy Test ROCm (8-GPU GLM-5.1 DSA)", amd_ci_exec.sh): SGLANG_MOE_COPY_WEIGHT_VIEWS_BEFORE_H2D=1,
+#   SGLANG_ENABLE_ASYNC_ASSERT=0.  Not carried over: SGLANG_IS_IN_CI / SGLANG_IS_IN_CI_AMD
+#   and SGLANG_WAIT_PORT_TIMEOUT (harness).
+#
+# Upstream's eval: the test's own run_gsm8k_benchmark (sgl frontend, 5-shot, first 1319
+#   test questions, 512 max tokens, temperature 0, parallel 64); threshold 0.93 (for FP8).
+
+description = "GLM-5.1-MXFP4 at TP8 on the GLM-5.1 QA test's flags (tilelang DSA, chunked prefill 131072, mem 0.80)"
+arch = ["gfx950"]
+model = "/model/GLM-5.1-MXFP4"
+tp = 8
+
+[env]
+SGLANG_USE_AITER = "1"
+SGLANG_MOE_COPY_WEIGHT_VIEWS_BEFORE_H2D = "1"
+SGLANG_ENABLE_ASYNC_ASSERT = "0"
+
+[args]
+trust-remote-code = true
+reasoning-parser = "glm45"
+tool-call-parser = "glm47"
+dsa-prefill-backend = "tilelang"
+dsa-decode-backend = "tilelang"
+chunked-prefill-size = 131072
+mem-fraction-static = 0.80
+model-loader-extra-config = '{"enable_multithread_load": true}'
+watchdog-timeout = 1200
+device = "cuda"

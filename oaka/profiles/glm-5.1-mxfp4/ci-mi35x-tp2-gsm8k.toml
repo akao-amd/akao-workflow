@@ -1,0 +1,46 @@
+# GLM-5.1-MXFP4 (amd/GLM-5.1-MXFP4) on MI355X at TP2: SGLang's MI35x nightly accuracy gate,
+# copied as is, so a GSM8K failure points at the stack, not at the recipe.
+#
+# Source: sgl-project/sglang,
+#   test/registered/amd/accuracy/mi35x/test_glm51_mxfp4_tp2_gsm8k_mi35x.py (last changed
+#   81663cb5f1, "[AMD] [CI] Register MI35x GSM8K nightly tests" #26478), read at 5cc67dca2b
+#   on 2026-10-22 (ww43 glm51_acc 0001_rocm25630_glm51_accuracy, Jira ROCM-25630).
+#
+# Flags: the test's other_args verbatim (--tp 2 aside: pinned below, oaka owns the flag),
+#   plus `--device cuda`, which popen_launch_server appends (auto_config_device() = "cuda"
+#   on ROCm).  --host/--port are the harness's.
+# Env: none in the test; the CI job (.github/workflows/nightly-test-amd.yml,
+#   nightly-2-gpu-mi35x-glm51-mxfp4, via scripts/ci/amd/amd_ci_exec.sh) adds
+#   SGLANG_MOE_COPY_WEIGHT_VIEWS_BEFORE_H2D=1, SGLANG_USE_AITER=1, SGLANG_ENABLE_ASYNC_ASSERT=0
+#   and GPU_ARCHS=gfx950 (mi35x).  Not carried over: SGLANG_IS_IN_CI / SGLANG_IS_IN_CI_AMD
+#   (harness markers: CI weight validation, debug asserts, soft watchdog) and
+#   SGLANG_WAIT_PORT_TIMEOUT=120 (popen_launch_server's port wait).
+#
+# Upstream's eval (not oaka's gsm8k client): sglang.test.run_eval gsm8k, api=completion,
+#   5-shot, all 1314 non-shot test questions, 512 max tokens, temperature 0, 512 threads;
+#   threshold 0.92.
+
+description = "GLM-5.1-MXFP4, MI355X TP2: SGLang's MI35x nightly GSM8K gate recipe (tilelang DSA, fp8 KV)"
+arch = ["gfx950"]
+model = "/model/GLM-5.1-MXFP4"
+tp = 2
+
+[env]
+SGLANG_MOE_COPY_WEIGHT_VIEWS_BEFORE_H2D = "1"
+SGLANG_USE_AITER = "1"
+SGLANG_ENABLE_ASYNC_ASSERT = "0"
+GPU_ARCHS = "gfx950"
+
+[args]
+trust-remote-code = true
+reasoning-parser = "glm45"
+tool-call-parser = "glm47"
+watchdog-timeout = 1200
+mem-fraction-static = 0.85
+kv-cache-dtype = "fp8_e4m3"
+disable-radix-cache = true
+model-loader-extra-config = '{"enable_multithread_load": true, "num_threads": 8}'
+dsa-prefill-backend = "tilelang"
+dsa-decode-backend = "tilelang"
+tokenizer-worker-num = 4
+device = "cuda"
