@@ -1,0 +1,52 @@
+# gpt-oss-120b/base1021-tp2 as prefill-decode disaggregation: one TP2 prefill server and one
+# TP2 decode server, KV moved between them by Mooncake, behind sglang_router on the plan
+# server's port.  Created 2026-10-22 (ww43, console).  A plan gives it 4 GPUs: the first two
+# prefill, the last two decode.
+#
+# Both servers run base1021-tp2's recipe unchanged (inherited via extends: base1021's env,
+# best's flags, tp = 2, --disable-custom-all-reduce).  What [pd] adds is SGLang's standard PD
+# launch, as run by hand in ww43 1021_rocm101_defects (ROCM-29009: DeepSeek-R1-MXFP4 on
+# n10-17, 8x MI355X gfx950, one TP4 prefill on GPUs 0-3 + one TP4 decode on GPUs 4-7, SGLang
+# 5cc67dca2, sglang-router via smg):
+#   prefill  sglang serve ... --disaggregation-mode prefill --disaggregation-transfer-backend
+#            mooncake --disaggregation-bootstrap-port 31998
+#   decode   sglang serve ... --disaggregation-mode decode --disaggregation-transfer-backend
+#            mooncake --mem-fraction-static 0.80
+#   router   python3 -m sglang_router.launch_router --pd-disaggregation
+#            --prefill http://127.0.0.1:31100 31998 --decode http://127.0.0.1:31200
+# with MOONCAKE_PROTOCOL=tcp MC_FORCE_TCP=1.  oaka sets the mode, the ports and the router's
+# servers itself; the rest is below.
+#
+# Deliberately NOT carried over:
+#   --mem-fraction-static 0.80 on decode   There it replaced SGLang's auto-chosen 0.965, which
+#                                          OOMed in R1's decode CUDA-graph capture.  This recipe
+#                                          already pins 0.9 (base), the value it runs at TP1/TP2
+#                                          with graphs; lower it under [pd.decode.args] if the
+#                                          decode server OOMs.
+#
+# Untested as of its creation: not yet run on gfx1250, so neither Mooncake on this image nor
+# the aiter attention backend with page 64 under disaggregation has been seen to work.  The
+# gfx1250 image rocm/sgl-dev:v0.5.22-rocm101-mi45x-20261021 has sglang-router 0.3.2 and mooncake.
+#
+#   MOONCAKE_PROTOCOL = "tcp", MC_FORCE_TCP = "1"
+#       KV over TCP: both servers are on one box, and TCP needs no RDMA device or
+#       --disaggregation-ib-device.  The ww43 run needed it (n10-17 has no RDMA devices).
+#       Over RDMA the transfer is faster; for a PD number meant to compare with a real
+#       deployment, drop these and set the IB device.
+
+description = "gpt-oss-120b W4A8 best gfx1250 recipe for draft-1021 trees, PD: 1 TP2 prefill + 1 TP2 decode (Mooncake over TCP), sglang_router in front"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/base1021-tp2"
+
+[env]
+MOONCAKE_PROTOCOL = "tcp"
+MC_FORCE_TCP = "1"
+
+[args]
+disaggregation-transfer-backend = "mooncake"
+
+[pd.prefill]
+count = 1
+
+[pd.decode]
+count = 1
