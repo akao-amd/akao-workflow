@@ -2,8 +2,9 @@
 # sweep on m12-33 (8x MI355X, gfx950).
 #
 # Same recipe as mi35x-nightly (inherited via extends: SGLang's MI35x nightly flags and env, the
-# openai MXFP4 checkpoint); only the tp pin changes, 1 -> 2.  mi35x-nightly pins tp = 1, so a plan
-# giving it two GPUs is rejected; tp cannot be a plan override, hence this child profile.
+# radix cache off, the openai MXFP4 checkpoint); only the tp pin changes, 1 -> 2.  mi35x-nightly
+# pins tp = 1, so a plan giving it two GPUs is rejected; tp cannot be a plan override, hence this
+# child profile.
 #
 # Upstream runs this recipe at TP8 with SGLang's default all-reduce, so unlike the gfx1250 TP2
 # profiles (gpt-oss-120b/tp2, best-tp2, base1021-tp2) custom all-reduce is NOT disabled here: the

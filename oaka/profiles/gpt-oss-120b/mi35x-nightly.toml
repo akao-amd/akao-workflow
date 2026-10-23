@@ -1,5 +1,6 @@
 # gpt-oss-120b on MI355X (gfx950): SGLang's own MI35x nightly recipe, copied as is, but at TP1
-# (upstream runs it at TP8; `tp = 1` since 2026-10-12, 9848e10).
+# (upstream runs it at TP8; `tp = 1` since 2026-10-12, 9848e10) and with the radix cache off
+# (since 2026-10-23, below).
 #
 # Source: sgl-project/sglang main,
 #   test/registered/amd/perf/mi35x/test_gpt_oss_perf_mi35x.py (last changed d91c3682b0,
@@ -26,6 +27,13 @@
 #   other AITER MXFP4 callers default to interleave, so opt out explicitly."  (The comment
 #   says opt out, the value is 1; kept as upstream ships it.)
 #
+# --disable-radix-cache  (added 2026-10-23, ww43 m12-33 sweep; not in upstream's SERVER_ARGS)
+#   oaka runs each fixed-seq point twice on one server and reports the last run; InferenceX seeds
+#   its prompts, so run 2 sends run 1's prompts again.  With SGLang's default prefix cache on, run 2
+#   skipped >= 99.6 % of its prefill wherever a run's prompts fit in the KV pool: 23 of 30 points
+#   (70000/300 c4-16: 3-4x output tok/s, TTFT ~200 ms vs 2.2-2.8 s; 8192/1024: up to +27 %; 1024/1024:
+#   <= 2 %).  Off, as in gpt-oss-120b/base.  The n10-17 numbers above were measured with it on.
+#
 # Upstream's measurement, for comparison (its client, not oaka's):
 #   bench_one_batch_server via NightlyBenchmarkRunner, batch sizes 1,1,8,16,64 (the leading
 #   1 is a warm-up), ISL 4096 / OSL 512 (NIGHTLY_INPUT_LENS/OUTPUT_LENS), --trust-remote-code.
@@ -48,3 +56,4 @@ attention-backend = "triton"
 chunked-prefill-size = 130172
 max-running-requests = 128
 mem-fraction-static = 0.85
+disable-radix-cache = true
