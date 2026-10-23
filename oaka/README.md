@@ -54,7 +54,7 @@ oaka profile ls | show <p> | diff <a> <b> | save <server> --as <model>/<recipe>
 
 - Output: `logs/`, `results/<NN>_<kind>_<server>/`; a labeled step uses `logs/<label>/` and
   `results/<label>/` (emptied first).  Rerunning overwrites same-named points; `fixed-seq`
-  writes `summary.csv` for the points of that run, one row per point: its last repeat
+  writes `summary.csv` for the points of that run, one row per point: its first run
   (see Plan).  Every repeat's JSON and log stay next to it.
 - Exit codes of `run_all.sh`/`step.sh`: 0 ok, 3 a gate failed (gsm8k score or fixed-seq
   throughput below its minimum), 2 the stack did not install, 1 anything else, 130 Ctrl-C.
@@ -87,9 +87,9 @@ server = "quant"
 isl_osl = [[1024, 1024], [8192, 1024]]
 conc = [4, 8, 16, 32, 64]
 range_ratio = 0.8
-repeats = 2                # default; the last run is the point's number (see below)
+repeats = 1                # default; the first run is the point's number (see below)
 # off_spec = { prompts_per_conc = 4 }   # results get OFFSPEC in their names
-# min_output_tok_s = 3000  # gate: each point's output tok/s (its last repeat) must reach it
+# min_output_tok_s = 3000  # gate: each point's output tok/s (its first run) must reach it
 # lockstep = "pair"        # run with the other fixed-seq clients named "pair" (see below)
 
 [[client]]
@@ -108,12 +108,13 @@ The client policy is fixed; the plan only picks what is meant to vary:
 - `fixed-seq` runs InferenceX's own `python3 -m infx.bench fixed-seq point` (backend `vllm`,
   tokenizer = model path, model = the served name; 10 prompts per concurrency).  Warmups,
   `--ignore-eos`, request rate and percentiles are InferenceX's.  Each point runs `repeats`
-  times (default 2) back to back on the same server, and **the last run is the point's
-  number**: `summary.csv`, the gate and `compare.csv` take it, never an average or median
-  of the runs.  The first run of a point compiles the kernels of its batch shapes on a
-  server that starts on empty caches (ww43 h13-17: 14-44% slower at conc 4, still 1-21% at
-  conc 8-32), and InferenceX's warmups do not reach those shapes.  With `repeats = 1` the
-  number is that cold run.
+  times (default 1) back to back on the same server, and **the first run is the point's
+  number**: `summary.csv`, the gate and `compare.csv` take it, never a later run, an average
+  or a median.  It is the window InferenceX publishes (one scored burst after its in-client
+  warmup, a full prefill), the same workload on every box.  A later run is raw data only, and
+  not one comparable measurement: with SGLang's prefix (radix) cache on it re-sends run 1's
+  seeded prompts and skips most of their prefill (ww43 m12-33: up to 4x at 70000/300); with
+  the cache off it runs on kernels run 1 compiled (ww43 h13-17: 14-44% faster at conc 4).
 - `gsm8k` runs `sgl-eval run gsm8k` with temperature 1.0, top-p 1.0, seed 42, 8192 max
   tokens, 64 threads.
 
@@ -125,7 +126,7 @@ in `logs/lockstep_<name>/` for the others; a fast server idles until the slow on
 ends).  They need the same `isl_osl`, `conc` and `repeats`, one client per server.  When
 one fails, the others stop before their next run.  Each client keeps its own results and
 `summary.csv`, and `step.sh` adds `results/lockstep_<name>/summary.csv`: per point the
-row of the slowest server (lowest output tok/s of its last run), the number each server of
+row of the slowest server (lowest output tok/s of its first run), the number each server of
 the lockstep can be counted on for.  Run by hand, a client script does not wait.
 
 A `trace` client captures SGLang GPU traces (Chrome/Perfetto, one file per TP rank) of each

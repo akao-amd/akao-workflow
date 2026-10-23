@@ -6,11 +6,11 @@
 # warmups, --ignore-eos, request rate and percentiles are not set here and must not be.
 # This script only chooses the points: ISL/OSL, concurrency, range ratio {{ range_ratio }},
 # {{ prompts_per_conc }} prompts per unit of concurrency{% if offspec %} (OFF-SPEC: InferenceX uses {{ spec_prompts_per_conc }}){% endif %}.
-# Each point runs {{ repeats }} time(s) on the same server; the last run is the point's number
-# (summary.csv{% if min_tok_s %}, the gate{% endif %}): the earlier ones warm the server's kernels.  Every run's
+# Each point runs {{ repeats }} time(s) on the same server; the first run is the point's number
+# (summary.csv{% if min_tok_s %}, the gate{% endif %}): later ones are raw data only.  Every run's
 # JSON and log stay in the results dir, and every run is printed below.
 {% if min_tok_s %}
-# Gate: exits 3 when a point's output tok/s (its last run) is below {{ min_tok_s }}.
+# Gate: exits 3 when a point's output tok/s (its first run) is below {{ min_tok_s }}.
 {% endif %}
 #
 # Needs the server running ({{ starts }}).
@@ -89,12 +89,12 @@ for point in "${POINTS[@]}"; do
     done
 done
 
-# Every run printed; summary.csv keeps one row per point: its last run.
+# Every run printed; summary.csv keeps one row per point: its first run.
 python3 - "$OUT" {{ min_tok_s or "-" }} "${DONE[@]}" <<'PY'
 import csv, json, os, re, sys
 out, floor, names = sys.argv[1], sys.argv[2], sys.argv[3:]
 cols = ["file", "isl", "osl", "conc", "output_tok_s", "total_tok_s", "mean_ttft_ms", "mean_tpot_ms", "completed"]
-rows, last = [], {}
+rows, first = [], {}
 for name in names:
     path = os.path.join(out, name + ".json")
     m = re.search(r"_isl(\d+)_osl(\d+)_c(\d+)_r(\d+)", name)
@@ -106,11 +106,11 @@ for name in names:
     ]
     rows.append(row)
     point = tuple(row[1:4])
-    if point not in last or int(m[4]) > last[point][0]:
-        last[point] = (int(m[4]), row)
+    if point not in first or int(m[4]) < first[point][0]:
+        first[point] = (int(m[4]), row)
 key = lambda row: (row[1], row[2], row[3], row[0])
 rows.sort(key=key)
-kept = sorted((row for _, row in last.values()), key=key)
+kept = sorted((row for _, row in first.values()), key=key)
 with open(os.path.join(out, "summary.csv"), "w", newline="") as f:
     csv.writer(f).writerows([cols] + kept)
 print(f"{'result':<44} {'conc':>5} {'out tok/s':>10} {'ttft ms':>9} {'tpot ms':>8}")
@@ -118,7 +118,7 @@ fmt = lambda v, p: f"{v:.{p}f}" if isinstance(v, (int, float)) else "NA"
 for row in rows:
     mark = "  <- summary" if any(row is k for k in kept) and len(rows) > len(kept) else ""
     print(f"{row[0]:<44} {row[3]!s:>5} {fmt(row[4], 1):>10} {fmt(row[6], 1):>9} {fmt(row[7], 2):>8}{mark}")
-print(f"summary (each point's last run): {os.path.join(out, 'summary.csv')}")
+print(f"summary (each point's first run): {os.path.join(out, 'summary.csv')}")
 if floor != "-":
     low = 0
     for row in kept:

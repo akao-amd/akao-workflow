@@ -107,16 +107,16 @@ Where the how lives: worker reference (commands, plan and profile fields)
   one `SGLANG_CACHE_DIR`: TP1x2, run after TP1, reused its kernels and beat it by 26% at
   8k/1k c4, which no TP1x2 can do.  Cold for all is the comparable state; warm is a choice
   the plan makes visibly.
-- **A fixed-seq point runs twice by default, and its number is the last run**, not a mean or
-  median of the runs (the earlier ones stay in the results as raw data).  Why: on empty
-  caches a point's first run compiles the kernels of its batch shapes while measured, and
-  InferenceX's single-prompt warmups do not reach them; in ww43 (h13-17, gpt-oss-120b, three
-  layouts) run 1 was 14-44% below run 2 at conc 4 and 1-21% at conc 8-32, so a median of two
-  mixed a cold run into every number, and single-run 70000/300 points were all cold.  Each
-  server still starts empty, so every server warms itself alike.  The user's norm (10-22):
-  repeats 2 regardless of shape and layout, report run 2.  A lockstep (TP1x2: two TP1 servers
-  measured under each other's load) reports per point its slowest server's run 2
-  (`results/lockstep_<name>/summary.csv`), not their sum or mean: the user's norm, the same day.
+- **A fixed-seq point runs once by default, and its number is its first run** (`repeats` > 1
+  keeps later runs in the results as raw data only; never an average or median).  Why (the
+  user's norm, 10-23): run 1 is the window InferenceX publishes, one scored burst after its
+  in-client warmup with a full prefill, the same workload on every box.  A later run is not
+  one measurement across settings: with SGLang's prefix cache on it re-sends run 1's seeded
+  prompts and skips their prefill (ww43 m12-33, MI355X: 23 of 30 points, 70000/300 3-4x), with
+  it off it is a warmer compile (ww43 h13-17: 14-44% faster at conc 4).  Replaces the 10-22
+  norm (repeats 2, report run 2), which that cache made incomparable.  A lockstep (TP1x2: two
+  TP1 servers measured under each other's load) reports per point its slowest server's run 1
+  (`results/lockstep_<name>/summary.csv`), not their sum or mean.
 - **Profiles are named `<model>/<recipe>` (`<model>` alone = `<model>/base`), `<model>` being
   the model family as the user names it; the GPU arch is a multiple-choice field in the
   file, not part of the name.**  Recipes overlay one another (`extends`; `false` removes),

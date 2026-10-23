@@ -122,12 +122,12 @@ pub enum ClientSpec {
         conc: Vec<u32>,
         #[serde(default = "default_range_ratio")]
         range_ratio: f64,
-        /// Runs per point on the same server; the last one is the point's number (summary.csv,
-        /// the gate, compare.csv), the earlier ones warm the server's kernels for it.
+        /// Runs per point on the same server; the first one is the point's number (summary.csv,
+        /// the gate, compare.csv), later ones stay in the results as raw data only.
         #[serde(default = "default_repeats")]
         repeats: u32,
         off_spec: Option<OffSpec>,
-        /// Gate: every point's output tok/s (its last repeat) must reach this.
+        /// Gate: every point's output tok/s (its first run) must reach this.
         min_output_tok_s: Option<f64>,
         /// Clients with the same name run at the same time, each run of each point started
         /// together (servers measured under each other's load).
@@ -160,10 +160,11 @@ fn default_min_score() -> f64 {
 fn default_range_ratio() -> f64 {
     0.8
 }
-/// Two: the first run of a point compiles the kernels of its batch shapes on a cold server
-/// (ww43 h13-17: 14-44% slower at conc 4), so the second is the number.
+/// One: a point's first run is its number, the window InferenceX publishes (one scored burst
+/// after its in-client warmup, a full prefill), the same workload on every box.  A later run
+/// is not: with a prefix cache on it re-sends run 1's seeded prompts and skips their prefill.
 fn default_repeats() -> u32 {
-    2
+    1
 }
 
 pub const PROMPTS_PER_CONC: u32 = 10;
@@ -911,7 +912,7 @@ server = "a"
         match &c.plan.clients[0] {
             ClientSpec::FixedSeq {
                 range_ratio, repeats, ..
-            } => assert_eq!((*range_ratio, *repeats), (0.8, 2)),
+            } => assert_eq!((*range_ratio, *repeats), (0.8, 1)),
             _ => panic!(),
         }
         fs::remove_dir_all(dir).unwrap();

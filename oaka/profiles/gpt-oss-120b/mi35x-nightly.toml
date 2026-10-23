@@ -28,9 +28,9 @@
 #   says opt out, the value is 1; kept as upstream ships it.)
 #
 # --disable-radix-cache  (added 2026-10-23, ww43 m12-33 sweep; not in upstream's SERVER_ARGS)
-#   oaka runs each fixed-seq point twice on one server and reports the last run; InferenceX seeds
-#   its prompts, so run 2 sends run 1's prompts again.  With SGLang's default prefix cache on, run 2
-#   skipped >= 99.6 % of its prefill wherever a run's prompts fit in the KV pool: 23 of 30 points
+#   oaka then ran each fixed-seq point twice on one server and reported the last run; InferenceX
+#   seeds its prompts, so run 2 sent run 1's prompts again.  With SGLang's default prefix cache
+#   on, run 2 skipped >= 99.6 % of its prefill wherever a run's prompts fit in the KV pool: 23 of 30 points
 #   (70000/300 c4-16: 3-4x output tok/s, TTFT ~200 ms vs 2.2-2.8 s; 8192/1024: up to +27 %; 1024/1024:
 #   <= 2 %).  Off, as in gpt-oss-120b/base.  The n10-17 numbers above were measured with it on.
 #

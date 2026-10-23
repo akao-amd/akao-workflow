@@ -33,11 +33,12 @@ read an A-B-A, the bisect journey). The rules that are yours to keep:
 - **The InferenceX client policy is fixed.** Anything beyond ISL/OSL, concurrency, range
   ratio and repeats goes through `off_spec` (results marked `OFFSPEC`); never call
   `bench_serving` yourself.
-- **A fixed-seq point's number is its last repeat** (`summary.csv`). Keep `repeats` at its
-  default 2 for every shape and layout, however long the point (the user's norm), and report
-  run 2: never an average or median of the runs. Run 1 compiles kernels while measured; it
-  stays in the results as raw data, quoted only to show that gap. A lockstep (TP1x2) point's
-  number is its slowest server's run 2: `results/lockstep_<name>/summary.csv`.
+- **A fixed-seq point's number is its first run** (`summary.csv`; the user's norm since
+  10-23). Keep `repeats` at its default 1 unless a brief asks for more; later runs are raw
+  data only, never the number, an average or a median (with a prefix cache on, run 2 skips
+  its prefill). Check that run 1 itself took no prefill from a cache (`#cached-token` in the
+  server log). A lockstep (TP1x2) point's number is its slowest server's run 1:
+  `results/lockstep_<name>/summary.csv`.
 - **Read `oaka check --json` and `oaka doctor --json`**, not their wording. Something
   environmental fails? `oaka doctor` names the missing piece and its fix.
 - **A profile names its server** (`engine`: SGLang, vllm or ATOM). An image may have only

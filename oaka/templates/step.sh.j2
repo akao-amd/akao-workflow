@@ -158,7 +158,7 @@ run_client() {
 }
 
 # lockstep_summary <name> <script>...: results/lockstep_<name>/summary.csv, one row per point:
-# the worst server's (lowest output tok/s) of the clients' summary rows, each a point's last
+# the worst server's (lowest output tok/s) of the clients' summary rows, each a point's first
 # run.  The servers ran each point at the same time, so the slowest is what each of them can
 # be counted on for.  Written when every client has its summary.csv.
 lockstep_summary() {
