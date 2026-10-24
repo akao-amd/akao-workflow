@@ -141,7 +141,9 @@ AGENTS.md             -> CLAUDE.md
 skills/<name>/        role manuals (controller, worker) and bring-codex-back; read in place
                       from $AKAO_REPO_ROOT, which init clones into every worker
 utils/                agent.sh (claude + codex via the AMD gateway), install_gh.sh (init step 9
-                      runs both from the worker's clone), controller/Dockerfile (console image),
+                      runs both from the worker's clone), agent_greenhouse.sh (agent.sh on the ARM64
+                      GB300 trays, which cannot resolve the gateway: tunnelled from the console),
+                      controller/Dockerfile (console image),
                       ssh (the PATH wrapper docker's ssh transport goes through; see Design notes)
 TEST.md               test layers: cargo test, real GPU smoke, environment doctors
 .githooks/post-commit builds akao (release) and a static oaka into oaka/bin

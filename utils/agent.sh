@@ -166,28 +166,6 @@ ensure_node() {
     print_success "Node.js $(node --version) and npm $(npm --version) are ready."
 }
 
-ensure_jq() {
-    if command -v jq >/dev/null 2>&1; then
-        return 0
-    fi
-
-    print_warning "jq not found; attempting to install..."
-    # sudo only when not root: worker images run as root and some ship no sudo.
-    local S=()
-    [[ "$(id -u)" -eq 0 ]] || S=(sudo)
-    if command -v apt-get >/dev/null 2>&1; then
-        "${S[@]}" env DEBIAN_FRONTEND=noninteractive apt-get update -qq
-        "${S[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq jq
-    elif command -v yum >/dev/null 2>&1; then
-        "${S[@]}" yum install -y jq
-    elif command -v dnf >/dev/null 2>&1; then
-        "${S[@]}" dnf install -y jq
-    else
-        print_error "jq is required to configure Claude Code. Please install jq and re-run."
-        exit 1
-    fi
-}
-
 setup_npm_project() {
     print_info "Preparing npm project in ${INSTALL_DIR}..."
     mkdir -p "$INSTALL_DIR"
@@ -255,11 +233,17 @@ setup_codex_model_catalog() {
     # gpt-5-codex-2025-09-15"), while the gpt-6.x deployments accept it, so the
     # built-in entries stay as they are.
 
-    local codex_bin="${INSTALL_DIR}/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+    # npm installs the platform's package only: codex-linux-x64 or, on ARM64 (GB300), codex-linux-arm64.
+    local npm_arch triple
+    case "$(uname -m)" in
+        aarch64|arm64) npm_arch=arm64; triple=aarch64-unknown-linux-musl ;;
+        *)             npm_arch=x64;   triple=x86_64-unknown-linux-musl ;;
+    esac
+    local codex_bin="${INSTALL_DIR}/node_modules/@openai/codex-linux-${npm_arch}/vendor/${triple}/bin/codex"
     local catalog_file="$HOME/.codex/model_catalog.json"
 
     if [[ ! -f "$codex_bin" ]]; then
-        print_warning "Codex binary not found; skipping model catalog generation."
+        print_warning "Codex binary not found at ${codex_bin}; skipping model catalog generation."
         return 1
     fi
 
@@ -451,43 +435,23 @@ EOF
 
 setup_claude_config() {
     print_info "Configuring Claude Code onboarding bypass..."
-    ensure_jq
-
+    # node, not jq: ensure_node has run, while jq would need the package manager, which some
+    # images cannot reach (the GB300 trays block port 80, where their containers' apt goes).
     local claude_config="$HOME/.claude.json"
-    if [[ ! -f "$claude_config" ]]; then
-        echo '{}' > "$claude_config"
-    fi
-
-    jq '
-      . + {"hasCompletedOnboarding": true} +
-      {
-        "customApiKeyResponses": (
-          if has("customApiKeyResponses") then
-            .customApiKeyResponses + {
-              "approved": (
-                if .customApiKeyResponses | has("approved") then
-                  (.customApiKeyResponses.approved + ["dummy"]) | unique
-                else
-                  ["dummy"]
-                end
-              ),
-              "rejected": (
-                if .customApiKeyResponses | has("rejected") then
-                  .customApiKeyResponses.rejected
-                else
-                  []
-                end
-              )
-            }
-          else
-            {
-              "approved": ["dummy"],
-              "rejected": []
-            }
-          end
-        )
-      }
-    ' "$claude_config" > "${claude_config}.tmp" && mv "${claude_config}.tmp" "$claude_config"
+    node - "$claude_config" <<'JSEOF'
+const fs = require('fs');
+const path = process.argv[2];
+const c = fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, 'utf8')) : {};
+const r = c.customApiKeyResponses || {};
+c.hasCompletedOnboarding = true;
+c.customApiKeyResponses = {
+  ...r,
+  approved: [...new Set([...(r.approved || []), 'dummy'])].sort(),
+  rejected: r.rejected || [],
+};
+fs.writeFileSync(path + '.tmp', JSON.stringify(c, null, 2) + '\n');
+fs.renameSync(path + '.tmp', path);
+JSEOF
 
     print_success "Claude config: $claude_config"
 }
@@ -527,7 +491,7 @@ if [[ -s "\$NVM_DIR/nvm.sh" ]]; then
 fi
 export ANTHROPIC_API_KEY="dummy"
 export ANTHROPIC_BASE_URL="https://llm-api.amd.com/Anthropic"
-export ANTHROPIC_CUSTOM_HEADERS="Ocp-Apim-Subscription-Key: \${AMD_LLM_API_KEY}"
+export ANTHROPIC_CUSTOM_HEADERS="Ocp-Apim-Subscription-Key: \${AMD_LLM_API_KEY:-}"
 export ANTHROPIC_MODEL="\${ANTHROPIC_MODEL:-claude-opus-5.5}"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="claude-sonnet-4.5"
 export ANTHROPIC_DEFAULT_OPUS_MODEL="claude-opus-5.5"

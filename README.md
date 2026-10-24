@@ -85,7 +85,9 @@ image, per host or global.  An existing `akao_<name>` must run that image (else 
 and names the one it runs):
 
 1. resolve the nick through `ssh -G`, tell AMD (`/dev/kfd`) from NVIDIA (`/dev/nvidiactl`)
-   GPUs (NVIDIA: launch only, init stops after step 6), and reach the box's docker; if `akao_<name>` already
+   GPUs (NVIDIA: launch only, init stops after step 6; on the ARM64 GB300 trays the agent comes
+   from `utils/agent_greenhouse.sh install <nick> akao_<name>`, the AMD gateway tunnelled from
+   the console by `utils/agent_greenhouse.sh tunnel <nick>`), and reach the box's docker; if `akao_<name>` already
    exists, it keeps its image and artifact root, and must mount `/<year>` and `/root` from
    where hosts.tsv says (a request it cannot satisfy fails here, before the host is touched)
 2. create the artifact root under `<host_home>` and `<host_home>/container_home` on the host

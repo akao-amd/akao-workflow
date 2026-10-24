@@ -70,7 +70,13 @@ tmux new-window -d -e "AKAO_CONFIG_ROOT=$AKAO_CONFIG_ROOT" -n <name> \
   oaka's README and library) outside its working directory; without it, the first read stops
   at a "read outside the working directories?" prompt.
 
-It starts in the worker's working directory, so the same command with `claude --resume`
+A worker on a GB300 tray (NVIDIA, ARM64: init only launches it) has no `claude` until
+`$AKAO_REPO_ROOT/utils/agent_greenhouse.sh install <nick> akao_<name>`, and the trays reach
+the AMD gateway only through the console: keep `agent_greenhouse.sh tunnel <nick>...` running
+in a window of your own (`-e AKAO_CONFIG_ROOT=...` as above). `agent_greenhouse.sh check
+<nick> [akao_<name>]` says whether the route answers.
+
+The window's `claude` starts in the worker's working directory, so the same command with `claude --resume`
 reopens that directory's conversations after the window is gone. `/exit` ends the agent and
 the window; nothing keeps running in the container. (`akao init` also starts a `claude` in
 the worker's own tmux, for the user working on the box itself; yours is a separate one.)
