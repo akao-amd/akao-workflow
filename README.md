@@ -233,7 +233,7 @@ e.g. one exporting another `HOME` on a shared account): `ssh <nick>` keeps it, b
 calls and docker's transport (through the `utils/ssh` wrapper) turn it off, since ssh refuses
 a command alongside it.  They use `host_home` from hosts.tsv, never the login's `HOME`.
 
-## Briefing workers: `akao task`, `akao open`
+## Briefing and retiring workers: `akao task`, `akao open`, `akao rm`
 
 What a controller does around a worker, each one command (the practice around them:
 `skills/controller/SKILL.md`):
@@ -241,6 +241,7 @@ What a controller does around a worker, each one command (the practice around th
 ```bash
 akao task h13-16 base1021_pd two_tp2_bench --brief brief.md   # -> /2026/ww43/base1021_pd/0002_two_tp2_bench/BRIEF.md
 akao open h13-16 base1021_pd --cwd /2026/ww43/base1021_pd/0002_two_tp2_bench
+akao rm h13-16 base1021_pd                                     # stop and remove akao_base1021_pd
 ```
 
 - **`akao task <nick> <name> <desc> [--brief <file>] [--number NNNN]`** makes the worker's next
@@ -256,6 +257,15 @@ akao open h13-16 base1021_pd --cwd /2026/ww43/base1021_pd/0002_two_tp2_bench
   wrapper reads akao's ssh config through it).  The worker must be running; a window of that
   name refuses.  `--continue` resumes the directory's latest conversation, `--resume <id>` a
   given one.  The agent's trust dialog and the first message are the controller's.
+- **`akao rm <nick> <name>... [--home]`** stops and removes `akao_<name>` (by its id; `stop -t
+  30`, then `rm` unless `--rm` already removed it; a paused one `rm -f`), and waits until
+  docker no longer lists it.  An absent container is reported, not an error; one name failing
+  does not stop the others (the command fails at the end).  Artifact roots under `/<year>`
+  stay.  `--home` also removes `<host_home>/container_home/akao_<name>` — the worker's clone,
+  tools and agent history — unless some container on the box mounts it (or a dir above or
+  below it). The console's tmux windows are left alone; their `docker exec` ends with the
+  container, and tmux may retain a dead pane.
+
 ## Deploying a controller
 
 A controller is an agent (claude) that drives workers through akao: it runs `akao`, opens

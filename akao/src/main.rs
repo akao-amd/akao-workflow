@@ -5,6 +5,7 @@ mod exec;
 mod init;
 mod mirror;
 mod open;
+mod rm;
 mod state;
 mod task;
 
@@ -63,6 +64,24 @@ enum Cmd {
         image: Option<String>,
         #[command(flatten)]
         flags: InitFlags,
+    },
+    /// Retire workers: stop and remove akao_<name>... on a box (their artifact roots stay)
+    ///
+    /// An absent container is reported, not an error. The console's tmux windows are left
+    /// alone; their `docker exec` ends with the container.
+    Rm {
+        /// Host nick (a row in hosts.tsv)
+        nick: String,
+        /// Container names, without the akao_ prefix
+        #[arg(required = true)]
+        names: Vec<String>,
+        /// Also remove their container homes (<host_home>/container_home/akao_<name>), including
+        /// the worker's clone, tools and agent history, unless a container still mounts one
+        #[arg(long)]
+        home: bool,
+        /// Print the commands that would change anything instead of running them
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Make a worker's next task dir <root>/<NNNN>_<desc>, optionally with a brief in it
     ///
@@ -242,6 +261,15 @@ fn run(cli: Cli) -> Result<()> {
             let runner = exec::Runner::new(flags.dry_run)?;
             init::run(&state, &runner, &flags.options(nick, name, image))?;
             Ok(())
+        }
+        Cmd::Rm {
+            nick,
+            names,
+            home,
+            dry_run,
+        } => {
+            let runner = exec::Runner::new(dry_run)?;
+            rm::run(&state, &runner, &rm::Options { nick, names, home })
         }
         Cmd::Task {
             nick,

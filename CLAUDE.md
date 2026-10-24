@@ -163,6 +163,7 @@ akao/
     cp.rs             `akao cp`  — cross-host path copy via tar | ssh
     task.rs           `akao task` — a worker's next numbered task dir, with its BRIEF.md
     open.rs           `akao open` — the worker's claude in a window of the console's tmux
+    rm.rs             `akao rm`  — retire workers: stop, remove, wait; --home
     doctor.rs         `akao doctor` — console prerequisites (ssh wrapper, state, deploy,
                       controller: artifact root, tmux, claude, InferenceX clone)
   tests/cp.rs         akao cp between two scratch boxes (homes in a sandbox), stand-in ssh run locally
@@ -384,14 +385,15 @@ Each side is wrapped in `ssh nick -- sh -c '...'` when remote, or `sh -c '...'` 
 Write side uses `ESCALATE` (sudo -n) on remote; local writes run without sudo (we are root
 in the container).
 
-### task.rs, open.rs — around a worker
+### task.rs, open.rs, rm.rs — around a worker
 
 Each reaches the box's docker as `docker -H ssh://<nick>` (as init's step 1: no context
-needed, the console's current one never changed). `task` reads the root inside the
+needed, the console's current one never changed).  `task` reads the root inside the
 container and checks the number next to its `mkdir` (best effort: one controller drives a
-worker; no lock).
-`open` builds one shell command for `tmux new-window` (`window_command`;
-`$AKAO_REPO_ROOT` stays for the worker's shell) and passes `-e AKAO_CONFIG_ROOT`.
+worker; no lock).  `open` builds one shell command for `tmux new-window` (`window_command`;
+`$AKAO_REPO_ROOT` stays for the worker's shell) and passes `-e AKAO_CONFIG_ROOT`.  `rm` works
+by container id, treats a failed stop/rm as a possible race with `--rm` until `ps -a` proves
+the container gone, and removes a home only after a census of every container's bind mounts.
 
 ## Design notes
 
