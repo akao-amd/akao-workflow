@@ -203,11 +203,14 @@ dir.  A destination of `nick:` alone, with no path, does exactly that:
 akao cp h21-5:ww42/a0/0003_baseline f19-17:   # -> f19-17:ww42/a0/0003_baseline
 akao cp h21-5:ww42/a0 f19-17:                 # -> f19-17:ww42/a0, beside f19-17's own roots
 akao cp /2026/ww42/a0/0003_baseline f19-17:   # from this machine's /2026 superset, likewise
+akao cp h21-5:ww42/a0/0003_baseline :         # -> /2026/ww42/a0/0003_baseline on this machine
 akao cp n10-17:ww42/hello/0001_probe /tmp/    # -> /tmp/0001_probe on this machine
 ```
 
 A worker `b0` on f19-17 then reads it at `../a0/...` from its root.  `nick:` refuses a local
-source outside `/<year>/` and the source's own box (it is already there).
+source outside `/<year>/` and the source's own box (it is already there).  `:` alone is this
+machine: a box's results come back to the same path in the console's `/<year>` superset (a
+remote source only).
 
 - An address is `nick:rel-path`, relative to that box's `<host_home>/<year>`, or a bare path
   (no colon) on this machine.  An explicit path is taken as given, `..` included; one that
@@ -217,9 +220,6 @@ source outside `/<year>/` and the source's own box (it is already there).
   created if missing.  Files are overwritten; nothing is deleted (merge, never mirror).
 - `tar | ssh tar`; written files are owned root:root, through `sudo -n` on a box whose ssh
   login is not root (without passwordless sudo: as the login, owned by it).  `--dry-run` prints the commands only.
-
-`$AKAO_SSH` overrides the ssh command akao uses (e.g. `ssh -F ~/.ssh/other_config`); docker's
-own ssh transport for the context still uses plain `ssh`.
 
 akao's ssh gives up on a box that does not answer: `-o ConnectTimeout=10 -o
 ServerAliveInterval=15 -o ServerAliveCountMax=4` (a connection in 10 s, keepalives answered

@@ -373,7 +373,7 @@ Row ids arrive as strings, numbers as either (`dashboard::n`).  Mid-2026 trees k
 The user rsyncs every box's `/<year>` into one superset, so a copy should keep its source
 path: a destination of `nick:` alone does (`same_path_parent`: the source's parent; a local
 source must lie under `/<year>/`; the source's own box is refused, tar would read what it
-overwrites).  That is the normal form; keep the texts (README, `--help`, controller skill)
+overwrites), and `:` alone does on this machine (`/<year>/<parent>`, remote sources only).  That is the normal form; keep the texts (README, `--help`, controller skill)
 leading with it.  An explicit path, `..` included, is passed through as given.
 
 **Implementation**: `tar -C <src-parent> -czf - <src-base>  |  tar --owner=0 --group=0 -xzf - -C <dst>`.

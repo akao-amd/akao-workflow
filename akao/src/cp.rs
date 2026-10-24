@@ -9,7 +9,8 @@
 //!
 //! A destination of `nick:` (no path) keeps the source's path: it becomes the source's
 //! parent (`same_path_parent`), so the boxes' trees still merge when the user rsyncs them
-//! together.  An explicit path is taken as given, `..` included.
+//! together.  `:` alone does the same on this machine (`/<year>/<parent>`), for a remote
+//! source.  An explicit path is taken as given, `..` included.
 //!
 //! Implementation: `tar -C <src-parent> -czf - <src-base>  |  tar -xzf - -C <dst>`,
 //! where each side is wrapped in `ssh nick -- sh -c '...'` when remote.
@@ -103,7 +104,18 @@ pub fn run(state: &State, r: &Runner, src_str: &str, dst_str: &str) -> Result<()
     let mut dst = Addr::parse(dst_str);
 
     let same_path = dst.nick.is_some() && dst.rel.is_empty();
-    if same_path {
+    if dst_str == ":" {
+        // `:` alone: this machine, at the source's path under its /<year> (the superset).
+        if src.nick.is_none() {
+            bail!("{src_str} is already on this machine; `:` brings a box's path here");
+        }
+        let year = state::work_year();
+        let parent = same_path_parent(&src, &year)?;
+        dst = Addr {
+            nick: None,
+            rel: format!("/{year}/{parent}").trim_end_matches('/').to_string(),
+        };
+    } else if same_path {
         if dst.nick == src.nick {
             bail!("{src_str} is already at that path on {}", dst_str.trim_end_matches(':'));
         }

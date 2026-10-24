@@ -35,12 +35,15 @@ enum Cmd {
     ///
     ///   akao cp h21-5:ww42/a0 f19-17:             # -> f19-17:ww42/a0
     ///
+    ///   akao cp h21-5:ww42/a0/0003_x :            # -> /<year>/ww42/a0/0003_x on this machine
+    ///
     /// A local source must then lie under /<year>/.  An explicit destination path is taken as
     /// given (`..` included); the copy lands inside it.
     Cp {
         /// Source address: `nick:rel-path` or a local path
         src: String,
-        /// Destination address: `nick:` (the source's path), `nick:rel-path` or a local path
+        /// Destination address: `nick:` (the source's path), `:` (the source's path on this
+        /// machine), `nick:rel-path` or a local path
         dst: String,
         /// Print the commands without running them
         #[arg(long)]
