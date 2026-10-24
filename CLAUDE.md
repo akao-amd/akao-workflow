@@ -233,7 +233,7 @@ pub fn show(argv: &[String])     // shell-quote an argv for display
 
 impl Runner {
     pub fn new(dry_run: bool) -> Result<Runner>
-    //   reads $AKAO_SSH (verbatim) or builds "ssh [-F <config>]"
+    //   reads $AKAO_SSH (verbatim) or builds "ssh <FAIL_FAST> [-F <config>]"
     pub fn ssh_argv(&self, nick, script) -> Vec<String>
     //   wraps `sh -c '<script>'` for ssh; display() pretty-prints as [nick] <script>
     pub fn run(argv)    // mutating; skipped under --dry-run
@@ -244,7 +244,11 @@ impl Runner {
 ```
 
 **ssh -F**: `Runner::new()` appends `-F $AKAO_CONFIG_ROOT/.ssh/config` to the default
-`ssh` when that file exists.  `AKAO_SSH` overrides the whole command (including -F).
+`ssh` when that file exists, after `FAIL_FAST` (connect timeout and keepalives: a dead box
+fails a command instead of hanging it; no BatchMode, a login may need a password).
+`AKAO_SSH` overrides the whole command (including -F).  Docker's own transport (the `ssh`
+wrapper, Design notes) does not get `FAIL_FAST` yet: that needs `akao doctor`'s wrapper check
+reworked (it compares `ssh -G` output) and a way to refresh installed copies.
 
 ### state.rs — `State` and `Host`
 

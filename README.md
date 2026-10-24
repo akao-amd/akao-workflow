@@ -218,6 +218,13 @@ source outside `/<year>/` and the source's own box (it is already there).
 `$AKAO_SSH` overrides the ssh command akao uses (e.g. `ssh -F ~/.ssh/other_config`); docker's
 own ssh transport for the context still uses plain `ssh`.
 
+akao's ssh gives up on a box that does not answer: `-o ConnectTimeout=10 -o
+ServerAliveInterval=15 -o ServerAliveCountMax=4` (a connection in 10 s, keepalives answered
+within a minute; a command may still run as long as it needs). These command-line defaults
+override per-host SSH config. `$AKAO_SSH` overrides the
+ssh command akao uses, these options included (e.g. `ssh -F ~/.ssh/other_config`); docker's
+own ssh transport for the context still uses plain `ssh` through the wrapper, without them.
+
 A host entry in akao's ssh config may be a login shell (`RemoteCommand`, `RequestTTY force`,
 e.g. one exporting another `HOME` on a shared account): `ssh <nick>` keeps it, but akao's
 calls and docker's transport (through the `utils/ssh` wrapper) turn it off, since ssh refuses

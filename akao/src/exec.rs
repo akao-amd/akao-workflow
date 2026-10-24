@@ -23,9 +23,23 @@ pub fn q(s: &str) -> String {
 /// from hosts.tsv (host_home).
 pub const NO_LOGIN_SHELL: [&str; 4] = ["-o", "RemoteCommand=none", "-o", "RequestTTY=no"];
 
+/// The default ssh gives up on a box that does not answer (sshd restarted, network gone)
+/// instead of hanging: no connection in 10 s, or no answer to keepalives for a minute (a long
+/// `akao cp` survives a blip).  It bounds connecting and dead connections, not how long a
+/// command may run.  Given on the command line, these beat the host's own ssh config.  Not
+/// BatchMode: a login may need a password typed by hand.  $AKAO_SSH replaces it all.
+pub const FAIL_FAST: [&str; 6] = [
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=4",
+];
+
 pub struct Runner {
     pub dry_run: bool,
-    /// ssh argv prefix, from $AKAO_SSH (default "ssh").
+    /// ssh argv prefix, from $AKAO_SSH (default "ssh" with FAIL_FAST and akao's -F).
     ssh: Vec<String>,
 }
 
@@ -42,12 +56,13 @@ fn command(argv: &[String]) -> Command {
 impl Runner {
     pub fn new(dry_run: bool) -> Result<Runner> {
         // If the caller has set AKAO_SSH, use it verbatim (they own the -F too).
-        // Otherwise build "ssh [-F <config>]" from the default, adding -F when
+        // Otherwise build "ssh <FAIL_FAST> [-F <config>]" from the default, adding -F when
         // $AKAO_CONFIG_ROOT/.ssh/config exists.
         let ssh = match std::env::var("AKAO_SSH") {
             Ok(s) if !s.trim().is_empty() => shlex::split(&s).context("cannot parse $AKAO_SSH")?,
             _ => {
                 let mut base = vec!["ssh".to_string()];
+                base.extend(FAIL_FAST.map(String::from));
                 if let Ok(root) = std::env::var("AKAO_CONFIG_ROOT") {
                     let cfg = PathBuf::from(root).join(".ssh/config");
                     if cfg.exists() {
