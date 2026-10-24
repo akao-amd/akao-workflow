@@ -1,11 +1,20 @@
 //! What oaka reads from the machine: work year, GPUs, free ports.
+//!
+//! GPUs are AMD's (the KFD topology; archs `gfx*`) or NVIDIA's (`nvidia-smi`; archs `sm_*`,
+//! from the compute capability: GB300's 10.3 is `sm_103`).
 
 use chrono::Datelike;
 use std::fs;
 use std::net::TcpListener;
 
-/// GPU architectures a profile's `arch` field may name.
-pub const ARCHES: &[&str] = &["gfx942", "gfx950", "gfx1250"];
+/// GPU architectures a profile's `arch` field may name: AMD's, then NVIDIA's (H100/H200,
+/// B200, GB300).
+pub const ARCHES: &[&str] = &["gfx942", "gfx950", "gfx1250", "sm_90", "sm_100", "sm_103"];
+
+/// Whether an arch is NVIDIA's (`sm_*`).
+pub fn is_nvidia(arch: &str) -> bool {
+    arch.starts_with("sm_")
+}
 
 /// Ports oaka picks from; 30000 is sglang's default and always taken by someone.
 pub const PORT_RANGE: std::ops::RangeInclusive<u16> = 29900..=30100;
@@ -49,8 +58,9 @@ fn gfx_name(v: u32) -> String {
     format!("gfx{}{:x}{:x}", v / 10000, (v / 100) % 100, v % 100)
 }
 
-/// GPU architectures in HIP device order: $OAKA_GPUS (comma-separated archs; empty = no
-/// GPUs) when set, else the KFD topology.  None when neither is available.
+/// GPU architectures in device order: $OAKA_GPUS (comma-separated archs; empty = no GPUs)
+/// when set, else the KFD topology (HIP order), else nvidia-smi (PCI order, which compiled
+/// scripts make CUDA's with CUDA_DEVICE_ORDER=PCI_BUS_ID).  None when none is available.
 pub fn gpus() -> Option<Vec<String>> {
     if let Ok(v) = std::env::var("OAKA_GPUS") {
         return Some(
@@ -61,10 +71,35 @@ pub fn gpus() -> Option<Vec<String>> {
                 .collect(),
         );
     }
-    Some(kfd_gpus()?.into_iter().map(|(_, a)| a).collect())
+    match kfd_gpus() {
+        Some(g) if !g.is_empty() => Some(g.into_iter().map(|(_, a)| a).collect()),
+        kfd => nvidia_gpus().or(kfd.map(|_| Vec::new())),
+    }
 }
 
-/// The KFD node of each GPU, in HIP device order (what plans and HIP_VISIBLE_DEVICES
+/// `nvidia-smi`'s GPUs (index order = PCI order), as `sm_*` archs; None without nvidia-smi.
+fn nvidia_gpus() -> Option<Vec<String>> {
+    let out = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let caps = String::from_utf8_lossy(&out.stdout);
+    let g: Vec<String> = caps.lines().filter_map(sm_name).collect();
+    (!g.is_empty()).then_some(g)
+}
+
+/// "sm_103" from a compute capability "10.3".
+pub fn sm_name(cap: &str) -> Option<String> {
+    let (major, minor) = cap.trim().split_once('.')?;
+    let ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    (ok(major) && ok(minor)).then(|| format!("sm_{major}{minor}"))
+}
+
+/// The KFD node of each GPU (AMD only), in HIP device order (what plans and HIP_VISIBLE_DEVICES
 /// number); None without a KFD topology.
 pub fn gpu_nodes() -> Option<Vec<u32>> {
     Some(kfd_gpus()?.into_iter().map(|(n, _)| n).collect())
@@ -243,6 +278,16 @@ mod tests {
             amd_smi_index(&[2, 3, 4, 5, 9], &amd),
             [Some(3), Some(0), Some(2), Some(1), None]
         );
+    }
+
+    #[test]
+    fn sm_names() {
+        assert_eq!(sm_name("10.3").as_deref(), Some("sm_103"));
+        assert_eq!(sm_name(" 9.0\n").as_deref(), Some("sm_90"));
+        assert_eq!(sm_name("10.0").as_deref(), Some("sm_100"));
+        assert_eq!(sm_name("[N/A]"), None);
+        assert!(is_nvidia("sm_103") && !is_nvidia("gfx950"));
+        assert!(ARCHES.contains(&"sm_103"));
     }
 
     #[test]

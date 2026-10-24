@@ -24,13 +24,17 @@ if (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; then
     exit 1
 fi
 
-export HIP_VISIBLE_DEVICES={{ gpus }}
+{% if nvidia %}
+# NVIDIA: CUDA numbers the GPUs in PCI order, as nvidia-smi, oaka and the plan do.
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+{% endif %}
+export {{ visible }}={{ gpus }}
 {% if targets %}
 
 # Profile {{ profile }} is for {{ targets_text }} (GPU arch[:ROCm version]).  oaka checked this
 # container at compile time; this script may be rerun by hand elsewhere, so check again.
-python3 - "$HIP_VISIBLE_DEVICES" <<'PY' || exit 1
-import glob, os, sys
+python3 - "${{ visible }}" <<'PY' || exit 1
+import glob, os, subprocess, sys
 TARGETS = [{{ targets }}]
 WANT = {{ targets_text | tojson_str }}
 
@@ -61,7 +65,14 @@ def gpus():
                 v = int(line.split()[1])
                 if v:
                     nodes.append((int(props.split("/")[-2]), f"gfx{v // 10000}{(v // 100) % 100:x}{v % 100:x}"))
-    return [a for _, a in sorted(nodes)] or None
+    if nodes:
+        return [a for _, a in sorted(nodes)]
+    try:  # NVIDIA: nvidia-smi's order (PCI), compute capability 10.3 = sm_103
+        out = subprocess.run(["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
+                             capture_output=True, text=True, timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return ["sm_" + c.strip().replace(".", "") for c in out.split() if c.strip()] or None
 
 def fits(pattern, version):
     have = version.split(".")
@@ -106,7 +117,7 @@ export {{ kv[0] }}={{ kv[1] | q }}
 {% endfor %}
 {% if profiler_env %}
 # A trace client profiles this server: SGLang's profiler V2, which captures by stage (oaka's,
-# like HIP_VISIBLE_DEVICES; not part of the profile).
+# like the visible devices; not part of the profile).
 export {{ profiler_env }}
 {% endif %}
 
@@ -122,10 +133,10 @@ ARGS=(
 # Provenance: what is about to run, and on which stack.
 say "$(date -Is) $(realpath "$0")"
 MODEL={{ model | q }}
-say "profile {{ profile }}  model $MODEL  tp {{ tp }}  gpus $HIP_VISIBLE_DEVICES  port $PORT"
+say "profile {{ profile }}  model $MODEL  tp {{ tp }}  gpus ${{ visible }}  port $PORT"
 python3 -m pip show {{ packages }} 2>/dev/null \
     | grep -E '^(Name|Version|Location|Editable project location):' | sed 's/^/[server {{ name }}] pip /' || true
-env | grep -E '^(HIP|HSA|ROCM|AITER|SGLANG|VLLM|ATOM|TRITON|XDG_CACHE|ENABLE_CK|NCCL|RCCL|TORCH|PYTORCH)' | sort | sed 's/^/[server {{ name }}] env /'
+env | grep -E '^(HIP|HSA|ROCM|CUDA|AITER|SGLANG|VLLM|ATOM|TRITON|XDG_CACHE|ENABLE_CK|NCCL|RCCL|TORCH|PYTORCH|FLASHINFER)' | sort | sed 's/^/[server {{ name }}] env /'
 say "cmd {{ command }} ${ARGS[*]}"
 
 exec {{ command }} "${ARGS[@]}"

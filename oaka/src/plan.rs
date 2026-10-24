@@ -194,7 +194,7 @@ impl ClientSpec {
 
 /// The server env a trace client needs: SGLang's profiler V2, the only one that captures by
 /// stage as asked (v1 ignores `profile_stages` and overwrites prefill traces).  oaka sets it on
-/// every server a trace client profiles, as it sets HIP_VISIBLE_DEVICES.
+/// every server a trace client profiles, as it sets HIP_VISIBLE_DEVICES (CUDA_ on NVIDIA).
 pub const PROFILER_ENV: (&str, &str) = ("SGLANG_PROFILE_V2", "1");
 
 impl Plan {
@@ -297,10 +297,10 @@ pub fn load(dir: &Path) -> Result<Plan> {
     toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
-/// What a plan is checked against: this container's GPUs and ROCm.
+/// What a plan is checked against: this container's GPUs and ROCm (None on NVIDIA).
 #[derive(Debug, Default)]
 pub struct Machine {
-    /// GPU archs in HIP device order; None when they cannot be seen.
+    /// GPU archs in device order (sys::gpus); None when they cannot be seen.
     pub gpus: Option<Vec<String>>,
     /// ROCm version, e.g. "10.0.0"; None when it cannot be found.
     pub rocm: Option<String>,
@@ -311,6 +311,21 @@ impl Machine {
         Machine {
             gpus: sys::gpus(),
             rocm: sys::rocm().map(|(v, _)| v),
+        }
+    }
+
+    /// NVIDIA GPUs (`sm_*`): their runtime is CUDA, not ROCm.
+    pub fn nvidia(&self) -> bool {
+        self.gpus.as_ref().is_some_and(|g| g.iter().any(|a| sys::is_nvidia(a)))
+    }
+
+    /// The variable that picks a server's GPUs: CUDA_VISIBLE_DEVICES on NVIDIA, else
+    /// HIP_VISIBLE_DEVICES (also when the GPUs are unknown: oaka's home is AMD).
+    pub fn visible_devices(&self) -> &'static str {
+        if self.nvidia() {
+            "CUDA_VISIBLE_DEVICES"
+        } else {
+            "HIP_VISIBLE_DEVICES"
         }
     }
 }

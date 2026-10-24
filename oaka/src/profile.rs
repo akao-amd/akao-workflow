@@ -25,7 +25,8 @@ pub const RESERVED_ARGS: &[&str] = &[
     "port",
     "server-port",
 ];
-pub const RESERVED_ENV: &[&str] = &["HIP_VISIBLE_DEVICES"];
+/// The GPUs (HIP on AMD, CUDA on NVIDIA, numbered in nvidia-smi's PCI order): oaka's.
+pub const RESERVED_ENV: &[&str] = &["HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES", "CUDA_DEVICE_ORDER"];
 /// What oaka sets on the SGLang servers of a `[pd]` profile: each one's role and the prefill
 /// servers' bootstrap port, which the router is told.
 pub const PD_RESERVED_ARGS: &[&str] = &["disaggregation-mode", "disaggregation-bootstrap-port"];

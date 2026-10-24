@@ -113,14 +113,14 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
     match &gpus {
         Some(g) if !g.is_empty() => {
             out += &format!(
-                "# this machine: {} GPUs (0-{}), {}, ROCm {}\n",
+                "# this machine: {} GPUs (0-{}), {}, {}\n",
                 g.len(),
                 g.len() - 1,
                 arch.as_deref().unwrap_or("mixed archs"),
-                rocm.as_deref().unwrap_or("unknown")
+                crate::runtime_text(arch.as_deref(), rocm.as_deref())
             )
         }
-        _ => out += "# this machine: no ROCm GPUs found\n",
+        _ => out += "# this machine: no GPUs found (no KFD topology, no nvidia-smi)\n",
     }
     out += &format!("# library: {}\n", lib.root.display());
     out += &format!(

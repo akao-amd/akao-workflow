@@ -295,7 +295,8 @@ NAME.  The server then has whatever the environment oaka runs in has: in an imag
 the variable (e.g. `HIP_FORCE_DEV_KERNARG=1` in the gfx1250 sgl-dev images), the image's value.
 To measure a variable truly unset, start the run without it (`env -u NAME oaka run`).
 
-The model, tp and port flags and `HIP_VISIBLE_DEVICES` come from the plan and are rejected
+The model, tp and port flags and `HIP_VISIBLE_DEVICES` (on NVIDIA `CUDA_VISIBLE_DEVICES`, with
+`CUDA_DEVICE_ORDER=PCI_BUS_ID`, so plan GPU n is nvidia-smi's GPU n) come from the plan and are rejected
 in profiles and plans (in every engine's spelling: `model-path`, `model`, `tp`, `tp-size`,
 `tensor-parallel-size`, `port`, `server-port`), and so is an abbreviation of one (argparse
 takes a prefix).  A flag name is letters, digits, `-`, `_` and `.`: no `=`, the value goes on
@@ -380,7 +381,8 @@ that are.
 below, the only one the container mounts, else today's ISO year), `OAKA_LIB` (library root,
 default `$AKAO_REPO_ROOT/oaka`, or the old `/<year>/oaka` in a container without the clone), `OAKA_INFX` (InferenceX tree, default
 `/<year>/nocopy/InferenceX/inferencex-e2e`), `OAKA_GPUS` (comma-separated archs; overrides
-GPU detection where the KFD topology is not visible), `OAKA_ROCM` (overrides the ROCm
+GPU detection: the KFD topology on AMD, `nvidia-smi` on NVIDIA, whose archs are `sm_*` from the
+compute capability, GB300's 10.3 = `sm_103`), `OAKA_ROCM` (overrides the ROCm
 version; `OAKA_GPUS` and `OAKA_ROCM` are honoured by `server_<name>.sh`'s check too),
 `OAKA_STACK_STATE` (read by
 `stack.sh`: its lock and per-package markers, default `<site-packages>/.oaka-stack`).

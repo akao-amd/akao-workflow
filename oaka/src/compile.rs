@@ -220,6 +220,7 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
             marker, name, profile => s.base.name, description => s.base.description, role,
             overrides => overrides(s), self_path => format!("{SCRIPTS}/{file}"),
             port => port_of(name), gpus => gpus.join(","), env => vars,
+            visible => c.machine.visible_devices(), nvidia => c.machine.nvidia(),
             model => s.model, tp => s.tp, fixed, args, packages => PROVENANCE_PACKAGES,
             engine => s.effective.engine.as_str(), command => s.effective.engine.command(),
             pythonpath => pythonpath.join(":"), caches,
@@ -532,6 +533,60 @@ fn generated(path: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::profile::Library;
+
+    #[test]
+    fn nvidia_servers_get_cuda_devices() {
+        let root = std::env::temp_dir().join(format!("oaka-nvidia-{}-{}", std::process::id(), fastrand::u32(..)));
+        let lib = Library { root: root.join("lib") };
+        let work = root.join("work");
+        fs::create_dir_all(lib.profiles_dir().join("m")).unwrap();
+        fs::create_dir_all(&work).unwrap();
+        fs::write(lib.profile_path("m/gb"), "model = '/model/m'\narch = ['sm_103']\n").unwrap();
+        fs::write(
+            work.join(plan::PLAN),
+            "[[server]]\nname = 'a'\nprofile = 'm/gb'\ngpus = [1, 2]\nport = 29950\n",
+        )
+        .unwrap();
+        let gb300 = plan::Machine {
+            gpus: Some(vec!["sm_103".into(); 4]),
+            rocm: None,
+        };
+        let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, &gb300).unwrap();
+        compile(&checked).unwrap();
+        let server = fs::read_to_string(work.join(SCRIPTS).join("server_a.sh")).unwrap();
+        assert!(
+            server.contains("export CUDA_DEVICE_ORDER=PCI_BUS_ID\nexport CUDA_VISIBLE_DEVICES=1,2\n"),
+            "{server}"
+        );
+        assert!(!server.contains("HIP_VISIBLE_DEVICES"), "{server}");
+        assert!(
+            server.contains("python3 - \"$CUDA_VISIBLE_DEVICES\" <<'PY'"),
+            "{server}"
+        );
+        assert!(server.contains("    --tp 2\n"), "{server}");
+        // The script's own check, on this machine's (stand-in) GPUs.
+        let check = |gpus: &str| {
+            std::process::Command::new("bash")
+                .arg("-c")
+                .arg("sed -n \"/^python3 - /,/^PY$/p\" \"$1\" | sed '1s/.*/python3 - 1,2 <<'\"'\"'PY'\"'\"'/' | bash")
+                .arg("-")
+                .arg(work.join(SCRIPTS).join("server_a.sh"))
+                .env("OAKA_GPUS", gpus)
+                .status()
+                .unwrap()
+                .success()
+        };
+        assert!(check("sm_103,sm_103,sm_103,sm_103"));
+        assert!(!check("gfx950,gfx950,gfx950,gfx950"));
+        // An AMD profile does not check on it.
+        fs::write(lib.profile_path("m/gb"), "model = '/model/m'\narch = ['gfx950']\n").unwrap();
+        let Err(e) = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, &gb300) else {
+            panic!("a gfx950 profile checked on sm_103");
+        };
+        let e = format!("{e:#}");
+        assert!(e.contains("GPU 1 is sm_103, but profile m/gb is for gfx950"), "{e}");
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn compiles_scripts_that_parse() {

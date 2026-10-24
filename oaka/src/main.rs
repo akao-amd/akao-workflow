@@ -167,7 +167,16 @@ fn run(cli: Cli) -> Result<()> {
     }
 }
 
-/// "8 x gfx950, ROCm 10.0.0" for a machine.
+/// "ROCm 10.0.0", "ROCm unknown", or "CUDA" on NVIDIA.
+pub fn runtime_text(arch: Option<&str>, rocm: Option<&str>) -> String {
+    if arch.is_some_and(sys::is_nvidia) {
+        "CUDA".into()
+    } else {
+        format!("ROCm {}", rocm.unwrap_or("unknown"))
+    }
+}
+
+/// "8 x gfx950, ROCm 10.0.0" (or "4 x sm_103, CUDA") for a machine.
 fn machine_text(m: &plan::Machine) -> String {
     let gpus = match &m.gpus {
         None => "GPUs unknown".to_string(),
@@ -175,6 +184,9 @@ fn machine_text(m: &plan::Machine) -> String {
         Some(g) if g.iter().all(|a| *a == g[0]) => format!("{} x {}", g.len(), g[0]),
         Some(g) => g.join(","),
     };
+    if m.nvidia() {
+        return format!("{gpus}, CUDA");
+    }
     format!("{gpus}, ROCm {}", m.rocm.as_deref().unwrap_or("unknown"))
 }
 
@@ -273,10 +285,10 @@ fn profile_cmd(dir: &Path, lib: &Library, cmd: ProfileCmd) -> Result<()> {
             let arch = sys::arch();
             let rocm = sys::rocm().map(|(v, _)| v);
             println!(
-                "# {}  (this machine: {}, ROCm {}; ! = not for it, x = broken)",
+                "# {}  (this machine: {}, {}; ! = not for it, x = broken)",
                 lib.profiles_dir().display(),
                 arch.as_deref().unwrap_or("no single GPU arch"),
-                rocm.as_deref().unwrap_or("unknown")
+                runtime_text(arch.as_deref(), rocm.as_deref())
             );
             for name in lib.list()? {
                 let p = match lib.resolve(&name) {

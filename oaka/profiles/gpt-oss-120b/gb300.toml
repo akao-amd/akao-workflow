@@ -1,0 +1,26 @@
+# gpt-oss-120b on GB300 (sm_103, the greenhouse trays 01-f3/02-f3): SGLang's defaults, the
+# user's own recipe, copied as is.
+#
+# Source: akao-amd/script-journal 2026/ww43/1023_gb300/launch_server_gb300.sh (read 2026-10-24):
+#   python3 -m sglang.launch_server --model "$MODEL" --tp "$TP" --host 0.0.0.0 --port "$PORT"
+#   with MODEL=openai/gpt-oss-120b, CUDA_VISIBLE_DEVICES, TP 1 or 2, in
+#   lmsysorg/sglang:nightly-cu134-20261021-2e7c9d8 (launch_container_gb300.sh); no other flag
+#   or env (--reasoning-parser/--tool-call-parser gpt-oss are commented out there).
+#   The recipe sets HF_HUB_CACHE=/model without exporting it, so SGLang downloaded the model
+#   into the container's ~/.cache/huggingface instead; here it is read from /model's hub cache
+#   (the trays' shared /SFS-aGqda6ct/models), the same HF repo.  Radix cache: on (SGLang's
+#   default, as the recipe runs it).
+#
+# Measured with it (fixed-seq, the user's client.sh = oaka's fixed-seq, run 1, out tok/s),
+# 01-f3 2026-10-23, ww43 1023_gb300/300{3,5,6,7}_*_recipe:
+#   TP1  1024/1024 c4..64: 1195 1958 3003 4522 6784;  8192/1024 c4..64: 1115 1728 2498 3462 4530
+#   TP2  1024/1024 c4, c8: 1494 2613;                 8192/1024 c4..64: 1394 2318 3542 5159 6988
+#
+# tp: not pinned; a plan's GPU count picks it, as TP did in the recipe.
+
+description = "gpt-oss-120b MXFP4 (openai), GB300: SGLang defaults, the user's launch_server_gb300.sh"
+arch = ["sm_103"]
+model = "/model/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a"
+
+[args]
+host = "0.0.0.0"

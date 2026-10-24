@@ -90,7 +90,8 @@ pub fn run(lib: &Library, json: bool) -> Result<()> {
         }
         _ => r.fail(
             "gpus",
-            "no ROCm GPUs visible in /sys/class/kfd; check the container's --device flags",
+            "no GPUs visible: neither /sys/class/kfd (AMD) nor nvidia-smi (NVIDIA) shows one; \
+             check the container's --device (AMD) or --gpus (NVIDIA) flags",
         ),
     }
 
@@ -98,6 +99,9 @@ pub fn run(lib: &Library, json: bool) -> Result<()> {
 
     match sys::rocm() {
         Some((v, from)) => r.ok("rocm", format!("{v} (from {from})")),
+        None if sys::arch().is_some_and(|a| sys::is_nvidia(&a)) => {
+            r.ok("rocm", "none needed: NVIDIA GPUs (profiles target their sm_* arch)")
+        }
         None => r.warn(
             "rocm",
             "version unknown: no .info/version under $ROCM_PATH, $ROCM_HOME or /opt/rocm; \
