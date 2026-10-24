@@ -2,8 +2,9 @@
 # After every commit, refresh the binaries the dev environment runs, so neither can lag
 # behind the committed code:
 #   - akao: release build in target/release/akao (link it onto PATH once; see README.md)
-#   - oaka: static (musl) build in the library's bin/, ${OAKA_LIB:-<repo>/oaka}/bin/oaka
-#     (git-ignored), which `akao init` ships into each worker's clone of this repo
+#   - oaka: static (musl) builds in the library's bin/, ${OAKA_LIB:-<repo>/oaka}/bin/oaka
+#     (x86_64) and bin/oaka.aarch64 (git-ignored), which `akao init` ships into each
+#     worker's clone of this repo
 #
 # Enable once per clone:  git config core.hooksPath .githooks
 # A failed build never blocks the commit (it already happened); it is reported instead.
@@ -18,12 +19,19 @@ else
 fi
 
 lib="${OAKA_LIB:-$top/oaka}"
-target=x86_64-unknown-linux-musl
-if ! cargo build --release -q -p oaka --target "$target" --manifest-path "$manifest"; then
-    echo "post-commit: oaka build failed; $lib/bin/oaka not updated" >&2
-    exit 0
-fi
-mkdir -p "$lib/bin" && cp "$top/target/$target/release/oaka" "$lib/bin/oaka.tmp" \
-    && mv "$lib/bin/oaka.tmp" "$lib/bin/oaka" \
-    && echo "post-commit: installed $lib/bin/oaka ($("$lib/bin/oaka" --version))"
+# One static oaka per worker CPU: bin/oaka (x86_64) and bin/oaka.aarch64 (the ARM64 GB300
+# trays; linked by rust-lld, .cargo/config.toml).  init ships the one the container runs.
+for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+    case $target in
+        x86_64-*) dest="$lib/bin/oaka" ;;
+        *) dest="$lib/bin/oaka.aarch64" ;;
+    esac
+    if ! cargo build --release -q -p oaka --target "$target" --manifest-path "$manifest"; then
+        echo "post-commit: oaka build for $target failed (rustup target add $target?); $dest not updated" >&2
+        continue
+    fi
+    mkdir -p "$lib/bin" && cp "$top/target/$target/release/oaka" "$dest.tmp" && mv "$dest.tmp" "$dest" \
+        && echo "post-commit: installed $dest ($(file -b "$dest" | cut -d, -f2 | sed 's/^ //'))"
+done
+"$lib/bin/oaka" --version >/dev/null 2>&1 && echo "post-commit: $("$lib/bin/oaka" --version)"
 exit 0

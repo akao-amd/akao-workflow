@@ -1,0 +1,4 @@
+# aarch64 oaka (the ARM64 GB300 trays) cross-links with the linker rustup ships; the
+# post-commit hook builds it.  Needs: rustup target add aarch64-unknown-linux-musl
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"

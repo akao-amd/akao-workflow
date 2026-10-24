@@ -18,6 +18,8 @@
 # Run on the console (ssh is akao's wrapper, so AKAO_CONFIG_ROOT must be exported):
 #   agent_greenhouse.sh install <nick> [<container>]  agent.sh + the proxy on the tray's login,
 #                                                     or in a container on it (docker --context)
+#   agent_greenhouse.sh route <nick> [<container>]    the proxy only, where agent.sh already ran
+#                                                     (akao init does this on such boxes)
 #   agent_greenhouse.sh tunnel <nick>...              keep the tunnels up, reconnecting; runs in
 #                                                     the foreground: give it a tmux window
 #   agent_greenhouse.sh check <nick> [<container>]    the gateway through the proxy: an HTTP code
@@ -111,7 +113,13 @@ REMOTE
 }
 
 # check's tray side: start the proxy through the route snippet and ask the gateway.
-remote_check() {
+remote_route() {
+    local nick="$1" container="${2:-}"
+    { printf 'set -euo pipefail\nPROXY_PORT=%q TUNNEL_PORT=%q\n' "$PROXY_PORT" "$TUNNEL_PORT"; remote_route; } |
+        on "$nick" "$container" bash -s
+}
+
+check() {
     cat <<'REMOTE'
 export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 [[ -s "$NVM_DIR/nvm.sh" ]] && . "$NVM_DIR/nvm.sh" && nvm use default >/dev/null
@@ -138,6 +146,12 @@ install() {
     } | on "$nick" "$container" bash -s
     check "$nick" "$container" ||
         echo "[agent_greenhouse] installed; the gateway answers once the tunnel is up: $0 tunnel $nick"
+}
+
+route() {
+    local nick="$1" container="${2:-}"
+    { printf 'set -euo pipefail\nPROXY_PORT=%q TUNNEL_PORT=%q\n' "$PROXY_PORT" "$TUNNEL_PORT"; remote_route; } |
+        on "$nick" "$container" bash -s
 }
 
 check() {
@@ -167,6 +181,7 @@ tunnel() {
 
 case "${1:-}" in
     install) [[ $# -ge 2 && $# -le 3 ]] || usage 1; install "${@:2}" ;;
+    route) [[ $# -ge 2 && $# -le 3 ]] || usage 1; route "${@:2}" ;;
     check) [[ $# -ge 2 && $# -le 3 ]] || usage 1; check "${@:2}" ;;
     tunnel) tunnel "${@:2}" ;;
     -h|--help) usage ;;

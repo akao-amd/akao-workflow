@@ -10,7 +10,8 @@ use std::path::Path;
 
 /// The fixed part of every `docker run`; per-host mounts and rest args follow it.
 /// `docker run` before the mounts, per [`Gpu`]: AMD's devices, or NVIDIA's `--gpus all`
-/// (the flags of a hand-run GB300 container, ww42).
+/// (the flags of a hand-run GB300 container, ww42, plus the host network every worker has:
+/// the trays' agents reach the AMD gateway through the host's loopback, agent_greenhouse.sh).
 const DOCKER_RUN_SKELETON: &[&str] = &[
     "run",
     "--rm",
@@ -45,6 +46,7 @@ const NVIDIA_RUN_SKELETON: &[&str] = &[
     "-d",
     "--gpus",
     "all",
+    "--network=host",
     "--ipc=host",
     "--shm-size=32g",
     "--ulimit",
@@ -68,8 +70,7 @@ const NVIDIA_RUN_SKELETON: &[&str] = &[
 pub enum Gpu {
     /// `/dev/kfd`
     Amd,
-    /// `/dev/nvidiactl`: the container is only launched (steps 1-6); the rest of init sets up
-    /// oaka, which drives AMD GPUs only (it reads the KFD topology).
+    /// `/dev/nvidiactl`: oaka reads its GPUs from nvidia-smi (`sm_*` archs).
     Nvidia,
 }
 
@@ -481,8 +482,7 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
     p.gpu = if has("/dev/kfd")? {
         Gpu::Amd
     } else if has("/dev/nvidiactl")? {
-        println!("  NVIDIA GPUs (/dev/nvidiactl, no /dev/kfd): --gpus all, launch only");
-        s.total = 6;
+        println!("  NVIDIA GPUs (/dev/nvidiactl, no /dev/kfd): --gpus all");
         Gpu::Nvidia
     } else {
         bail!("{nick} has neither /dev/kfd (AMD) nor /dev/nvidiactl (NVIDIA): no GPUs for a worker");
@@ -619,11 +619,6 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
         Some(other) => bail!("{} exists but is {other}; resolve it by hand", p.container),
         None => r.run(&p.docker_run_argv()?)?,
     }
-    if p.gpu == Gpu::Nvidia {
-        let shell = p.docker(&["exec", "-it", &p.container, "bash"]);
-        println!("done (NVIDIA: launched only). enter with:\n  {}", show(&shell));
-        return Ok(p);
-    }
 
     s.next("install packages");
     if opts.skip_setup {
@@ -634,9 +629,13 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
             .map(|p| format!("command -v {} >/dev/null", if *p == "docker.io" { "docker" } else { p }))
             .collect::<Vec<_>>()
             .join(" && ");
+        // Over https when http fails: the GB300 trays close port 80, where Ubuntu images'
+        // sources point (the trays' own hosts use https mirrors).
+        let install = format!("apt-get update && apt-get install -y {}", APT_PACKAGES.join(" "));
         let script = format!(
-            "{have_all} || {{ export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y {}; }}",
-            APT_PACKAGES.join(" ")
+            "{have_all} || {{ export DEBIAN_FRONTEND=noninteractive; {{ {install}; }} || {{ \
+             echo 'apt failed; again with its sources over https'; \
+             sed -i 's|http://|https://|g' /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null; {install}; }}; }}"
         );
         r.run(&p.exec(&[], &script))?;
     }
@@ -660,15 +659,20 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
                 &repo_sync_script(REPO_BUNDLE, state::WORKER_REPO, origin.as_deref()),
             ))?;
             // The static oaka the hook built: git-ignored, so it travels beside the bundle,
-            // into the same place in the clone (the library is the clone's oaka/).
+            // into the same place in the clone (the library is the clone's oaka/); the
+            // aarch64 build for an ARM64 container (the GB300 trays).
             let bin = format!("{}/oaka/bin", state::WORKER_REPO);
+            let arm = r
+                .probe(&p.exec(&[], "uname -m"))?
+                .is_some_and(|m| m.trim() == "aarch64");
+            let built = format!("{repo}/oaka/bin/{}", if arm { "oaka.aarch64" } else { "oaka" });
             let receive = p.exec(
                 &["-i"],
                 &format!(
                     "mkdir -p {bin} && cat >{bin}/oaka.tmp && chmod +x {bin}/oaka.tmp && mv {bin}/oaka.tmp {bin}/oaka"
                 ),
             );
-            r.pipe(&["cat".to_string(), format!("{repo}/oaka/bin/oaka")], &receive)?;
+            r.pipe(&["cat".to_string(), built], &receive)?;
         }
     }
 
@@ -683,6 +687,19 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
             &[],
             &format!("test -x /root/.local/bin/claude || bash {utils}/agent.sh --yes"),
         ))?;
+        // A box that cannot resolve the AMD gateway (the GB300 trays, in an outside cloud)
+        // reaches it through the console: the launchers get agent_greenhouse.sh's route, and
+        // the console keeps the tunnel up (`agent_greenhouse.sh tunnel <nick>`, said below).
+        if r.probe(&p.exec(&[], "getent hosts llm-api.amd.com"))?.is_none() {
+            if let Some(repo) = &repo {
+                let route = format!("{repo}/utils/agent_greenhouse.sh");
+                r.run(&[route.as_str(), "route", nick, &p.container].map(String::from))?;
+                println!(
+                    "  {nick} cannot resolve llm-api.amd.com: its agents reach it through this console; \
+                     keep `{route} tunnel {nick}` running (a tmux window)"
+                );
+            }
+        }
         // oaka's gsm8k client.  From PyPI on its own: never sglang[test], which pulls
         // PyPI sglang over the image's.  Its deps are pure Python (no torch/triton/sglang).
         // Not fatal: an image whose pip refuses (e.g. a mirrored vllm/ATOM one) still gets
@@ -810,10 +827,10 @@ mod tests {
         let argv = p.docker_run_argv().unwrap();
         let s = argv.join(" ");
         assert!(s.starts_with(
-            "docker --context f19-11 run --rm --init -d --gpus all --ipc=host --shm-size=32g \
+            "docker --context f19-11 run --rm --init -d --gpus all --network=host --ipc=host --shm-size=32g \
              --ulimit memlock=-1 --ulimit stack=67108864 --cap-add SYS_NICE"
         ));
-        assert!(!s.contains("kfd") && !s.contains("--privileged") && !s.contains("--network=host"));
+        assert!(!s.contains("kfd") && !s.contains("--privileged"));
         // Mounts, root and rest as on AMD.
         assert!(s.contains("-v /mnt/raid/models:/model") && s.contains("-v /root/akao/container_home/akao_exp:/root"));
         assert!(s.contains("-w /2026/ww41/exp"));

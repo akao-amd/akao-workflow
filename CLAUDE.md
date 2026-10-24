@@ -2,7 +2,8 @@
 
 Rust workspace with two CLI tools: `akao` (local driver) and `oaka` (worker-side plan
 generator and script compiler).  Target: `x86_64-unknown-linux-gnu`; `oaka` is also built
-static for `x86_64-unknown-linux-musl` so it runs in any worker image.  The repo also holds
+static for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` (the ARM64 GB300
+trays) so it runs in any worker image.  The repo also holds
 what agents read: this file and the role skills (`skills/`).  `AGENTS.md` is a symlink to
 this file, so codex and claude read the same text.
 
@@ -126,10 +127,11 @@ SPEC.md and leave the decision behind.
 
 **Post-commit hook** (`.githooks/post-commit`, enable with `git config core.hooksPath
 .githooks`): after every commit it rebuilds `target/release/akao` (the user runs it through
-a `~/.local/bin/akao` symlink) and builds a musl `oaka` into `oaka/bin/oaka` (git-ignored;
-`$OAKA_LIB/bin/oaka` if set), which `akao init` ships into each worker's clone.  Both binaries stamp their commit into `--version` (`build.rs`).  Setup and the
+a `~/.local/bin/akao` symlink) and builds a musl `oaka` into `oaka/bin/oaka` and an aarch64
+one into `oaka/bin/oaka.aarch64` (git-ignored; `$OAKA_LIB/bin/` if set; linked by rust-lld,
+`.cargo/config.toml`), which `akao init` ships into each worker's clone.  Both binaries stamp their commit into `--version` (`build.rs`).  Setup and the
 delivery path are in README.md, "Dev environment".
-Needs `rustup target add x86_64-unknown-linux-musl`.
+Needs `rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl`.
 
 ## Workspace layout
 
@@ -175,7 +177,7 @@ oaka/
                       metrics.py, the trace driver and its probe in Python
   src/
     main.rs           CLI: draft, check, compile, run, profile ls|show|save|diff
-    sys.rs            work year, artifact root, GPU archs from KFD topology, free ports, q()
+    sys.rs            work year, artifact root, GPU archs (KFD topology; nvidia-smi: sm_*), free ports, q()
     profile.rs        Library ($OAKA_LIB, $AKAO_REPO_ROOT/oaka, legacy /<year>/oaka), profiles,
                       extends, overlays, Engine
     plan.rs           plan.toml schema + validation (check), plan.lock.toml
@@ -287,8 +289,11 @@ repo checkout (`$AKAO_REPO_ROOT`, `state::shippable_repo`) is checked before ste
    fast-forward `main` only when on `main`, clean and behind; it never moves the worker's own
    work and is never fatal for it.  A bundle, not a GitHub clone: the console's commits may
    be unpushed and the box may have no network.  Only commits travel, plus the hook's
-   git-ignored `oaka/bin/oaka`, piped into the same place in the clone.
-9. From the clone's `utils/`: gh, the claude agent; then sgl-eval (each skipped if already
+   git-ignored `oaka/bin/oaka` (`oaka.aarch64` for an aarch64 container), piped into the
+   clone's `oaka/bin/oaka`.
+9. From the clone's `utils/`: gh, the claude agent (and, where the container cannot resolve
+   llm-api.amd.com, the console's `utils/agent_greenhouse.sh route`: the gateway through a
+   tunnel from the console); then sgl-eval (each skipped if already
    present; sgl-eval failing only warns: mirrored images may refuse pip); link
    the clone's `oaka/bin/oaka` to `/usr/local/bin/oaka`
 10. `/<year>/nocopy/InferenceX` (`infx_sync_script`): clone `infx_repo` the first time, later
@@ -307,10 +312,10 @@ Steps 3, 7, 8 and 9 are skipped together by `--skip-setup`.
 --device=/dev/kfd --device=/dev/dri --group-add video --cap-add=SYS_PTRACE
 --security-opt seccomp=unconfined -e PYTHONPATH= -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8
 -e TERM=tmux-256color --ipc=host --shm-size=32g`.  On NVIDIA (`NVIDIA_RUN_SKELETON`, the
-flags of a hand-run GB300 container): `--rm --init -d --gpus all --ipc=host --shm-size=32g
---ulimit memlock=-1 --ulimit stack=67108864 --cap-add SYS_NICE` and the same four `-e`;
-mounts, workdir and env below are the same.  An NVIDIA container is only launched: init
-stops after step 6 (the later steps set up oaka, which reads the KFD topology: AMD only).
+flags of a hand-run GB300 container, plus the host network): `--rm --init -d --gpus all
+--network=host --ipc=host --shm-size=32g --ulimit memlock=-1 --ulimit stack=67108864 --cap-add
+SYS_NICE` and the same four `-e`; mounts, workdir, env and steps 7-12 are the same (oaka reads
+NVIDIA GPUs from nvidia-smi; step 7 retries apt over https: the trays close port 80).
 Host's `rest` field appends after this, then `--entrypoint sleep <image> infinity`: the
 container only waits for `docker exec`, whatever the image starts (vllm's images have
 ENTRYPOINT `vllm serve`, which would take `sleep` for a model and exit, `--rm` removing it).
@@ -410,7 +415,9 @@ reference is `oaka/README.md`.  The invariants that code changes must keep:
 - **Client policy is not a plan knob.**  `fixed-seq` delegates to InferenceX's own
   `python3 -m infx.bench fixed-seq point`; the plan exposes only isl/osl, conc, range ratio
   and repeats.  Anything else goes through `off_spec` and marks results `OFFSPEC`.
-- **oaka owns** the model, tp and port flags and `HIP_VISIBLE_DEVICES`; profiles and
+- **oaka owns** the model, tp and port flags and `HIP_VISIBLE_DEVICES` (on NVIDIA
+  `CUDA_VISIBLE_DEVICES`, with `CUDA_DEVICE_ORDER=PCI_BUS_ID`: plans number GPUs as
+  nvidia-smi does; `plan::Machine::visible_devices`); profiles and
   plans may not set them in any engine's spelling (`profile::RESERVED_ARGS` is the union).
   `--tp` = profile `tp` if pinned, else the number of plan GPUs.  On a server a `trace` client
   profiles it also sets `SGLANG_PROFILE_V2=1` (`plan::PROFILER_ENV`); a plan or profile

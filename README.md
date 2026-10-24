@@ -15,7 +15,7 @@ Testing: `cargo test` (hermetic, ~30 s); real-GPU smoke in [TEST.md](TEST.md).
 `akao init` deploys.  Set up once per clone:
 
 ```bash
-rustup target add x86_64-unknown-linux-musl      # oaka is built static for any worker image
+rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl   # static oaka, any worker image
 git config core.hooksPath .githooks              # enable the post-commit hook
 cargo build --release -p akao
 ln -sf "$PWD/target/release/akao" ~/.local/bin/akao
@@ -32,7 +32,7 @@ checks it).
 | Built | Lands in | Reaches |
 |---|---|---|
 | `akao`, release | `target/release/akao` | you, through the symlink above |
-| `oaka`, static musl | `oaka/bin/oaka` in this checkout (git-ignored) | workers, at their next `akao init` (step 8 puts it into the worker's clone, step 9 links it onto PATH) |
+| `oaka`, static musl | `oaka/bin/oaka` (x86_64) and `oaka/bin/oaka.aarch64` (the GB300 trays) in this checkout (git-ignored) | workers, at their next `akao init` (step 8 puts it into the worker's clone, step 9 links it onto PATH) |
 | `CLAUDE.md`, skills, `utils/`, oaka's library (`oaka/profiles`, `oaka/stacks.toml`) | nowhere: read in place from this checkout (`$AKAO_REPO_ROOT`) | workers, at their next `akao init` (step 8 updates the worker's own clone) |
 
 So a worker gets a new `oaka` only when `akao init` runs again for it; re-running init on an
@@ -74,7 +74,7 @@ akao host rm h21-4
 ```
 
 `rest` is appended to the fixed `docker run` skeleton (`--rm --init -d --privileged`, devices,
-host network/IPC, `--shm-size=32g`, ...; on an NVIDIA box `--gpus all`, IPC, `--shm-size=32g`,
+host network/IPC, `--shm-size=32g`, ...; on an NVIDIA box `--gpus all`, host network, IPC, `--shm-size=32g`,
 memlock/stack ulimits, `SYS_NICE`); it never replaces it. Both vendors use `--init` to reap
 orphaned worker processes. This applies when creating a container; init reuses existing ones.
 
@@ -85,9 +85,9 @@ image, per host or global.  An existing `akao_<name>` must run that image (else 
 and names the one it runs):
 
 1. resolve the nick through `ssh -G`, tell AMD (`/dev/kfd`) from NVIDIA (`/dev/nvidiactl`)
-   GPUs (NVIDIA: launch only, init stops after step 6; on the ARM64 GB300 trays the agent comes
-   from `utils/agent_greenhouse.sh install <nick> akao_<name>`, the AMD gateway tunnelled from
-   the console by `utils/agent_greenhouse.sh tunnel <nick>`), and reach the box's docker; if `akao_<name>` already
+   GPUs (NVIDIA: `--gpus all`, then the same steps; on the ARM64 GB300 trays the agents reach
+   the AMD gateway through the console: keep `utils/agent_greenhouse.sh tunnel <nick>` running),
+   and reach the box's docker; if `akao_<name>` already
    exists, it keeps its image and artifact root, and must mount `/<year>` and `/root` from
    where hosts.tsv says (a request it cannot satisfy fails here, before the host is touched)
 2. create the artifact root under `<host_home>` and `<host_home>/container_home` on the host
