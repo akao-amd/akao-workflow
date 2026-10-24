@@ -233,13 +233,14 @@ e.g. one exporting another `HOME` on a shared account): `ssh <nick>` keeps it, b
 calls and docker's transport (through the `utils/ssh` wrapper) turn it off, since ssh refuses
 a command alongside it.  They use `host_home` from hosts.tsv, never the login's `HOME`.
 
-## Briefing workers: `akao task`
+## Briefing workers: `akao task`, `akao open`
 
 What a controller does around a worker, each one command (the practice around them:
 `skills/controller/SKILL.md`):
 
 ```bash
 akao task h13-16 base1021_pd two_tp2_bench --brief brief.md   # -> /2026/ww43/base1021_pd/0002_two_tp2_bench/BRIEF.md
+akao open h13-16 base1021_pd --cwd /2026/ww43/base1021_pd/0002_two_tp2_bench
 ```
 
 - **`akao task <nick> <name> <desc> [--brief <file>] [--number NNNN]`** makes the worker's next
@@ -248,6 +249,13 @@ akao task h13-16 base1021_pd two_tp2_bench --brief brief.md   # -> /2026/ww43/ba
   highest four-digit number there plus one (`0001` if none) or `--number` (0001-9999; a number
   already used in the root is refused).  `--brief` puts a file of this machine into it as
   `BRIEF.md`.  The last line printed is `task dir <path>`; `--dry-run` previews it.
+- **`akao open <nick> <name> [--cwd <dir>] [--continue | --resume <id>] [--session <s>]`** opens
+  the worker's `claude` in a new window `<name>` of this machine's tmux (the current session, or
+  `--session`): `docker -H ssh://<nick> exec -it [-w <dir>] akao_<name> bash -lc 'exec claude
+  --add-dir $AKAO_REPO_ROOT'`, with this `AKAO_CONFIG_ROOT` in the window (docker's `ssh`
+  wrapper reads akao's ssh config through it).  The worker must be running; a window of that
+  name refuses.  `--continue` resumes the directory's latest conversation, `--resume <id>` a
+  given one.  The agent's trust dialog and the first message are the controller's.
 ## Deploying a controller
 
 A controller is an agent (claude) that drives workers through akao: it runs `akao`, opens

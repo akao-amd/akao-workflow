@@ -4,6 +4,7 @@ mod doctor;
 mod exec;
 mod init;
 mod mirror;
+mod open;
 mod state;
 mod task;
 
@@ -82,6 +83,32 @@ enum Cmd {
         #[arg(long, value_name = "FILE")]
         brief: Option<String>,
         /// Print the dir it would make, and make nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Open the worker's agent (claude in akao_<name>) in a new window <name> of this tmux
+    ///
+    /// The window runs `docker -H ssh://<nick> exec -it akao_<name> bash -lc 'exec claude
+    /// --add-dir $AKAO_REPO_ROOT'` with this AKAO_CONFIG_ROOT.  Refused when the session has a
+    /// window of that name already.  The agent's trust dialog and the handshake are yours.
+    Open {
+        /// Host nick (a row in hosts.tsv)
+        nick: String,
+        /// Container name, without the akao_ prefix; also the window's name
+        name: String,
+        /// Start the agent in this directory of the container (a task dir from `akao task`)
+        #[arg(long, value_name = "DIR")]
+        cwd: Option<String>,
+        /// Resume the latest conversation of that directory (`claude --continue`)
+        #[arg(long = "continue", conflicts_with = "resume")]
+        resume_latest: bool,
+        /// Resume this conversation (`claude --resume <id>`)
+        #[arg(long, value_name = "ID")]
+        resume: Option<String>,
+        /// tmux session to open the window in [default: the current one]
+        #[arg(long)]
+        session: Option<String>,
+        /// Print the commands that would change anything instead of running them
         #[arg(long)]
         dry_run: bool,
     },
@@ -234,6 +261,29 @@ fn run(cli: Cli) -> Result<()> {
                     desc,
                     number,
                     brief,
+                },
+            )
+        }
+        Cmd::Open {
+            nick,
+            name,
+            cwd,
+            resume_latest,
+            resume,
+            session,
+            dry_run,
+        } => {
+            let runner = exec::Runner::new(dry_run)?;
+            open::run(
+                &state,
+                &runner,
+                &open::Options {
+                    nick,
+                    name,
+                    cwd,
+                    resume_latest,
+                    resume,
+                    session,
                 },
             )
         }
