@@ -46,6 +46,10 @@ impl Sandbox {
             .args(args)
             .env("AKAO_CONFIG_ROOT", self.root.join("state"))
             .env("AKAO_SSH", self.root.join("bin/ssh"))
+            .env(
+                "PATH",
+                format!("{}:{}", self.root.join("bin").display(), std::env::var("PATH").unwrap()),
+            )
             .output()
             .unwrap();
         let text = format!(
@@ -60,6 +64,35 @@ impl Sandbox {
     fn on_b(&self, rel: &str) -> PathBuf {
         self.root.join("b").join(year()).join(rel)
     }
+}
+
+#[test]
+fn remote_root_only_artifacts_are_read_with_available_escalation() {
+    let sb = Sandbox::new("protected-read");
+    // Model a non-root SSH account whose tar cannot read the artifact without sudo.
+    // No privileges or host permissions are changed by these stand-ins.
+    let tar = Command::new("sh").args(["-c", "command -v tar"]).output().unwrap();
+    assert!(tar.status.success());
+    let real_tar = String::from_utf8(tar.stdout).unwrap();
+    sb.put("bin/id", "#!/bin/sh\nprintf '1000\\n'\n");
+    sb.put(
+        "bin/sudo",
+        "#!/bin/sh\n[ \"$1\" = -n ] || exit 91\nshift\nexport AKAO_CP_TEST_ELEVATED=1\nexec \"$@\"\n",
+    );
+    sb.put(
+        "bin/tar",
+        &format!(
+            "#!/bin/sh\nfor arg do\n  if [ \"$arg\" = -czf ] && [ \"${{AKAO_CP_TEST_ELEVATED:-}}\" != 1 ]; then\n    echo 'protected source: permission denied' >&2\n    exit 92\n  fi\ndone\nexec {} \"$@\"\n",
+            real_tar.trim()
+        ),
+    );
+    for name in ["id", "sudo", "tar"] {
+        fs::set_permissions(sb.root.join("bin").join(name), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let dst = sb.root.join("collected");
+    let (code, out) = sb.cp(&["boxa:ww42/a0/0003_x", dst.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(fs::read_to_string(dst.join("0003_x/result.txt")).unwrap(), "42\n");
 }
 
 impl Drop for Sandbox {

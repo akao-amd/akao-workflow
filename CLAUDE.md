@@ -382,8 +382,8 @@ leading with it.  An explicit path, `..` included, is passed through as given.
 
 **Implementation**: `tar -C <src-parent> -czf - <src-base>  |  tar --owner=0 --group=0 -xzf - -C <dst>`.
 Each side is wrapped in `ssh nick -- sh -c '...'` when remote, or `sh -c '...'` when local.
-Write side uses `ESCALATE` (sudo -n) on remote; local writes run without sudo (we are root
-in the container).
+Both sides use `ESCALATE` (sudo -n) on remote, including reads of root-only worker artifacts;
+local operations run without sudo (we are root in the container).
 
 ### task.rs, open.rs, rm.rs — around a worker
 

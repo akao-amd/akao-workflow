@@ -14,7 +14,7 @@
 //!
 //! Implementation: `tar -C <src-parent> -czf - <src-base>  |  tar -xzf - -C <dst>`,
 //! where each side is wrapped in `ssh nick -- sh -c '...'` when remote.
-//! Writing to a remote host uses `sudo -n` escalation (skipped when already root).
+//! Remote reads and writes use `sudo -n` escalation (skipped when already root).
 
 use crate::exec::{q, Runner, ESCALATE};
 use crate::state::{self, State};
@@ -129,11 +129,11 @@ pub fn run(state: &State, r: &Runner, src_str: &str, dst_str: &str) -> Result<()
     println!("akao cp: {} -> {}{note}", src.label(state)?, dst.label(state)?);
 
     // --- source: tar the basename out of its parent ---
-    // Reading doesn't need escalation — world-readable is the norm.
+    // Worker artifacts may be root-only (for example admission receipts).
     let read_script = format!("tar -C {} -czf - {}", q(&src_parent), q(&src_base));
     let tar_read: Vec<String> = match &src.nick {
         None => vec!["sh".into(), "-c".into(), read_script],
-        Some(nick) => r.ssh_argv(nick, &read_script),
+        Some(nick) => r.ssh_argv(nick, &format!("{ESCALATE}$S {read_script}")),
     };
 
     // --- destination: mkdir + extract (overwrite) ---
