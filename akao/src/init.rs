@@ -85,8 +85,9 @@ pub struct Options {
     pub week: Option<String>,
     /// The worker's artifact root, instead of /<year>/<week>/<name>.
     pub artifact_root: Option<String>,
-    /// The container's image (`akao mirror`: the entry's).
-    pub image: String,
+    /// The container's image (`akao mirror`: the entry's); None takes the image an existing
+    /// akao_<name> runs (a refresh), and fails for a new one.
+    pub image: Option<String>,
     pub skip_setup: bool,
 }
 
@@ -97,6 +98,7 @@ pub struct Plan {
     pub context: String,
     /// akao_<name>
     pub container: String,
+    /// The requested image; empty until step 1 adopts an existing container's when none was given.
     pub image: String,
     /// Whose GPUs the host has; AMD until step 1 has looked.
     pub gpu: Gpu,
@@ -114,6 +116,9 @@ impl Plan {
             bail!("invalid container name '{}'", opts.name);
         }
         let name = opts.name.strip_prefix("akao_").unwrap_or(&opts.name);
+        if opts.image.as_deref().is_some_and(|i| i.trim().is_empty()) {
+            bail!("--image is empty; omit it to keep the image an existing container runs");
+        }
         let host = state.host(&opts.nick)?;
         let year = state::work_year();
         let artifact_root = match (&opts.artifact_root, &opts.week) {
@@ -136,7 +141,7 @@ impl Plan {
             artifact_root,
             host_container_home: format!("{}/container_home/{container}", host.home()),
             container,
-            image: opts.image.clone(),
+            image: opts.image.clone().unwrap_or_default(),
             gpu: Gpu::Amd,
             year,
             host,
@@ -369,7 +374,9 @@ fn looks_like_year_root(root: &str) -> bool {
 fn adopt(p: &mut Plan, e: &Existing, opts: &Options) -> Result<()> {
     println!("  {} exists: image {}, artifact root {}", p.container, e.image, e.root);
     let remove = format!("docker --context {} rm -f {}", p.context, p.container);
-    if e.image != p.image {
+    if p.image.is_empty() {
+        p.image = e.image.clone();
+    } else if e.image != p.image {
         bail!(
             "{} runs {}, not the requested {}; pass --image {}, pick another name, or remove it first ({remove})",
             p.container,
@@ -458,7 +465,11 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
         "akao init: {} on {nick}{}\n  image {}\n  host home {}, artifact root {}",
         p.container,
         if r.dry_run { " [dry run]" } else { "" },
-        p.image,
+        if p.image.is_empty() {
+            "the one it runs (no --image)"
+        } else {
+            &p.image
+        },
         p.host.host_home,
         p.artifact_root
     );
@@ -531,6 +542,11 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
             .with_context(|| format!("cannot read what {} was created with: {text:?}", p.container))?;
         adopt(&mut p, &e, opts)?;
         Some(e)
+    } else if p.image.is_empty() {
+        bail!(
+            "{} does not exist on {nick}: give --image to create it (only a refresh takes the image it runs)",
+            p.container
+        );
     } else {
         None
     };
@@ -872,7 +888,7 @@ mod tests {
             name: "exp".into(),
             week: None,
             artifact_root: None,
-            image: "img:tag".into(),
+            image: Some("img:tag".into()),
             skip_setup: false,
         }
     }

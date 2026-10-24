@@ -52,9 +52,10 @@ enum Cmd {
         nick: String,
         /// Container name, without the akao_ prefix
         name: String,
-        /// The container's image (an existing container running another one fails)
+        /// The container's image; required for a new container.  Omitted, an existing
+        /// akao_<name> keeps the image it runs (a refresh); one running another image fails
         #[arg(long)]
-        image: String,
+        image: Option<String>,
         #[command(flatten)]
         flags: InitFlags,
     },
@@ -227,7 +228,7 @@ fn run(cli: Cli) -> Result<()> {
 }
 
 impl InitFlags {
-    fn options(self, nick: String, name: String, image: String) -> init::Options {
+    fn options(self, nick: String, name: String, image: Option<String>) -> init::Options {
         init::Options {
             nick,
             name,

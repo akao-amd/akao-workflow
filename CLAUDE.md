@@ -257,13 +257,13 @@ Loads and saves config and hosts.  `Host.validate()` enforces absolute, plain pa
 valid shlex for `rest`; join paths onto `Host::home()` (no trailing slash).  `state::parse_hosts` / `format_hosts` are the TSV codec.
 
 Hosts TSV columns: `nick  model_path  docker_sock  host_home  rest` (no image: init's
-`--image` is required, and a row in the old layout with an image second fails, saying so)
+`--image` names it, required for a new container, and a row in the old layout with an image second fails, saying so)
 (`-` in any column means "use the default").
 
 `Host.rest_args()` returns the extra `docker run` arguments as a `Vec<String>` via `shlex`;
 they are appended after the fixed skeleton but before the image in `init`.
 
-### init.rs — `akao init <nick> <name> --image <tag>`
+### init.rs — `akao init <nick> <name> [--image <tag>]`
 
 Twelve ordered steps, each idempotent (checks before acting).  Unless `--skip-setup`, the
 repo checkout (`$AKAO_REPO_ROOT`, `state::shippable_repo`) is checked before step 1.
@@ -273,7 +273,8 @@ repo checkout (`$AKAO_REPO_ROOT`, `state::shippable_repo`) is checked before ste
    (fails loudly: the `ssh` wrapper, see Design notes; a stopped daemon, from `systemctl
    is-active`, is named with its fix, never started); `ps -a` tells a missing container
    from an unreadable one; an existing `akao_<name>` is inspected (`Existing`: id, image,
-   workdir, mounts, env): it keeps its image and artifact root (`adopt`), and anything it
+   workdir, mounts, env): it keeps its image (taken when `--image` is omitted; a new container
+   without one fails here) and artifact root (`adopt`), and anything it
    contradicts (mirror's image, `--week`, `--artifact-root`, another year, `/<year>` or
    `/root` mounted from elsewhere than hosts.tsv says, a mount of its own over the root)
    fails here, before the host is touched

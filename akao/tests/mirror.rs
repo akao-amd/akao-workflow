@@ -186,10 +186,10 @@ fn init_takes_its_image_which_an_existing_container_must_run() {
     assert!(out.contains("cannot run a command on fakebox over ssh"), "{out}");
     assert!(!out.contains("no GPUs"), "{out}");
 
-    // No image, no default to fall back on.
+    // No image, no default to fall back on: a new container needs one.
     let (code, out) = sb.akao("init", &["fakebox", "x", "--dry-run"], &[]);
     assert_ne!(code, 0, "{out}");
-    assert!(out.contains("--image <IMAGE>"), "{out}");
+    assert!(out.contains("akao_x does not exist on fakebox: give --image"), "{out}");
 }
 
 #[test]

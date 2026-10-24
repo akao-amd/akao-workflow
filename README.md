@@ -78,11 +78,13 @@ host network/IPC, `--shm-size=32g`, ...; on an NVIDIA box `--gpus all`, host net
 memlock/stack ulimits, `SYS_NICE`); it never replaces it. Both vendors use `--init` to reap
 orphaned worker processes. This applies when creating a container; init reuses existing ones.
 
-## `akao init <nick> <name> --image <tag>`
+## `akao init <nick> <name> [--image <tag>]`
 
-Brings up `akao_<name>` on `<nick>` from `--image`, which is required: there is no default
-image, per host or global.  An existing `akao_<name>` must run that image (else init fails
-and names the one it runs):
+Brings up `akao_<name>` on `<nick>` from `--image`, which a new container requires: there is
+no default image, per host or global.  An existing `akao_<name>` keeps the image it runs, so
+refreshing a worker (a new clone and oaka for it: init runs again, its setup and the
+InferenceX sync included) is `akao init <nick> <name>` alone; given, `--image` must name that
+image (else init fails and names the one it runs):
 
 1. resolve the nick through `ssh -G`, tell AMD (`/dev/kfd`) from NVIDIA (`/dev/nvidiactl`)
    GPUs (NVIDIA: `--gpus all`, then the same steps; on the ARM64 GB300 trays the agents reach
