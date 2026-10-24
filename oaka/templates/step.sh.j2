@@ -28,24 +28,53 @@ READY_TIMEOUT_S={{ ready_timeout_s }}
 
 PIDS=()
 declare -A PID_OF=()
+declare -A NAME_OF=()
+declare -A STATE_OF=()
+SERVER_STATE_DIR=$(mktemp -d "$LOGS/.server_ownership.XXXXXX") || exit 1
 stop_servers() {
-    [ -z "${PIDS[*]:-}" ] && return
+    if [ -z "${PIDS[*]:-}" ]; then
+        rm -rf "$SERVER_STATE_DIR"
+        return 0
+    fi
     trap '' INT TERM PIPE   # a second Ctrl-C must not cut the cleanup short
     say "stopping servers"
-    # TERM the server process only: sglang tears down its own workers, while a TERM to
-    # the whole group reaches the scheduler first and reads as a crash.  KILL the group
-    # only if something is still alive after the grace period.
-    for pid in "${PIDS[@]}"; do kill -TERM "$pid" 2>/dev/null; done
-    for _ in $(seq 1 60); do
-        alive=0
-        for pid in "${PIDS[@]}"; do kill -0 -- "-$pid" 2>/dev/null && alive=1; done
-        [ $alive -eq 0 ] && break
-        sleep 1
+    local pid state rc states=() verified=1
+    # Every registered bootstrap is told to stop before anything else: one without .go can
+    # then never exec its server.
+    for pid in "${PIDS[@]}"; do
+        : > "${STATE_OF[$pid]}.stop" || verified=0
     done
-    for pid in "${PIDS[@]}"; do kill -KILL -- "-$pid" 2>/dev/null; done
+    for pid in "${PIDS[@]}"; do
+        state=${STATE_OF[$pid]}
+        if [ -e "$state.go" ]; then
+            states+=("$pid" "$state")
+            continue
+        fi
+        # Never acknowledged: still this shell's own (not disowned) job, so `wait` reaps
+        # exactly it; the bootstrap exits on .stop, or by itself within its ack timeout.
+        rm -f "$SERVER_STATE_DIR/wait.err"
+        wait "$pid" 2>"$SERVER_STATE_DIR/wait.err"
+        rc=$?
+        if [ -s "$SERVER_STATE_DIR/wait.err" ]; then
+            say "server ${NAME_OF[$pid]}: bootstrap pid $pid could not be reaped: $(cat "$SERVER_STATE_DIR/wait.err")"
+            verified=0
+        else
+            say "server ${NAME_OF[$pid]} never started (its bootstrap exited $rc before exec)"
+        fi
+    done
+    # The helper validates PID/start/UID/session/group and signals through pidfds.
+    # TERM only leaders; after 60 s KILL surviving owned members, even after leader death,
+    # and allow 60 s more for them to go.
+    if [ -n "${states[*]:-}" ]; then
+        python3 -I -S "$HERE/server_processes.py" stop "${states[@]}" || verified=0
+    fi
+    if [ $verified -eq 0 ]; then
+        say "server cleanup unverified; retaining compile caches and ${SERVER_STATE_DIR#"$WORKDIR"/}"
+        return 1
+    fi
     PIDS=()
     # The servers' compile caches (up to a GB each) are of no use once they are gone.
-    rm -rf "$LOGS"/cache_*
+    rm -rf "$LOGS"/cache_* "$SERVER_STATE_DIR"
 }
 CLIENT_PIDS=()
 PROBE_PID=
@@ -57,18 +86,45 @@ stop_clients() {
     for pid in "${CLIENT_PIDS[@]}"; do kill -TERM -- "-$pid" 2>/dev/null; done
     CLIENT_PIDS=()
 }
-trap 'stop_clients; stop_servers' EXIT
+finish() {
+    local rc=$?
+    trap - EXIT
+    stop_clients
+    stop_servers || { [ $rc -ne 0 ] || rc=1; }
+    exit "$rc"
+}
+trap finish EXIT
 trap 'exit 130' INT TERM
 
 # start_server <name>: own process group, so stopping it also stops its workers; its empty
 # compile caches in this step's logs/.
 start_server() {
+    local state="$SERVER_STATE_DIR/$1.json" pid cancelled=0
     : >"$LOGS/server_$1.log"
-    OAKA_SERVER_CACHE="$LOGS/cache_$1" setsid bash "$HERE/server_$1.sh" >"$LOGS/server_$1.log" 2>&1 &
-    PIDS+=($!)
-    PID_OF[$1]=$!
-    disown
-    say "server $1 started (pid $!), log ${LOGS#"$WORKDIR"/}/server_$1.log"
+    # Defer cancellation until the child is registered and its pre-exec identity
+    # exists. The bootstrap cannot run server/package code before publishing it.
+    trap 'cancelled=1' INT TERM
+    OAKA_SERVER_CACHE="$LOGS/cache_$1" python3 -I -S "$HERE/server_processes.py" start "$state" "$HERE/server_$1.sh" "$$" \
+        >"$LOGS/server_$1.log" 2>&1 &
+    pid=$!
+    PIDS+=("$pid")
+    PID_OF[$1]=$pid
+    NAME_OF[$pid]=$1
+    STATE_OF[$pid]=$state
+    for _ in $(seq 1 100); do
+        [ -s "$state" ] && break
+        sleep 0.05
+    done
+    trap 'exit 130' INT TERM
+    [ $cancelled -eq 0 ] || exit 130
+    [ -s "$state" ] || {
+        say "server $1 identity missing; startup refused (see ${LOGS#"$WORKDIR"/}/server_$1.log)"
+        exit 1
+    }
+    : > "$state.go" || exit 1
+    # Registered: from here on the helper owns it by identity, not this shell by job.
+    disown "$pid"
+    say "server $1 started (pid $pid), log ${LOGS#"$WORKDIR"/}/server_$1.log"
 }
 
 # healthy <port>: GET /health answers 200 (how InferenceX waits for vllm and ATOM).
@@ -104,8 +160,16 @@ PY
 
 # died <name>: the server crashed or exited; says so with the end of its log.
 died() {
-    local log="$LOGS/server_$1.log"
-    grep -qE "$CRASH_MARKS" "$log" || ! kill -0 "${PID_OF[$1]}" 2>/dev/null || return 1
+    local log="$LOGS/server_$1.log" rc
+    if ! grep -qE "$CRASH_MARKS" "$log"; then
+        python3 -I -S "$HERE/server_processes.py" alive "${PID_OF[$1]}" "${STATE_OF[${PID_OF[$1]}]}"
+        rc=$?
+        [ $rc -eq 0 ] && return 1
+        if [ $rc -ne 3 ]; then
+            say "server $1: ownership unknown (exit $rc); stopping"
+            return 0
+        fi
+    fi
     say "server $1 died during startup; last lines of ${log#"$WORKDIR"/}:"
     tail -30 "$log"
 }

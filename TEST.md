@@ -16,6 +16,17 @@ cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test
   stand-ins for sglang (PYTHONPATH), InferenceX (`OAKA_INFX`) and sgl-eval (PATH); GPUs are
   faked with `OAKA_GPUS`.  It covers a two-server plan, a server crashing at startup, a
   failed GSM8K gate, double Ctrl-C during startup, and no process outliving any of them.
+  `oaka/tests/server_teardown.rs` checks the generated stdlib ownership helper against real
+  CPU-only process groups and pidfds: leader-only TERM, the full 60-second grace with a
+  synthetic clock, survivors of KILL named after the whole 120-second ceiling, dead
+  leader/live child, a wrong-start decoy, identity revalidation, unknown state, unavailable
+  pidfds, a dead parent before bootstrap, a missing startup acknowledgement, cancellation
+  before server exec, and a server started with SIGPIPE/SIGXFSZ at their defaults.  The
+  compiled step retains caches and fails an otherwise successful run when ownership is
+  unknown, while preserving an existing gate-failure exit code; a bootstrap that never
+  registered (no pidfds, or an identity that comes too late) is reaped and reported as never
+  started, with no server code run and no process left, and one that cannot be reaped fails
+  closed.
   vllm (`bin/vllm`) and ATOM (`atom.entrypoints.openai_server` on PYTHONPATH) stand-ins answer
   `GET /health` with 503 until `FAKE_READY_DELAY`, then 200: their servers' flags, readiness,
   a crash at startup, and `doctor`'s engine lines; the artifact root's `doctor` line and
@@ -122,7 +133,8 @@ cargo tests).  Each prints
   only): its artifact
   root, `tmux`, `claude`, `curl` (`mirror --dashboard`), the InferenceX clone mirror reads.
 - `oaka doctor` (worker; `akao init` runs it as its last step): library profiles and
-  `stacks.toml` resolve, GPUs visible (AMD from the KFD topology, NVIDIA from `nvidia-smi`),
+  `stacks.toml` resolve, `pidfd` (python3 and the kernel have the pidfds step.sh owns its
+  servers through; FAIL without), GPUs visible (AMD from the KFD topology, NVIDIA from `nvidia-smi`),
   the plan-GPU (HIP) to amd-smi numbering where they differ, ROCm version (none needed on
   NVIDIA), InferenceX checked out and importable, `trace`: whether InferenceX's client still
   has what trace clients wrap, the serving engines python finds (SGLang, vllm, ATOM; FAIL only

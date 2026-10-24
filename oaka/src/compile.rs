@@ -37,6 +37,10 @@ fn templates() -> Result<Environment<'static>> {
     env.add_template("fixed_seq.sh", include_str!("../templates/fixed_seq.sh.j2"))?;
     env.add_template("run_all.sh", include_str!("../templates/run_all.sh.j2"))?;
     env.add_template("step.sh", include_str!("../templates/step.sh.j2"))?;
+    env.add_template(
+        "server_processes.py",
+        include_str!("../templates/server_processes.py.j2"),
+    )?;
     env.add_template("stack.sh", include_str!("../templates/stack.sh.j2"))?;
     env.add_template("install.sh", include_str!("../templates/install.sh.j2"))?;
     env.add_template("bisect_step.sh", include_str!("../templates/bisect_step.sh.j2"))?;
@@ -405,6 +409,10 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
         runs, ready_timeout_s => READY_TIMEOUT_S,
     })?;
     files.push(("step.sh".into(), text));
+    files.push((
+        "server_processes.py".into(),
+        env.get_template("server_processes.py")?.render(context! { marker })?,
+    ));
 
     if !c.stack.is_empty() {
         files.extend(stack_scripts(&env, c, &marker)?);
@@ -534,6 +542,19 @@ mod tests {
     use super::*;
     use crate::profile::Library;
 
+    fn assert_script_parses(path: &Path) {
+        let status = match path.extension().and_then(|e| e.to_str()) {
+            Some("sh") => std::process::Command::new("bash").arg("-n").arg(path).status().unwrap(),
+            Some("py") => std::process::Command::new("python3")
+                .args(["-I", "-c", "import ast, sys; ast.parse(open(sys.argv[1]).read())"])
+                .arg(path)
+                .status()
+                .unwrap(),
+            _ => return,
+        };
+        assert!(status.success(), "{} does not parse", path.display());
+    }
+
     #[test]
     fn nvidia_servers_get_cuda_devices() {
         let root = std::env::temp_dir().join(format!("oaka-nvidia-{}-{}", std::process::id(), fastrand::u32(..)));
@@ -639,7 +660,7 @@ off_spec = { prompts_per_conc = 4 }
 
         let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, &plan::Machine::default()).unwrap();
         let out = compile(&checked).unwrap();
-        assert_eq!(out.written.len(), 5);
+        assert_eq!(out.written.len(), 6);
         assert_eq!(out.removed, vec![work.join("scripts/server_old.sh")]);
         assert!(work.join("scripts/mine.sh").exists());
 
@@ -669,8 +690,7 @@ off_spec = { prompts_per_conc = 4 }
         assert!(!work.join("scripts/stack.sh").exists());
 
         for f in &out.written {
-            let st = std::process::Command::new("bash").arg("-n").arg(f).status().unwrap();
-            assert!(st.success(), "bash -n {}", f.display());
+            assert_script_parses(f);
         }
         // Recompiling keeps the lock's ports stable.
         fs::write(work.join(plan::PLAN), plan.replace("port = 29950\n", "")).unwrap();
@@ -717,16 +737,7 @@ off_spec = { prompts_per_conc = 4 }
         assert!(client.contains("--num-prompts $(( 10 * CONC ))"), "{client}");
         assert!(read("step.sh").contains("run_client client_02_trace_a.sh\n"));
         for f in &out.written {
-            let st = match f.extension().and_then(|e| e.to_str()) {
-                Some("sh") => std::process::Command::new("bash").arg("-n").arg(f).status().unwrap(),
-                Some("py") => std::process::Command::new("python3")
-                    .args(["-c", "import ast, sys; ast.parse(open(sys.argv[1]).read())"])
-                    .arg(f)
-                    .status()
-                    .unwrap(),
-                _ => continue,
-            };
-            assert!(st.success(), "{} does not parse", f.display());
+            assert_script_parses(f);
         }
         assert!(generated(&work.join("scripts/trace_point.py")));
 
@@ -765,8 +776,7 @@ off_spec = { prompts_per_conc = 4 }
         let checked = plan::check_plan(&work, plan::load(&work).unwrap(), &lib, &plan::Machine::default()).unwrap();
         let out = compile(&checked).unwrap();
         for f in &out.written {
-            let st = std::process::Command::new("bash").arg("-n").arg(f).status().unwrap();
-            assert!(st.success(), "bash -n {}", f.display());
+            assert_script_parses(f);
         }
         assert!(
             !work.join("scripts/server_pd.sh").exists(),

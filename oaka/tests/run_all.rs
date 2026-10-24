@@ -1048,10 +1048,42 @@ fn doctor_reports_missing_prerequisites() {
         "ok    inferencex",
         "ok    trace       InferenceX's client has what trace clients wrap",
         "ok    sgl-eval",
+        "ok    pidfd       python3 and the kernel have pidfds",
         "warn  repo        no akao-workflow clone at",
     ] {
         assert!(text.contains(want), "{want:?} not in {text}");
     }
+    // A python3 without pidfds (old Python or kernel): no step could start a server.
+    let real = Command::new("sh").args(["-c", "command -v python3"]).output().unwrap();
+    let real = String::from_utf8(real.stdout).unwrap().trim().to_string();
+    let nopidfd = sb.root.join("nopidfd");
+    fs::create_dir_all(&nopidfd).unwrap();
+    fs::write(
+        nopidfd.join("python3"),
+        format!(
+            "#!/bin/sh\ncase \"$*\" in *pidfd_open*) echo 'AttributeError: no pidfd_open' >&2; exit 1 ;; esac\n\
+             exec {real} \"$@\"\n"
+        ),
+    )
+    .unwrap();
+    Command::new("chmod")
+        .arg("+x")
+        .arg(nopidfd.join("python3"))
+        .status()
+        .unwrap();
+    let path = format!(
+        "{}:{}:{}",
+        nopidfd.display(),
+        sb.root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = sb.oaka(&["doctor"]).env("PATH", path).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("FAIL  pidfd       python3 cannot use pidfds (AttributeError: no pidfd_open)"),
+        "{text}"
+    );
     assert!(text.contains("warn  stacks      no "), "{text}");
     // With a stacks.toml: each package's repo and where its module imports from.
     sb.fake_repo(&[100], &[]);

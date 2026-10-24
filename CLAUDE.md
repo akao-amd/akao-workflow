@@ -462,6 +462,18 @@ reference is `oaka/README.md`.  The invariants that code changes must keep:
 - **Stopping servers** (`step.sh`): TERM the server process only (a group TERM reaches
   sglang's scheduler first and reads as a crash), KILL the process group after 60 s.  The
   log `tee` ignores INT, or Ctrl-C kills it and the cleanup dies of SIGPIPE.
+  `step.sh` records each leader's PID/start/UID/session/group before server exec and uses
+  the generated stdlib `server_processes.py` to signal through pidfds. A dead leader's
+  surviving group members remain owned; a reused leader or unknown identity fails cleanup
+  without bare-PID/group signals. KILLed members get 60 s more to go (a GPU process can sit
+  in D state), so teardown takes at most 120 s; survivors are named with their state. An
+  otherwise successful step exits 1 and retains its compile caches and
+  `logs/.server_ownership.*` if cleanup cannot be verified. The helper disables Python site
+  hooks, validates its launching parent, bounds the pre-exec acknowledgement wait, and resets
+  SIGPIPE/SIGXFSZ (Python ignores them, exec would pass that on) before exec. A bootstrap
+  step.sh never acknowledged (`.go`) cannot exec: it is told `.stop` and reaped with `wait`
+  (it stays the shell's job until acknowledged; `disown` comes after `.go`), else cleanup is
+  unverified. Python's Linux pidfd APIs are required (`oaka doctor`'s `pidfd` line).
 - sglang can hang on SIGTERM during startup, so the 60 s group KILL is load-bearing.
 - **Compile caches**: `server.sh` empties its own (`TRITON_CACHE_DIR`, `XDG_CACHE_HOME`,
   `Engine::cache_env`) under the step's `logs/cache_<name>/` at every start, before the

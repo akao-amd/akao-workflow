@@ -114,6 +114,7 @@ pub fn run(lib: &Library, json: bool) -> Result<()> {
             r.fail(tool, "not on PATH; every compiled script needs it");
         }
     }
+    check_pidfd(&mut r);
 
     let infx = infx_root();
     if !Path::new(&infx).join("infx/bench").is_dir() {
@@ -232,6 +233,29 @@ assert '/start_profile' in src, 'benchmark_serving has no --profile hook (/start
             )
         }
         Err(e) => r.warn("trace", format!("python3: {e}")),
+    }
+}
+
+/// step.sh owns its servers by identity through pidfds (scripts/server_processes.py, run as
+/// `python3 -I -S`): without them in python3 and the kernel no step starts a server.
+fn check_pidfd(r: &mut Report) {
+    const PROBE: &str = "import os, signal\n\
+fd = os.pidfd_open(os.getpid())\n\
+signal.pidfd_send_signal(fd, 0)\n";
+    match Command::new("python3").args(["-I", "-S", "-c", PROBE]).output() {
+        Ok(o) if o.status.success() => r.ok("pidfd", "python3 and the kernel have pidfds (server ownership)"),
+        Ok(o) => {
+            let err = String::from_utf8_lossy(&o.stderr);
+            let last = err.lines().last().unwrap_or("").trim().to_string();
+            r.fail(
+                "pidfd",
+                format!(
+                    "python3 cannot use pidfds ({last}); step.sh cannot own its servers and starts none: \
+                     needs Python >= 3.9 on Linux >= 5.3"
+                ),
+            )
+        }
+        Err(e) => r.fail("pidfd", format!("python3: {e}")),
     }
 }
 

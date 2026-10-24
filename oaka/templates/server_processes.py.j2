@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+# {{ marker }}
+"""Stable identities for step.sh's server groups; stdlib only, no oaka calls.
+
+start records this process after setsid, then execs the generated server script.
+stop sends TERM only to validated leaders, waits 60 seconds, then sends KILL
+through pidfds to validated surviving group members, including a dead leader's
+children, and allows 60 more seconds for them to go (a GPU process can stay in D
+state while the driver releases the device): at most 120 seconds in all.
+Unknown ownership or unavailable pidfds is a failure, never a bare-PID signal or
+proof of empty cleanup.
+alive exits 0 while the leader runs, 3 when it is gone, anything else: unknown.
+"""
+{% raw %}
+import json
+import os
+import select
+import signal
+import sys
+import tempfile
+import time
+
+GRACE_SECONDS = 60
+VERIFY_SECONDS = 60
+START_ACK_SECONDS = 10
+NOT_RUNNING = 3
+
+
+class OwnershipError(Exception):
+    pass
+
+
+def identity(pid):
+    try:
+        path = f"/proc/{pid}"
+        uid = os.stat(path).st_uid
+        with open(path + "/stat") as f:
+            fields = f.read().rsplit(")", 1)[1].split()
+        return dict(pid=pid, uid=uid, state=fields[0], pgid=int(fields[2]),
+                    sid=int(fields[3]), start=int(fields[19]))
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except (OSError, ValueError, IndexError) as exc:
+        raise OwnershipError(f"cannot read identity of {pid}: {exc}") from exc
+
+
+def running(rec):
+    return rec is not None and rec["state"] not in ("Z", "X")
+
+
+def same(a, b):
+    return all(a[k] == b[k] for k in ("pid", "uid", "start", "pgid", "sid"))
+
+
+def load(path, expected_pid=None):
+    try:
+        with open(path) as f:
+            rec = json.load(f)
+        if (not isinstance(rec, dict)
+                or any(type(rec.get(k)) is not int for k in ("pid", "uid", "start", "pgid", "sid"))
+                or rec["pid"] <= 0 or rec["start"] <= 0 or rec["uid"] != os.geteuid()
+                or (expected_pid is not None and rec["pid"] != expected_pid)
+                or rec["pgid"] != rec["pid"] or rec["sid"] != rec["pid"]):
+            raise ValueError("invalid server group identity")
+        return rec
+    except (OSError, ValueError) as exc:
+        raise OwnershipError(f"cannot validate {path}: {exc}") from exc
+
+
+def members(root):
+    leader = identity(root["pid"])
+    if leader is not None and not same(root, leader):
+        raise OwnershipError(f"server leader {root['pid']} identity changed")
+    out = []
+    try:
+        entries = os.listdir("/proc")
+    except OSError as exc:
+        raise OwnershipError(f"cannot enumerate server group: {exc}") from exc
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        rec = identity(int(entry))
+        if not running(rec) or rec["pgid"] != root["pgid"]:
+            continue
+        if rec["sid"] != root["sid"] or rec["uid"] != root["uid"] or rec["start"] < root["start"]:
+            raise OwnershipError(f"cannot validate member {entry} of server group {root['pgid']}")
+        out.append(rec)
+    # A group ID remains allocated while it has members. After its leader dies,
+    # the recorded session/group and birth bound still identify those children.
+    return out
+
+
+def send(rec, sig):
+    try:
+        fd = os.pidfd_open(rec["pid"])
+    except ProcessLookupError:
+        return
+    except (OSError, AttributeError) as exc:
+        raise OwnershipError(f"cannot pin server process {rec['pid']}: {exc}") from exc
+    try:
+        now = identity(rec["pid"])
+        if running(now) and same(rec, now):
+            signal.pidfd_send_signal(fd, sig)
+    except ProcessLookupError:
+        pass
+    except (OSError, AttributeError) as exc:
+        raise OwnershipError(f"cannot signal server process {rec['pid']}: {exc}") from exc
+    finally:
+        os.close(fd)
+
+
+def start(path, script, parent_pid):
+    # No framework/package hook runs until the server identity is published.
+    if parent_pid <= 1 or os.getppid() != parent_pid:
+        raise OwnershipError("server's launching step exited before bootstrap")
+    parent_fd = os.pidfd_open(parent_pid)
+    if os.getppid() != parent_pid:
+        os.close(parent_fd)
+        raise OwnershipError("server's launching step changed during pinning")
+    os.setsid()
+    rec = identity(os.getpid())
+    if not running(rec) or rec["pgid"] != rec["pid"] or rec["sid"] != rec["pid"]:
+        raise OwnershipError("server did not acquire its own session/group")
+    fd = os.pidfd_open(rec["pid"])
+    try:
+        signal.pidfd_send_signal(fd, 0)  # fail before exec if either pidfd operation is unavailable
+    finally:
+        os.close(fd)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".identity.")
+    with os.fdopen(fd, "w") as f:
+        json.dump(rec, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    # step.sh acknowledges registration before exec. A cancelled or dead step
+    # cannot leave an unregistered bootstrap entering framework startup later.
+    deadline = time.monotonic() + START_ACK_SECONDS
+    try:
+        while True:
+            if os.path.exists(path + ".stop") or select.select([parent_fd], [], [], 0)[0]:
+                raise OwnershipError("server startup cancelled before exec")
+            if time.monotonic() >= deadline:
+                raise OwnershipError("server registration acknowledgement timed out")
+            if os.path.exists(path + ".go"):
+                break
+            time.sleep(0.05)
+    finally:
+        os.close(parent_fd)
+    # Python ignores SIGPIPE and SIGXFSZ for itself and exec keeps ignored signals:
+    # give the server the dispositions a shell would.
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    signal.signal(signal.SIGXFSZ, signal.SIG_DFL)
+    os.execv("/bin/bash", ["bash", script])
+
+
+def stop(servers):
+    roots = [load(path, pid) for pid, path in servers]
+    # Validate every group before sending any signal. Never recover a missing
+    # record by trusting a shell PID, argv, or a newly discovered group leader.
+    groups = [members(root) for root in roots]
+    for root, group in zip(roots, groups):
+        for rec in group:
+            if rec["pid"] == root["pid"]:
+                send(rec, signal.SIGTERM)
+    deadline = time.monotonic() + GRACE_SECONDS
+    while any(members(root) for root in roots):
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.1)
+    deadline = time.monotonic() + VERIFY_SECONDS
+    while True:
+        groups = [members(root) for root in roots]
+        if not any(groups):
+            return
+        for group in groups:
+            for rec in group:
+                send(rec, signal.SIGKILL)
+        if time.monotonic() >= deadline:
+            left = ", ".join(f"pid {rec['pid']} ({rec['state']})" for group in groups for rec in group)
+            raise OwnershipError(f"server group still alive {VERIFY_SECONDS} s after KILL: {left}")
+        time.sleep(0.1)
+
+
+def main():
+    op = sys.argv[1]
+    if op == "start" and len(sys.argv) == 5:
+        start(sys.argv[2], sys.argv[3], int(sys.argv[4]))
+    elif op == "alive" and len(sys.argv) == 4:
+        root = load(sys.argv[3], int(sys.argv[2]))
+        rec = identity(root["pid"])
+        if rec is not None and not same(root, rec):
+            raise OwnershipError("server leader identity changed")
+        return 0 if running(rec) else NOT_RUNNING
+    elif op == "stop" and len(sys.argv) >= 4 and len(sys.argv) % 2 == 0:
+        stop([(int(sys.argv[i]), sys.argv[i + 1]) for i in range(2, len(sys.argv), 2)])
+    else:
+        raise OwnershipError("invalid server ownership command")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OwnershipError, OSError, AttributeError, ValueError) as exc:
+        print(f"server ownership: {exc}; cleanup unverified", file=sys.stderr)
+        sys.exit(2)
+{% endraw %}

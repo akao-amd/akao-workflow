@@ -174,6 +174,19 @@ Where the how lives: worker reference (commands, plan and profile fields)
   server starts; their briefs pin ports instead.  Why not a claim registry under `/<year>`:
   compile writes the lock last (a claim-then-lock race), stale claims cannot be told safely
   from live ones, and kept locks would exhaust the 200 ports.
+- **Servers are stopped by identity, never by a bare PID or group id (ww43).**  Each server's
+  bootstrap records its PID, start time, UID, session and group before any engine code runs
+  and execs the server only once the step has registered it; the step signals only that
+  recorded group, through pidfds: TERM to the leader, KILL after 60 s to its members still
+  alive, also when the leader died first, then up to 60 s for them to go.  A step that cannot
+  verify its servers are gone fails (exit 1, unless a gate already failed) and keeps their
+  compile caches for diagnosis.  Why: the GPT-OSS serving review rejected the generated
+  bare-PID / negative-PGID teardown, which blocked otherwise prepared E2E candidates: a PID or
+  group id is reused once its processes exit, so a late signal can reach someone else's, and a
+  leader that died first left its workers unowned.  An unverified survivor must stop the run,
+  or the next stack install or measurement runs beside it.  The 60 s after KILL: a GPU process
+  can sit in D state while the driver releases the device, and a good measurement must not
+  fail for that.
 - **The stack is verified by where the module imports from and the tree's git HEAD**, not
   by `__version__` (setuptools_scm's string misleads across a fetch).  Every server script
   also prints `pip show` for the record.
