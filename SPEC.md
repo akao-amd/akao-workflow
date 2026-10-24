@@ -84,7 +84,7 @@ its box's docker.
 - **A copy keeps its source path** (`akao cp <src> <nick>:`, the normal form).  Why: every
   box's `/<year>` is rsync'd into one superset; a copy at another path nests inside another
   worker's dir there instead of merging with its original.
-- **Host writes escalate with `sudo -n` only.**  A box's `/<year>` and worker homes are
+- **Host reads and writes escalate with `sudo -n` only.**  A box's `/<year>` and worker homes are
   root-owned (root containers write them): a non-root login uses passwordless sudo, else
   writes as itself (fine where it owns `<host_home>`, e.g. the GB300 trays) and fails loudly
   elsewhere; never a password prompt mid-command.

@@ -220,8 +220,9 @@ remote source only).
   puts it.
 - Like `cp -a`: the source's basename lands *inside* the destination directory, which is
   created if missing.  Files are overwritten; nothing is deleted (merge, never mirror).
-- `tar | ssh tar`; written files are owned root:root, through `sudo -n` on a box whose ssh
-  login is not root (without passwordless sudo: as the login, owned by it).  `--dry-run` prints the commands only.
+- `tar | ssh tar`; on a box whose ssh login is not root, files are read and written through
+  `sudo -n` (root-only worker artifacts included), written ones owned root:root (without
+  passwordless sudo: as the login, owned by it).  `--dry-run` prints the commands only.
 
 akao's ssh gives up on a box that does not answer: `-o ConnectTimeout=10 -o
 ServerAliveInterval=15 -o ServerAliveCountMax=4` (a connection in 10 s, keepalives answered
