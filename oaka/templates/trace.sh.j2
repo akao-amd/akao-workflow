@@ -84,7 +84,9 @@ for point in "${POINTS[@]}"; do
         python3 "$HERE/trace_point.py" "${FLAGS[@]}" --out "$P" --pass "$PASS" --tp {{ tp }} \
             >"$P/pass$PASS/trace_point.log" 2>&1
         RC=$?
-        tail -1 "$P/pass$PASS/trace_point.log" | cut -c1-240
+        # The driver's own last line: the interpreter may print after it (nanobind's leak report
+        # at exit on GB300's triton).
+        grep '^\[trace_point' "$P/pass$PASS/trace_point.log" | tail -1 | cut -c1-240
         case $RC in
             0) break ;;
             2) [ "$PASS" -eq $MAX_PASSES ] && { say "$NAME: INCOMPLETE after $MAX_PASSES passes"; INCOMPLETE+=("$NAME"); } ;;
