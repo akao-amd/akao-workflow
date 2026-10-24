@@ -5,6 +5,7 @@ mod exec;
 mod init;
 mod mirror;
 mod state;
+mod task;
 
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
@@ -61,6 +62,28 @@ enum Cmd {
         image: Option<String>,
         #[command(flatten)]
         flags: InitFlags,
+    },
+    /// Make a worker's next task dir <root>/<NNNN>_<desc>, optionally with a brief in it
+    ///
+    /// <root> is the container's artifact root; NNNN the highest number there plus one
+    /// (0001 if none), or --number.  Prints the dir: the one to name in the task message
+    /// and to open the worker's agent in (`akao open --cwd`).
+    Task {
+        /// Host nick (a row in hosts.tsv)
+        nick: String,
+        /// Container name, without the akao_ prefix
+        name: String,
+        /// What the task is, the dir name's tail ([A-Za-z0-9][A-Za-z0-9._-]*)
+        desc: String,
+        /// The task number to use (four digits, e.g. one the user gave), not the next one
+        #[arg(long, value_name = "NNNN")]
+        number: Option<String>,
+        /// A file of this machine to put into the task dir as BRIEF.md
+        #[arg(long, value_name = "FILE")]
+        brief: Option<String>,
+        /// Print the dir it would make, and make nothing
+        #[arg(long)]
+        dry_run: bool,
     },
     /// A worker for one InferenceX benchmark config (init with its image, plus a brief)
     ///
@@ -192,6 +215,27 @@ fn run(cli: Cli) -> Result<()> {
             let runner = exec::Runner::new(flags.dry_run)?;
             init::run(&state, &runner, &flags.options(nick, name, image))?;
             Ok(())
+        }
+        Cmd::Task {
+            nick,
+            name,
+            desc,
+            number,
+            brief,
+            dry_run,
+        } => {
+            let runner = exec::Runner::new(dry_run)?;
+            task::run(
+                &state,
+                &runner,
+                &task::Options {
+                    nick,
+                    name,
+                    desc,
+                    number,
+                    brief,
+                },
+            )
         }
         Cmd::Mirror {
             nick,

@@ -2,6 +2,7 @@
 //! mutating commands are only echoed while read-only probes still run.
 
 use anyhow::{bail, Context, Result};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -123,6 +124,24 @@ impl Runner {
             bail!("command failed ({status}): {}", show(argv));
         }
         Ok(())
+    }
+
+    /// Run a mutating command with already-read input. Skipped under --dry-run.
+    pub fn input(&self, argv: &[String], bytes: &[u8]) -> Result<()> {
+        println!("  + {} (brief on stdin)", self.display(argv));
+        if self.dry_run {
+            return Ok(());
+        }
+        let mut child = command(argv)
+            .stdin(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("cannot start {}", argv[0]))?;
+        let written = child.stdin.take().unwrap().write_all(bytes);
+        let status = child.wait()?;
+        if !status.success() {
+            bail!("command failed ({status}): {}", show(argv));
+        }
+        written.context("sending brief on stdin")
     }
 
     /// Run `left | right`. Skipped under --dry-run.

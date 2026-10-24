@@ -161,6 +161,7 @@ akao/
     dashboard.rs      `akao mirror --dashboard` — the dashboard's API (curl, serde_json):
                       curve, run, commit snapshot, measured points, server logs
     cp.rs             `akao cp`  — cross-host path copy via tar | ssh
+    task.rs           `akao task` — a worker's next numbered task dir, with its BRIEF.md
     doctor.rs         `akao doctor` — console prerequisites (ssh wrapper, state, deploy,
                       controller: artifact root, tmux, claude, InferenceX clone)
   tests/cp.rs         akao cp between two scratch boxes (homes in a sandbox), stand-in ssh run locally
@@ -237,6 +238,7 @@ impl Runner {
     pub fn ssh_argv(&self, nick, script) -> Vec<String>
     //   wraps `sh -c '<script>'` for ssh; display() pretty-prints as [nick] <script>
     pub fn run(argv)    // mutating; skipped under --dry-run
+    pub fn input(argv, bytes) // mutating, already-read brief on stdin; skipped under --dry-run
     pub fn pipe(l, r)  // l | r; skipped under --dry-run
     pub fn probe(argv)  // read-only, also runs under --dry-run; None on non-zero exit
     pub fn query(argv)  // probe that errors on non-zero exit
@@ -380,6 +382,13 @@ leading with it.  An explicit path, `..` included, is passed through as given.
 Each side is wrapped in `ssh nick -- sh -c '...'` when remote, or `sh -c '...'` when local.
 Write side uses `ESCALATE` (sudo -n) on remote; local writes run without sudo (we are root
 in the container).
+
+### task.rs — around a worker
+
+Each reaches the box's docker as `docker -H ssh://<nick>` (as init's step 1: no context
+needed, the console's current one never changed). `task` reads the root inside the
+container and checks the number next to its `mkdir` (best effort: one controller drives a
+worker; no lock).
 
 ## Design notes
 
