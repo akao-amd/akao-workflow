@@ -270,7 +270,8 @@ repo checkout (`$AKAO_REPO_ROOT`, `state::shippable_repo`) is checked before ste
 
 1. Resolve nick via `ssh -G` (verifies ssh connectivity); the GPU vendor (`Gpu`) from the
    host's `/dev/kfd` (AMD) or `/dev/nvidiactl` (NVIDIA), neither fails; `docker -H ssh://<nick> version`
-   (fails loudly: the `ssh` wrapper, see Design notes); `ps -a` tells a missing container
+   (fails loudly: the `ssh` wrapper, see Design notes; a stopped daemon, from `systemctl
+   is-active`, is named with its fix, never started); `ps -a` tells a missing container
    from an unreadable one; an existing `akao_<name>` is inspected (`Existing`: id, image,
    workdir, mounts, env): it keeps its image and artifact root (`adopt`), and anything it
    contradicts (mirror's image, `--week`, `--artifact-root`, another year, `/<year>` or

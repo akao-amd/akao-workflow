@@ -497,7 +497,25 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
             .map(|s| s.to_string())
             .collect()
     };
-    let version = r.query(&docker_h(&["version", "--format", "{{.Server.Version}}"]))?;
+    let version = match r.query(&docker_h(&["version", "--format", "{{.Server.Version}}"])) {
+        Ok(v) => v,
+        Err(e) => {
+            // Some boxes keep their daemon stopped (h13-16): say so, with the fix.
+            let daemon = r
+                .probe(&r.ssh_argv(nick, "systemctl is-active docker 2>/dev/null || true"))
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            let daemon = daemon.trim();
+            if matches!(daemon, "inactive" | "failed") {
+                return Err(e.context(format!(
+                    "docker is {daemon} on {nick}: if starting it is authorized (this box may keep it stopped \
+                     on purpose), `ssh {nick} sudo -n systemctl start docker`, then init again"
+                )));
+            }
+            return Err(e);
+        }
+    };
     println!("  docker {} reachable", version.trim());
     let filter = format!("name=^/?{}$", p.container);
     let names = r.query(&docker_h(&["ps", "-a", "--filter", &filter, "--format", "{{.Names}}"]))?;

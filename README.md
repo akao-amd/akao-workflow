@@ -87,7 +87,8 @@ and names the one it runs):
 1. resolve the nick through `ssh -G`, tell AMD (`/dev/kfd`) from NVIDIA (`/dev/nvidiactl`)
    GPUs (NVIDIA: `--gpus all`, then the same steps; on the ARM64 GB300 trays the agents reach
    the AMD gateway through the console: keep `utils/agent_greenhouse.sh tunnel <nick>` running),
-   and reach the box's docker; if `akao_<name>` already
+   and reach the box's docker (a stopped daemon is named, with the command that starts it;
+   init never starts it); if `akao_<name>` already
    exists, it keeps its image and artifact root, and must mount `/<year>` and `/root` from
    where hosts.tsv says (a request it cannot satisfy fails here, before the host is touched)
 2. create the artifact root under `<host_home>` and `<host_home>/container_home` on the host
