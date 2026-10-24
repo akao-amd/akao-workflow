@@ -134,12 +134,15 @@ Rules and body fields change between SGLang revisions: when the probe fails, rea
 and report what changed; the driver is oaka's to fix.
 
 **Verify every trace from its step spans; do not trust the file name.** The trace client
-counts them into `state.json` and `captures.csv`; spot-check a few files yourself. Each step
-appears twice, as `user_annotation` (CPU) and `gpu_user_annotation`: halve the counts below, or
-count only the CPU ones.
+counts them into `state.json` and `captures.csv`; spot-check a few files yourself. Count only
+the CPU spans (`user_annotation`): each step also has GPU ones (`gpu_user_annotation`), one per
+step on ROCm, but on CUDA a long prefill step's is split (GB300, gpt-oss 8k prefill: 37 GPU spans
+for one step; ww43 1024_trace_tp2/0001), so halving a plain `grep` count is wrong there.
 
 ```bash
-zcat <trace>.trace.json.gz | grep -oE 'step\[(EXTEND|DECODE) bs=[0-9]+( toks=[0-9]+)?' | sort | uniq -c
+zcat <trace>.trace.json.gz | python3 -I -c 'import json, sys, collections; print(collections.Counter(
+    e["name"] for e in json.load(sys.stdin)["traceEvents"]
+    if e.get("cat") == "user_annotation" and e.get("name", "").startswith("step[")))'
 ```
 
 Prefill: `EXTEND bs=1` (sometimes 2), `toks` between `range_ratio`·ISL and ISL and varied across
