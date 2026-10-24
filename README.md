@@ -73,9 +73,10 @@ akao host ls
 akao host rm h21-4
 ```
 
-`rest` is appended to the fixed `docker run` skeleton (`--rm -d --privileged`, devices,
+`rest` is appended to the fixed `docker run` skeleton (`--rm --init -d --privileged`, devices,
 host network/IPC, `--shm-size=32g`, ...; on an NVIDIA box `--gpus all`, IPC, `--shm-size=32g`,
-memlock/stack ulimits, `SYS_NICE`); it never replaces it.
+memlock/stack ulimits, `SYS_NICE`); it never replaces it. Both vendors use `--init` to reap
+orphaned worker processes. This applies when creating a container; init reuses existing ones.
 
 ## `akao init <nick> <name> --image <tag>`
 

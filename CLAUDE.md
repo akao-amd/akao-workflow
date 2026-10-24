@@ -301,17 +301,19 @@ repo checkout (`$AKAO_REPO_ROOT`, `state::shippable_repo`) is checked before ste
 
 Steps 3, 7, 8 and 9 are skipped together by `--skip-setup`.
 
-**docker run skeleton**: `--rm -d --privileged --ulimit nofile=1048576 --network=host
+**docker run skeleton**: `--rm --init -d --privileged --ulimit nofile=1048576 --network=host
 --device=/dev/kfd --device=/dev/dri --group-add video --cap-add=SYS_PTRACE
 --security-opt seccomp=unconfined -e PYTHONPATH= -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8
 -e TERM=tmux-256color --ipc=host --shm-size=32g`.  On NVIDIA (`NVIDIA_RUN_SKELETON`, the
-flags of a hand-run GB300 container): `--rm -d --gpus all --ipc=host --shm-size=32g
+flags of a hand-run GB300 container): `--rm --init -d --gpus all --ipc=host --shm-size=32g
 --ulimit memlock=-1 --ulimit stack=67108864 --cap-add SYS_NICE` and the same four `-e`;
 mounts, workdir and env below are the same.  An NVIDIA container is only launched: init
 stops after step 6 (the later steps set up oaka, which reads the KFD topology: AMD only).
 Host's `rest` field appends after this, then `--entrypoint sleep <image> infinity`: the
 container only waits for `docker exec`, whatever the image starts (vllm's images have
 ENTRYPOINT `vllm serve`, which would take `sleep` for a model and exit, `--rm` removing it).
+`--init` reaps orphaned worker processes while the container's `sleep` stays alive.
+Existing containers are reused with their original creation settings.
 
 Mounts: `model_path:/model`, `docker_sock:/var/run/docker.sock`,
 `host_home/<year>:/<year>`, `host_home/container_home/akao_<name>:/root`.

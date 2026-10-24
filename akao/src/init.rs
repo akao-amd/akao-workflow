@@ -14,6 +14,7 @@ use std::path::Path;
 const DOCKER_RUN_SKELETON: &[&str] = &[
     "run",
     "--rm",
+    "--init",
     "-d",
     "--privileged",
     "--ulimit",
@@ -40,6 +41,7 @@ const DOCKER_RUN_SKELETON: &[&str] = &[
 const NVIDIA_RUN_SKELETON: &[&str] = &[
     "run",
     "--rm",
+    "--init",
     "-d",
     "--gpus",
     "all",
@@ -776,7 +778,7 @@ mod tests {
     fn docker_run_layout() {
         let argv = plan().docker_run_argv().unwrap();
         let s = argv.join(" ");
-        assert!(s.starts_with("docker --context f19-11 run --rm -d --privileged"));
+        assert!(s.starts_with("docker --context f19-11 run --rm --init -d --privileged"));
         assert!(s.contains("--name=akao_exp"));
         assert!(s.contains("-v /mnt/raid/models:/model"));
         assert!(s.contains("-v /data/docker.sock:/var/run/docker.sock"));
@@ -808,7 +810,7 @@ mod tests {
         let argv = p.docker_run_argv().unwrap();
         let s = argv.join(" ");
         assert!(s.starts_with(
-            "docker --context f19-11 run --rm -d --gpus all --ipc=host --shm-size=32g \
+            "docker --context f19-11 run --rm --init -d --gpus all --ipc=host --shm-size=32g \
              --ulimit memlock=-1 --ulimit stack=67108864 --cap-add SYS_NICE"
         ));
         assert!(!s.contains("kfd") && !s.contains("--privileged") && !s.contains("--network=host"));
