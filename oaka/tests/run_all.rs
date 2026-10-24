@@ -351,9 +351,14 @@ ASYNC_REQUEST_FUNCS = {"vllm": async_request_openai_completions}
 /// InferenceX's `infx.bench_serving.benchmark_serving`: `2 x conc` warm-ups of one prompt
 /// (`WARMUP`), then with `--profile` the hook's `/start_profile`, the burst (`REQ <i>`, random
 /// lengths within the range ratio) at `--max-concurrency`, and `/stop_profile`; the result JSON.
+/// `FAKE_EXIT_NOISE`: the interpreter prints after the driver at exit, as GB300's triton does
+/// (nanobind's leak report).
 const FAKE_INFX_BENCH_SERVING: &str = r#"
-import argparse, asyncio, json, os, random, time
+import argparse, asyncio, atexit, json, os, random, sys, time
 from .backend_request_func import ASYNC_REQUEST_FUNCS, RequestFuncInput
+
+if os.environ.get("FAKE_EXIT_NOISE"):
+    atexit.register(lambda: print("nanobind: leaked 4 instances! See https://nanobind.readthedocs.io", file=sys.stderr))
 
 p = argparse.ArgumentParser()
 for f in ["--model", "--backend", "--base-url", "--random-input-len", "--random-output-len",
@@ -1862,11 +1867,16 @@ fn trace_client_captures_the_steady_state() {
         a.replace("gpus = [0]", "gpus = [0, 1]"),
         trace_client("[[64, 40]]", "[4]")
     );
-    let (code, out) = sb.run(&plan, &[("FAKE_STEP_S", "0.01")]);
+    let (code, out) = sb.run(&plan, &[("FAKE_STEP_S", "0.01"), ("FAKE_EXIT_NOISE", "1")]);
     assert_eq!(code, 0, "{out}");
     assert!(sb
         .read("scripts/server_a.sh")
         .contains("\nexport SGLANG_PROFILE_V2=1\n"));
+    // Each pass's line is the driver's last, whatever the interpreter prints after it.
+    assert!(
+        out.contains("[trace_point pass 1] ") && !out.contains("nanobind"),
+        "{out}"
+    );
     let record: serde_json::Value = serde_json::from_str(&sb.server_record().join("")).unwrap();
     assert_eq!(record["profile_v2"], "1");
     for probe in [
