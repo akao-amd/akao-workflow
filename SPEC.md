@@ -5,55 +5,98 @@ This CLI tool is to simplify tedious operations during my day work as an enginee
 
 The essence of this tool is to skip the remote host, the physical intermediate layer, but let me directly control remote container (or worker) from local.  It keeps most things deterministic as traditional CLI tools did, but augmented with modern LLM agent so that a flexible working experience is possible.
 
-Both CLI tools are targeted at `x86_64-linux-gnu`.  It should be developed in Rust.
+Both tools are written in Rust for `x86_64-linux-gnu`; `oaka` is also built static (musl)
+for x86_64 and aarch64 (the ARM64 GB300 trays), since it runs in whatever image a worker has.
+
+Where the how lives: akao usage `README.md`; oaka reference `oaka/README.md`; how to change
+the code `CLAUDE.md`; tests `TEST.md`.  This file keeps the intent and the decisions, with
+their reasons.
+
+## Status
+
+- Milestone 1 — servers and clients: `draft`, `check`, `compile`, `run`, `profile`,
+  `doctor`.  Done in ww41; verified on gfx950 with real sglang and InferenceX.
+- Milestone 2 — the stack, A-B-A and bisect: `[stack.<package>]`, the library's
+  `stacks.toml`, `commits` and `bisect` plans, `draft --stack`, `doctor` checks.  Built in
+  ww42 with hermetic tests (a stand-in package in a scratch git repo).  `stacks.toml` has
+  recipes for SGLang, AITER (gfx942/gfx950 and gfx1250) and Triton (gfx1250 only), each
+  built and served once on gfx950 (Triton's keyed for gfx950 by hand; TEST.md, layer 2).
+- Mirror and engines (ww42 weekend): `akao mirror`, profiles for vllm and ATOM, pinned
+  artifact roots.  Hermetic tests (stand-in vllm/ATOM servers, a scratch InferenceX repo,
+  stand-in ssh/docker/curl).  First real mirror 2026-10-13: `--dashboard` brought up the
+  dashboard's gpt-oss-120b MI355X vllm run on n10-17 (vllm/vllm-openai-rocm:v0.22.0; it
+  needed the entrypoint override).  No plan has run in a mirror yet (the console's `/2026`
+  holds none, 2026-10-24).
+- Clients and shapes (ww43): `lockstep` fixed-seq clients and `trace` clients (2026-10-19),
+  prefill-decode disaggregation profiles (`[pd]`, 10-22; first one
+  `gpt-oss-120b/base1021-tp2-pdd`).  Hermetic tests with stand-in schedulers and routers.
+- NVIDIA and the controller's commands (2026-10-24): oaka on NVIDIA GPUs (nvidia-smi,
+  `gpt-oss-120b/gb300`), `akao init` setting NVIDIA workers up fully with an aarch64 oaka for
+  the GB300 trays; `akao task`, `akao open`, `akao rm` around a worker.
 
 ## Local driver: `akao`
 
-The following subsections define subcommands that akao supports.  Ideally it follows clean subcommand style as `git` or `docker`.
+Subcommands in the style of `git` or `docker`; the console reaches each worker through ssh to
+its box's docker.
 
-### Initialization
+### Decisions on bringing up a worker (`akao init`)
 
-> Note: unless specified otherwise, the path strings enclosed with **`** are in the container, not in the host environment.
+- **A worker is a container named `akao_<name>`**, the name a brief description of its
+  purpose, never docker's random names.
+- **What differs between boxes is one row of `hosts.tsv`**: model path, docker socket, host
+  home, and extra `docker run` arguments (`rest`, appended to the fixed skeleton, never
+  replacing it).  Why: the boxes' specs differ (models on various drives, docker storage
+  moved to another drive for space), and on a shared account (`amd`, `root`) my home is a
+  directory I export as `HOME` by hand, the root of everything after.  How to reach a box
+  (host names, keys, logins) stays in ssh's config, `$AKAO_CONFIG_ROOT/.ssh/config`.
+- **The image is required**, with no default per host or global (ww42): a default image goes
+  stale silently, and a worker brought up on an old image costs a debug session.  An existing
+  worker keeps the image it runs.
+- **The same paths in every worker on every box**: models at `/model`, the box's docker
+  socket at `/var/run/docker.sock` (docker in the worker drives the box's other containers),
+  `<host home>/<year>` at `/<year>` (a year's work all lives under `/2026`, and my history
+  says so), the worker's home, copied once from the template, at `/root`.  Why: briefs,
+  scripts and habits carry over between workers and boxes.
+- **The container only waits** (`--entrypoint sleep <image> infinity`, with `--init`):
+  everything in it runs through `docker exec`.  Why: what an image starts is not the
+  worker's; vllm's images have ENTRYPOINT `vllm serve`, which took `sleep` for a model and
+  exited, and `--rm` removed the container.  `--init` reaps the orphans worker processes
+  leave behind, which `sleep` would not.
+- **An NVIDIA box gets the same worker** (2026-10-13; fully set up 10-24, for the GB300
+  trays): only the `docker run` skeleton differs, `--gpus all` and the flags of a hand-run
+  GB300 container (known to work there), plus the host network; mounts, setup steps and oaka
+  are the same.  Why: agents and plans should not care which vendor a box has.
+- **Init is idempotent**: every step checks what exists and reuses it.  Why: re-running init
+  resumes a half-done worker, and refreshing one (a new clone, a new oaka) is just init again.
+- **InferenceX at `/<year>/nocopy/InferenceX`, brought to origin's latest `main` at every
+  init** (and so every mirror).  Why latest: the checkout is one per box, shared by its
+  workers; cloned once and never pulled, each box stayed at its first init's commit, so
+  boxes ran different benchmark clients without saying so.  Never at the cost of work: a
+  checkout with uncommitted changes or commits of its own `main` is left, with a warning.
 
-- Purpose: Initialize a remote container (as a worker) with basic setups.
-- State
-  - Strings
-    - **current working year**. e.g. "2026".
-    - **current working week in the year**. e.g. "ww39".
-  - Skills for agents: `skills/` in this repo, read from the repo
-    checkout every agent has (`$AKAO_REPO_ROOT`).
-  - useful utilities: `utils/` in this repo.
-  - **home template**: The template directory, as in `/2026/template/container_home`.
-  - **A TSV file** to store the information about the remote host, which is essential although we want to bypass it. The basics of an entry are:
-    - **host nick name**: A shorten nmoenics of a host, often a ending substring. A full host name of the remote box can be looked up with the nick name from `~/.ssh/config`.
-    - **model path**: The workstation (remote boxes) we use have various specs, and so the model path is not unified.
-    - **docker socket path**: mostly the default one, but some machine has storage concerns that moves the docker storage to some other drives.  The reason we need this information because it is attached into the launched container with `-v`, so that the docker CLI in the container can further driver other containers on that host.
-    - **host home directory, in absolute path**: some settings of the remote box requires shared user account such as `amd` or `root`.  In such case I create my own home directory and do `export HOME=....../akao` manually when using it interactively. This entry should record this value because that will be the root of all follow-up operations.
-    - **rest arguments**: additional information.  The usage should be refined in the future.
-- Input
-  - The **host name** of the remote box that we are going to initialize a container on.
-  - **image tag**: required, with no default per host or global (decided ww42: a default
-    image goes stale silently, and a worker brought up on an old image costs a debug session).
-  - **container name**: our convention doesn't allow the random namings generated by docker by default. This name is a brief description on the purpose of it.  The real name of the container when a `docker run` command is issued, should be prepended with `akao_` prefix.
-- The expected effects should be equivalent to the following steps performed in sequence
-  - deploy the home template (the control plane, i.e. `CLAUDE.md`, `skills` and `utils`, is the worker's clone of this repo)
-  - docker context creation (with `host=ssh://<host nick name>`)
-  - use the context
-  - run a remote container with the information from Input and State. With the mount settings:
-    - the model directory on host should always map to `/model`
-    - the docker socket should always map to `/var/run/docker.sock`
-    - the work year artifact directory should be mounted as `-v <host home directory>/<work year>:/<work year>`.  A lot of file operations and commands involve `/2026` in my bash history this year.
-    - the home directory should be created from the template and then mount as `/root` in the container.
-  - In the container
-    - Install necessary packages for my workflow. The containers are mostly Ubuntu-based, so `apt update && apt install vim less tmux docker.io` mostly does the trick.  Some more complicated stuff to be installed are `gh` (by `utils/install_gh.sh`) and Claude/Codex agents (by `utils/agent.sh`).
-    - Get tmux running.  Name the first window as `controller`, and launch Claude.
-    - Check out InferenceX into `/<work year>/nocopy/InferenceX`, brought to origin's latest
-      `main` at every init (and so every mirror), and put `oaka` on PATH; both are what `oaka`
-      needs inside the worker.  Why latest: the checkout is one per box, shared by its
-      workers; cloned once and never pulled, each box stayed at its first init's commit, so
-      boxes ran different benchmark clients without saying so.  Never at the cost of work: a
-      checkout with uncommitted changes or commits of its own `main` is left, with a warning.
-    - Install `sgl-eval` (`pip install sgl-eval`, never `sglang[test]`) for `oaka`'s GSM8K client.
+### Decisions on reaching boxes and moving files
+
+- **tar over ssh, not rsync.**  Why: rsync is not installed on every box; tar and ssh are.
+  Every write is owned `root:root`, as the (root) worker containers write.
+- **Merge, never mirror**: nothing is ever deleted at the destination (no `--delete`).  Why:
+  each box's `/<year>` is a subset of the console's superset; a delete would wipe the work of
+  other boxes.
+- **A copy keeps its source path** (`akao cp <src> <nick>:`, the normal form).  Why: every
+  box's `/<year>` is rsync'd into one superset; a copy at another path nests inside another
+  worker's dir there instead of merging with its original.
+- **Host writes escalate with `sudo -n` only.**  A box's `/<year>` and worker homes are
+  root-owned (root containers write them): a non-root login uses passwordless sudo, else
+  writes as itself (fine where it owns `<host_home>`, e.g. the GB300 trays) and fails loudly
+  elsewhere; never a password prompt mid-command.
+- **docker reaches the boxes through an `ssh` wrapper on PATH.**  Why: docker's `ssh://`
+  contexts run plain `ssh` from PATH and cannot be given `-F`; with akao's own config
+  directory docker would silently read `~/.ssh/config` (wrong login, unknown hosts), and a
+  shell alias is invisible to it.
+- **A host entry may be a login shell, which akao turns off for its own commands**
+  (`RemoteCommand=none`, no tty; f19-11's exports `HOME=/root/akao` for the shared root
+  account).  Why: ssh refuses a command alongside a `RemoteCommand`.  The commands then run
+  with the account's own `HOME`, so remote scripts take every host path from `hosts.tsv`'s
+  `host_home`, never `$HOME` or `~`.
 
 ## Worker-side plan generator and script compiler: `oaka`
 
@@ -71,20 +114,6 @@ source/dependency stack** (swap sglang/aiter/triton revisions, clean caches, bis
 
 Where the how lives: worker reference (commands, plan and profile fields)
 `oaka/README.md`; invariants for changing the code `CLAUDE.md`; tests `TEST.md`.
-
-### Status
-
-- Milestone 1 — servers and clients: `draft`, `check`, `compile`, `run`, `profile`,
-  `doctor`.  Done in ww41; verified on gfx950 with real sglang and InferenceX.
-- Milestone 2 — the stack, A-B-A and bisect: `[stack.<package>]`, the library's
-  `stacks.toml`, `commits` and `bisect` plans, `draft --stack`, `doctor` checks.  Built in
-  ww42 with hermetic tests (a stand-in package in a scratch git repo); only sglang has a
-  recipe so far (AITER/Triton recipes wait for the user).
-- Mirror and engines (ww42 weekend): `akao mirror`, profiles for vllm and ATOM, pinned
-  artifact roots.  Hermetic tests (stand-in vllm/ATOM servers, a scratch InferenceX repo,
-  stand-in ssh/docker/curl).  First real mirror 2026-10-13: `--dashboard` brought up the
-  dashboard's gpt-oss-120b MI355X vllm run on n10-17 (vllm/vllm-openai-rocm:v0.22.0; it
-  needed the entrypoint override); no plan has run in a mirror yet.
 
 ### Decisions
 
@@ -140,12 +169,17 @@ Where the how lives: worker reference (commands, plan and profile fields)
 - **The plan owns the per-task restriction**: GPUs (hence `--tp` and `HIP_VISIBLE_DEVICES`),
   port and model path; profiles may not set them.  Ports are random in 29900-30100 (never
   30000) and locked once chosen.
+- **Ports are picked per plan, not claimed box-wide (ww43).**  The pick sees only the ports
+  listening now, so workers sharing a box's network can pick the same one before either
+  server starts; their briefs pin ports instead.  Why not a claim registry under `/<year>`:
+  compile writes the lock last (a claim-then-lock race), stale claims cannot be told safely
+  from live ones, and kept locks would exhaust the 200 ports.
 - **The stack is verified by where the module imports from and the tree's git HEAD**, not
   by `__version__` (setuptools_scm's string misleads across a fetch).  Every server script
   also prints `pip show` for the record.
 - **Delivery, not deployment.**  The "deployment helper" role was dropped: a static (musl)
-  binary is built into the repo's `oaka/bin` by its post-commit hook, and `akao init` ships
-  it into each worker's clone of the repo.  Why: worker images vary in glibc; akao already
+  binary (x86_64, and aarch64 for the GB300 trays) is built into the repo's `oaka/bin` by its
+  post-commit hook, and `akao init` ships the one for the worker's arch into its clone.  Why: worker images vary in glibc; akao already
   ships the repo to every worker.
 - **Environment checks are `doctor` subcommands**, not cargo tests.  Why: the same checks
   must run where the tools run, and a worker has the binary but seldom a Rust toolchain
@@ -248,7 +282,7 @@ Where the how lives: worker reference (commands, plan and profile fields)
   judgment, and a number oaka's client cannot measure the same way must be labelled, not
   silently compared with the dashboard.
 
-#- **A mirror can start from the dashboard (`--dashboard`) rather than a revision.**  It reads
+- **A mirror can start from the dashboard (`--dashboard`) rather than a revision.**  It reads
   the dashboard's public API: the curve's latest run, the image that ran, the InferenceX commit
   the run ran at (fetched from GitHub as a tarball, not from a clone) and the stored server logs.
   Why: what a user wants reproduced is a point they saw, and its provenance is the dashboard's,

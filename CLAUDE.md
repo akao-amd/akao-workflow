@@ -287,7 +287,8 @@ repo checkout (`$AKAO_REPO_ROOT`, `state::shippable_repo`) is checked before ste
    `deploy_paths` from `deploy_src` into `<host_home>/<year>` (none by default; nothing of
    the repo goes there)
 4. Copy home template (skipped if container home already exists)
-5. Create docker context `ssh://<nick>` (updates it if it points elsewhere).  Relies on the
+5. Create docker context `ssh://<nick>` (updates it if it points elsewhere), then `docker
+   context use` it.  Relies on the
    `ssh` wrapper (see Design notes).
 6. `docker run` the container (reuses if running; starts if stopped; fails on other states,
    and when its id is not the one step 1 judged: created, removed or replaced meanwhile)
@@ -327,9 +328,8 @@ flags of a hand-run GB300 container, plus the host network): `--rm --init -d --g
 SYS_NICE` and the same four `-e`; mounts, workdir, env and steps 7-12 are the same (oaka reads
 NVIDIA GPUs from nvidia-smi; step 7 retries apt over https: the trays close port 80).
 Host's `rest` field appends after this, then `--entrypoint sleep <image> infinity`: the
-container only waits for `docker exec`, whatever the image starts (vllm's images have
-ENTRYPOINT `vllm serve`, which would take `sleep` for a model and exit, `--rm` removing it).
-`--init` reaps orphaned worker processes while the container's `sleep` stays alive.
+container only waits for `docker exec`, whatever the image starts; `--init` reaps orphaned
+worker processes (why both: SPEC.md).
 Existing containers are reused with their original creation settings.
 
 Mounts: `model_path:/model`, `docker_sock:/var/run/docker.sock`,
@@ -397,32 +397,24 @@ the container gone, and removes a home only after a census of every container's 
 
 ## Design notes
 
-- **tar over ssh, not rsync**: rsync is not always installed on remote boxes; tar + ssh
-  always is.  Ownership is forced to `root:root` (`--owner=0 --group=0`) on every write to
-  match what worker containers produce.
-- **Merge, never mirror**: no `--delete` anywhere.  Remote `/2026` dirs are subsets of
-  the local superset; deleting would wipe work from other boxes.
-- **Escalation**: remote `/2026` and `container_home` are root-owned (written by root
-  containers).  A non-root ssh login (e.g. `akao`) uses `sudo -n` when it is passwordless;
-  without it, writes run as the login (a box where it owns `<host_home>`, e.g. the GB300
-  trays) and fail loudly where it does not.  A root login skips sudo.
-- **docker sees ssh only through PATH**: docker's `ssh://` contexts run plain `ssh` from
-  PATH and cannot be given `-F`, so with a custom config directory docker would silently
-  use `~/.ssh/config` (wrong login user, unknown hosts).  The fix is a wrapper named `ssh`
-  in `~/.local/bin` (ahead of `/usr/bin` on PATH) that execs `/usr/bin/ssh -F
-  $AKAO_CONFIG_ROOT/.ssh/config "$@"`, falling back to plain ssh when that file is absent.
-  Its source is `utils/ssh`; install it as `container_home/.local/bin/ssh` and wherever akao
-  itself runs, with `AKAO_CONFIG_ROOT` exported.  Shell aliases do not work: docker never sees them.
-  Init step 1 checks `docker -H ssh://<nick> version` so a missing wrapper fails loudly;
-  `akao doctor` checks the wrapper without touching the network.
-- **A host entry may be a login shell** (`RemoteCommand`, `RequestTTY force`: f19-11's exports
-  `HOME=/root/akao` for the shared root account).  ssh refuses any call that brings its own
-  command then, so akao's ssh (`exec::NO_LOGIN_SHELL`) and the wrapper, for every call with a
-  command (docker's `dial-stdio`), add `-o RemoteCommand=none`, and no tty.  Those commands
-  then run with the account's own HOME, not the login shell's: akao's remote scripts never
-  rely on `$HOME` or `~`; every host path comes from hosts.tsv's `host_home`.  Keep it so.
-- **Idempotent init**: every step checks what exists and reuses it, so re-running init
-  on a half-done worker resumes instead of failing.
+The rules akao's code keeps; why each one is so is in SPEC.md ("Decisions on bringing up a
+worker", "Decisions on reaching boxes and moving files").
+
+- **tar over ssh, not rsync**; every write forced to `root:root` (`--owner=0 --group=0`).
+- **Merge, never mirror**: no `--delete` anywhere.
+- **Escalation**: host writes go through `ESCALATE` (`sudo -n` for a non-root login with
+  passwordless sudo; otherwise as the login, failing loudly where it does not own the path;
+  a root login skips sudo).
+- **docker sees ssh only through PATH**: a wrapper named `ssh` in `~/.local/bin` (ahead of
+  `/usr/bin`) execs `/usr/bin/ssh -F $AKAO_CONFIG_ROOT/.ssh/config "$@"` (plain ssh when that
+  file is absent).  Its source is `utils/ssh`; install it as `container_home/.local/bin/ssh`
+  and wherever akao itself runs, with `AKAO_CONFIG_ROOT` exported.  Init step 1 (`docker -H
+  ssh://<nick> version`) fails loudly without it; `akao doctor` checks it offline.
+- **A host entry may be a login shell** (`RemoteCommand`, `RequestTTY force`): akao's ssh
+  (`exec::NO_LOGIN_SHELL`) and the wrapper, for every call with a command (docker's
+  `dial-stdio`), add `-o RemoteCommand=none` and no tty.  So akao's remote scripts never rely
+  on `$HOME` or `~`: every host path comes from hosts.tsv's `host_home`.  Keep it so.
+- **Idempotent init**: every step checks what exists and reuses it.
 
 ## oaka
 
@@ -465,11 +457,9 @@ reference is `oaka/README.md`.  The invariants that code changes must keep:
 - **Ports** are chosen once (random free port in 29900-30100, never 30000) and kept in
   `plan.lock.toml`, even when busy at recompile: that is usually the plan's own server.
   The pick sees only ports listening now, so workers sharing a box's network can pick the same
-  port before either server starts: their briefs pin ports (`port = ...`).  A box-wide claim
-  registry under `/<year>` was weighed and dropped (ww43): compile writes the lock last (a
-  claim-then-lock race), stale claims cannot be told safely from live ones, and kept locks
-  would exhaust the 200 ports.
-- **Stopping servers** (`run_all.sh`): TERM the server process only (a group TERM reaches
+  port before either server starts: their briefs pin ports (`port = ...`).  No box-wide claim
+  registry (dropped in ww43; why: SPEC.md).
+- **Stopping servers** (`step.sh`): TERM the server process only (a group TERM reaches
   sglang's scheduler first and reads as a crash), KILL the process group after 60 s.  The
   log `tee` ignores INT, or Ctrl-C kills it and the cleanup dies of SIGPIPE.
 - sglang can hang on SIGTERM during startup, so the 60 s group KILL is load-bearing.
@@ -505,7 +495,7 @@ reference is `oaka/README.md`.  The invariants that code changes must keep:
   exclusively (stack.sh would see the other tests' stand-in servers); `OAKA_STACK_STATE`
   keeps the stack's lock and markers out of the real venv.
 - Templates: `{#` opens a Jinja comment, so write `${PIDS[*]}`-style bash, not `${#...}`.
-- Environment knobs: `OAKA_LIB`, `OAKA_INFX`, `OAKA_GPUS`, `OAKA_STACK_STATE`, and
+- Environment knobs: `OAKA_LIB`, `OAKA_INFX`, `OAKA_GPUS`, `OAKA_ROCM`, `OAKA_STACK_STATE`, and
   `AKAO_ARTIFACT_ROOT` from akao (see `oaka/README.md`); tests remove it from the sandbox.
 
 ### Lessons from building it (ww41)

@@ -7,7 +7,7 @@ must provide (paths, env vars, tools) or after setting one up.
 ## 1. Hermetic: `cargo test` (~30 s, no GPU, no network)
 
 ```bash
-cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
 - Unit tests sit in each module: profile overlays and `extends`, plan validation messages,
@@ -23,12 +23,19 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
   otherwise).  A stand-in `sglang_router.launch_router` (PYTHONPATH) answers `POST /generate`
   with 503 until `FAKE_ROUTER_DELAY` has passed and its servers listen: a PD profile's servers,
   their flags and GPUs, the router started after them, a prefill crash before it starts.
+  A lockstep of two servers (one slowed per port) starts every run of every point on both,
+  stops the other client when one fails, writes the slowest server's `summary.csv`, and
+  Ctrl-C stops its clients with the servers.  For `trace` clients the stand-in sglang
+  simulates a scheduler and profiler V2's by-stage captures: captures armed only within
+  50-85% of the measured burst, one trace per TP rank, a point left incomplete after every
+  pass (exit 3), and a profiler breaking the practice's rules stopped at the probe.
   The stand-ins are short Python strings at the top of that file; extend them there.
 - The stack cases use a stand-in package `fakepkg` in a scratch git repo (one commit per
   `SPEED`, which the fake InferenceX reports as tok/s; a `BROKEN` file makes its recipe
   fail): install + verify + clean + dirty-tree refusal, a failing recipe and a running
   server stopping `stack.sh`, A-B-A's `compare.csv`, and a bisect that skips a broken
-  commit and finds the planted regression.
+  commit and finds the planted regression.  They fail if a real sglang server runs in the
+  same container (`stack.sh` refuses then, by design).
 - `init.rs`'s `the_repo_reaches_a_worker_without_touching_its_work` runs the clone/fetch
   script against real git repos: first clone, fast-forward, a worker's own commit kept (and
   rebased), uncommitted changes and another branch left alone.
@@ -41,11 +48,30 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
   measured points and server arguments, the image of the run, and the refusals (an unknown run,
   a run without a commit, several matching curves).  `mirror.rs`'s unit tests cover
   both InferenceX layouts (configs at the root; under `inferencex-e2e/` with
-  `configs/deprecated/`), the launcher's script lookup and the brief.
+  `configs/deprecated/`), the launcher's script lookup and the brief.  It also covers init
+  itself: `--image` and an existing container's image, and an NVIDIA box run with `--gpus all`.
+- The other `akao/tests/` files run akao against stand-ins (ssh through `AKAO_SSH` running the
+  remote script here, docker and tmux on PATH), never a real box:
+  - `init_refresh.rs`: init without `--image` adopts an existing worker's image and pinned or
+    legacy root; missing images, conflicting requests and a replaced container fail before any
+    change; an unreadable docker is never taken for an absent worker.
+  - `init_daemon.rs`: a failed docker connection keeps its error; only a definitely stopped
+    daemon adds the hint, and nothing is started.
+  - `ssh.rs`: the `Runner`'s ssh defaults (timeouts, `-F` when the config exists, no
+    BatchMode), `AKAO_SSH` replacing them, and the defaults winning over a host's config.
+  - `cp.rs` (two scratch boxes) and `cp_local.rs` (real tar, `/<year>` remapped): `nick:` and
+    `:` keep the source's path and merge without deleting, explicit destinations as given,
+    root-only artifacts read through escalation, and the refusals.
+  - `task.rs`: the worker's root and next number, the exact brief, bad inputs and exhausted
+    numbering, concurrent tasks never sharing a dir, dry runs and failures changing nothing.
+  - `open.rs`: the window's command and quoting in the right tmux session, `--continue` /
+    `--resume`, and the refusals (a duplicate window, a missing session, worker or directory).
+  - `rm.rs`: running, stopped, paused and dead containers and `--rm` races, by id; `--home`
+    only after a successful mount census; dry runs and failures keeping data.
+  - `doctor.rs`: below, layer 3.
 - A profile for another ROCm version: `oaka check` aborts, and scripts compiled for 10.1
   refuse to start servers when rerun by hand with `OAKA_ROCM=10.0.0`.  The sandbox pins
-  `OAKA_ROCM` and removes `GPU_ARCH_LIST`, so the host's ROCm does not leak in.  They fail if a real sglang server runs in the
-  same container (`stack.sh` refuses then, by design).
+  `OAKA_ROCM` and removes `GPU_ARCH_LIST`, so the host's ROCm does not leak in.
 
 ## 2. Real GPU smoke (~2 min)
 
@@ -95,12 +121,14 @@ cargo tests).  Each prints
   init ships (`$AKAO_REPO_ROOT`: FAIL if missing, warn if dirty); for a controller (warn
   only): its artifact
   root, `tmux`, `claude`, `curl` (`mirror --dashboard`), the InferenceX clone mirror reads.
-- `oaka doctor` (worker; `akao init` runs it as its last step): the plan-GPU (HIP) to amd-smi
-  numbering where they differ, ROCm version, library
-  profiles resolve, GPUs visible, InferenceX checked out and importable, the serving engines
-  python finds (SGLang, vllm, ATOM; FAIL only when none), the artifact root, the worker's
-  clone of the repo (`$AKAO_REPO_ROOT`, warn only), `sgl-eval` and
-  `oaka` on PATH (warn only).
+- `oaka doctor` (worker; `akao init` runs it as its last step): library profiles and
+  `stacks.toml` resolve, GPUs visible (AMD from the KFD topology, NVIDIA from `nvidia-smi`),
+  the plan-GPU (HIP) to amd-smi numbering where they differ, ROCm version (none needed on
+  NVIDIA), InferenceX checked out and importable, `trace`: whether InferenceX's client still
+  has what trace clients wrap, the serving engines python finds (SGLang, vllm, ATOM; FAIL only
+  when none), `pd router` (`sglang_router`) and `pd mooncake` (warn when a PD profile for this
+  machine needs one that is missing), the artifact root, the worker's clone of the repo
+  (`$AKAO_REPO_ROOT`, warn only), `sgl-eval` and `oaka` on PATH (warn only).
 
 Run them after `akao init`, and first when a run fails for environmental reasons.
 `cargo test` proves each doctor catches what it claims (`akao/tests/doctor.rs`,

@@ -1,7 +1,9 @@
 # akao-workflow
 
 Two CLI tools for driving worker containers on remote boxes from the local console
-(intent and decisions: [SPEC.md](SPEC.md)). Target: `x86_64-unknown-linux-gnu`.
+(intent and decisions: [SPEC.md](SPEC.md)). Target: `x86_64-unknown-linux-gnu`; `oaka` is
+also built static for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` (the ARM64
+GB300 trays), so it runs in any worker image.
 
 - `akao` — local driver (this README).
 - `oaka` — inside a worker: plan generator and script compiler (see below).
@@ -11,8 +13,8 @@ Testing: `cargo test` (hermetic, ~30 s); real-GPU smoke in [TEST.md](TEST.md).
 
 ## Dev environment (the console)
 
-`akao` runs here from the repo; `oaka` reaches workers through the library that
-`akao init` deploys.  Set up once per clone:
+`akao` runs here from the repo; `oaka` reaches workers through their clones of it, which
+`akao init` ships (with the hook's static binary).  Set up once per clone:
 
 ```bash
 rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl   # static oaka, any worker image
@@ -278,7 +280,7 @@ is `skills/controller/SKILL.md` in this repo; this section sets up the machine i
 
 **1. Tools.**  `docker` CLI (it talks to each box's daemon over ssh; no local daemon needed),
 openssh client, git, tmux, Rust (to build akao; `rustup target add
-x86_64-unknown-linux-musl` for the static oaka), and the claude CLI
+x86_64-unknown-linux-musl aarch64-unknown-linux-musl` for the static oakas), and the claude CLI
 (`utils/agent.sh --yes` in this repo, which also adds an `AMD_LLM_API_KEY` placeholder to
 `~/.bash_profile` for you to fill in).  `utils/controller/Dockerfile` is an Ubuntu 24.04
 image with these tools except Rust and claude.  TODO(user): how the console container is
