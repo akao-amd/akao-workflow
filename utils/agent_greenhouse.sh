@@ -113,13 +113,7 @@ REMOTE
 }
 
 # check's tray side: start the proxy through the route snippet and ask the gateway.
-remote_route() {
-    local nick="$1" container="${2:-}"
-    { printf 'set -euo pipefail\nPROXY_PORT=%q TUNNEL_PORT=%q\n' "$PROXY_PORT" "$TUNNEL_PORT"; remote_route; } |
-        on "$nick" "$container" bash -s
-}
-
-check() {
+remote_check() {
     cat <<'REMOTE'
 export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 [[ -s "$NVM_DIR/nvm.sh" ]] && . "$NVM_DIR/nvm.sh" && nvm use default >/dev/null
