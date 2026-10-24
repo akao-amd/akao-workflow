@@ -464,6 +464,11 @@ reference is `oaka/README.md`.  The invariants that code changes must keep:
   reaches boxes without the console's `ww*`, so any other reference dangles there.
 - **Ports** are chosen once (random free port in 29900-30100, never 30000) and kept in
   `plan.lock.toml`, even when busy at recompile: that is usually the plan's own server.
+  The pick sees only ports listening now, so workers sharing a box's network can pick the same
+  port before either server starts: their briefs pin ports (`port = ...`).  A box-wide claim
+  registry under `/<year>` was weighed and dropped (ww43): compile writes the lock last (a
+  claim-then-lock race), stale claims cannot be told safely from live ones, and kept locks
+  would exhaust the 200 ports.
 - **Stopping servers** (`run_all.sh`): TERM the server process only (a group TERM reaches
   sglang's scheduler first and reads as a crash), KILL the process group after 60 s.  The
   log `tee` ignores INT, or Ctrl-C kills it and the cleanup dies of SIGPIPE.
