@@ -89,6 +89,8 @@ pub struct Options {
     /// akao_<name> runs (a refresh), and fails for a new one.
     pub image: Option<String>,
     pub skip_setup: bool,
+    /// Preserve the box's shared InferenceX checkout while another worker is measuring.
+    pub keep_infx: bool,
 }
 
 /// Everything init needs, resolved from the arguments and state up front.
@@ -284,6 +286,19 @@ elif git -C "$X" checkout -q -B main origin/main; then
 else
     say "warning: $X could not check out origin/main; left on $was at $(at HEAD)"
 fi"#
+    )
+}
+
+/// Verify and identify an existing shared checkout without fetching or changing it.
+fn infx_keep_script(dir: &str) -> String {
+    let x = q(dir);
+    format!(
+        r#"X={x}
+if [ ! -e "$X/.git" ] || ! git -C "$X" rev-parse --verify HEAD >/dev/null 2>&1; then
+    echo "--keep-infx requires an existing InferenceX checkout at $X; initialize it first" >&2
+    exit 1
+fi
+git -C "$X" log -1 --format='  kept InferenceX at %H %s (--keep-infx)' HEAD"#
     )
 }
 
@@ -755,10 +770,15 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
 
     s.next("InferenceX checkout");
     // oaka's benchmark client runs InferenceX's own code, so every worker needs it, and at
-    // origin's latest main: the box's one checkout is shared by its workers, and left alone
-    // it stays at whatever commit the box's first init cloned.
+    // origin's latest main by default. The checkout is shared: --keep-infx preserves it
+    // when another worker is measuring, and requires it to exist already.
     let infx = format!("/{}/nocopy/InferenceX", p.year);
-    r.run(&p.exec(&[], &infx_sync_script(&infx, &state.require("infx_repo")?)))?;
+    let infx_script = if opts.keep_infx {
+        infx_keep_script(&infx)
+    } else {
+        infx_sync_script(&infx, &state.require("infx_repo")?)
+    };
+    r.run(&p.exec(&[], &infx_script))?;
 
     s.next("tmux controller window");
     if r.probe(&p.exec(&[], "tmux has-session"))?.is_some() {
@@ -890,6 +910,7 @@ mod tests {
             artifact_root: None,
             image: Some("img:tag".into()),
             skip_setup: false,
+            keep_infx: false,
         }
     }
 
@@ -1124,16 +1145,36 @@ mod tests {
             assert_eq!(out.status.success(), ok, "{}", String::from_utf8_lossy(&out.stderr));
             String::from_utf8_lossy(&out.stdout).into_owned()
         };
+        let keep = |ok: bool| {
+            let out = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(infx_keep_script(infx.to_str().unwrap()))
+                .output()
+                .unwrap();
+            assert_eq!(out.status.success(), ok, "{}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
         let head = || git(&infx, &["rev-parse", "HEAD"]);
         let up = || git(&upstream, &["rev-parse", "HEAD"]);
 
+        keep(false);
+        assert!(!infx.exists());
         assert!(sync(true).contains("cloned"));
         assert!(sync(true).contains("is at origin/main"));
+        let original = head();
         commit(&upstream, "u2");
+        assert!(keep(true).contains(&original));
+        assert_eq!(head(), original);
+        assert_eq!(git(&infx, &["rev-parse", "origin/main"]), original);
         assert!(sync(true).contains("updated to origin/main"));
         assert_eq!(head(), up());
         // Another branch or a detached HEAD, clean: back on main at origin's latest; the branch stays.
         git(&infx, &["checkout", "-q", "-b", "topic", "HEAD~1"]);
+        std::fs::write(infx.join("u1"), "keep my edits").unwrap();
+        keep(true);
+        assert_eq!(git(&infx, &["branch", "--show-current"]), "topic");
+        assert_eq!(std::fs::read_to_string(infx.join("u1")).unwrap(), "keep my edits");
+        git(&infx, &["checkout", "-q", "--", "u1"]);
         commit(&upstream, "u3");
         let out = sync(true);
         assert!(
@@ -1165,10 +1206,12 @@ mod tests {
             &infx,
             &["remote", "set-url", "origin", "file:///nonexistent/InferenceX"],
         );
+        assert!(keep(true).contains(&head()));
         assert!(sync(true).contains("warning: cannot fetch origin main"));
         // Something else at the path: refused.
         std::fs::remove_dir_all(&infx).unwrap();
         std::fs::create_dir_all(&infx).unwrap();
+        keep(false);
         sync(false);
         let _ = std::fs::remove_dir_all(&dir);
     }

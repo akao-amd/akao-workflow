@@ -113,7 +113,8 @@ image (else init fails and names the one it runs):
    `/usr/local/bin`
 10. clone InferenceX into `/<year>/nocopy/InferenceX`, or bring the box's checkout to origin's
     latest `main` (left as is, with a warning, when that would lose uncommitted changes or
-    commits of its own `main`)
+    commits of its own `main`); `--keep-infx` instead verifies the existing checkout and
+    reports its commit without fetching or changing it
 11. start tmux with window `controller` running `claude` (with the clone as an extra working
     directory, `--add-dir`, so reading the skills never prompts), unless tmux already runs
 12. run `oaka doctor` in the worker and show its report: GPU arch and ROCm version (what
@@ -133,7 +134,9 @@ Host-side writes use `sudo -n` when the ssh login is not root and has passwordle
 else run as the login (fine where it owns `<host_home>`).
 
 Flags: `--dry-run` (probes run, changes are only printed), `--skip-setup` (skip steps 3, 7, 8 and 9),
-`--week wwNN` or `--artifact-root <dir>`.
+`--keep-infx` (preserve an existing InferenceX checkout), `--week wwNN` or `--artifact-root <dir>`.
+The InferenceX checkout is shared by a host's workers. Use `--keep-infx` when bringing up a
+worker while another is measuring; it fails if the checkout does not already exist.
 
 Attach afterwards with `docker --context <nick> exec -it akao_<name> tmux attach`.  An agent
 driving workers (the controller) opens the worker's `claude` in a window of its own tmux

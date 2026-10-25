@@ -5,6 +5,28 @@ mod fixture;
 use common::output;
 
 #[test]
+fn keep_infx_selects_verification_without_a_fetch_or_checkout() {
+    let s = fixture::sandbox("keep-infx");
+    let (code, out) = s.run(&[
+        "init",
+        "fakebox",
+        "worker",
+        "--image",
+        "img:test",
+        "--keep-infx",
+        "--dry-run",
+    ]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("--keep-infx requires an existing InferenceX checkout"),
+        "{out}"
+    );
+    assert!(out.contains("kept InferenceX at %H %s (--keep-infx)"), "{out}");
+    assert!(!out.contains("git clone -q --filter=blob:none"), "{out}");
+    assert!(!out.contains("could not check out origin/main"), "{out}");
+}
+
+#[test]
 fn refreshing_adopts_the_existing_image_and_pinned_or_legacy_root() {
     for pinned in [false, true] {
         let s = fixture::sandbox(if pinned { "refresh-pinned" } else { "refresh-legacy" });

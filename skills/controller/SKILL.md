@@ -66,6 +66,10 @@ Always pass `--context <nick>` to docker: `akao init` also makes `<nick>` the *c
 context, a setting of the whole console, so a bare `docker` command goes to whichever box
 was initialized last. (`akao task`/`open`/`rm` address the box themselves.)
 
+The host's InferenceX checkout is shared. When bringing up a worker while another on that
+host is measuring, use `akao init ... --keep-infx`: it verifies and reports the existing
+checkout without fetching or changing it. The other setup steps still run normally.
+
 **One state, one host home.** Every worker of a box writes under the host home hosts.tsv names
 for it, which is where the user looks for results and what their rsync collects. Do not make a
 second `AKAO_CONFIG_ROOT` or another host home to give some workers other settings (a sprint

@@ -65,7 +65,9 @@ cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test
   remote script here, docker and tmux on PATH), never a real box:
   - `init_refresh.rs`: init without `--image` adopts an existing worker's image and pinned or
     legacy root; missing images, conflicting requests and a replaced container fail before any
-    change; an unreadable docker is never taken for an absent worker.
+    change; an unreadable docker is never taken for an absent worker. `--keep-infx` selects
+    verification rather than synchronization; `init.rs`'s real-git test checks missing/non-git
+    checkout refusals and preservation of HEAD, origin/main, branches and local edits.
   - `init_daemon.rs`: a failed docker connection keeps its error; only a definitely stopped
     daemon adds the hint, and nothing is started.
   - `ssh.rs`: the `Runner`'s ssh defaults (timeouts, `-F` when the config exists, no

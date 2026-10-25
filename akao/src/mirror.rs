@@ -42,6 +42,7 @@ pub struct Options {
     pub week: Option<String>,
     pub artifact_root: Option<String>,
     pub skip_setup: bool,
+    pub keep_infx: bool,
 }
 
 /// `git -C <dir> <args>`: stdout, or an error with git's message.
@@ -1188,6 +1189,7 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
             artifact_root: opts.artifact_root.clone(),
             image: Some(image),
             skip_setup: opts.skip_setup,
+            keep_infx: opts.keep_infx,
         },
     )?;
 

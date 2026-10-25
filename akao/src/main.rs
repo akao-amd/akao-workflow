@@ -190,6 +190,9 @@ struct InitFlags {
     /// Skip the control-plane deploy and the package/agent installation
     #[arg(long)]
     skip_setup: bool,
+    /// Keep the box's existing shared InferenceX checkout; do not fetch or change its revision
+    #[arg(long)]
+    keep_infx: bool,
     /// Print the commands that would change anything instead of running them
     #[arg(long)]
     dry_run: bool,
@@ -325,8 +328,10 @@ fn run(cli: Cli) -> Result<()> {
             run,
             flags,
         } => {
-            if nick.is_none() && (flags.week.is_some() || flags.artifact_root.is_some() || flags.skip_setup) {
-                bail!("--week, --artifact-root and --skip-setup apply when bringing a worker up: give a <nick>");
+            if nick.is_none()
+                && (flags.week.is_some() || flags.artifact_root.is_some() || flags.skip_setup || flags.keep_infx)
+            {
+                bail!("--week, --artifact-root, --skip-setup and --keep-infx apply when bringing a worker up: give a <nick>");
             }
             let runner = exec::Runner::new(flags.dry_run)?;
             mirror::run(
@@ -343,6 +348,7 @@ fn run(cli: Cli) -> Result<()> {
                     week: flags.week,
                     artifact_root: flags.artifact_root,
                     skip_setup: flags.skip_setup,
+                    keep_infx: flags.keep_infx,
                 },
             )
         }
@@ -361,6 +367,7 @@ impl InitFlags {
             artifact_root: self.artifact_root,
             image,
             skip_setup: self.skip_setup,
+            keep_infx: self.keep_infx,
         }
     }
 }
