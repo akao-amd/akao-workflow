@@ -213,6 +213,18 @@ Where the how lives: worker reference (commands, plan and profile fields)
   profile as written" could not set the env.  The probe and `doctor`'s `trace` check turn
   that drift into a stop instead of wrong traces.
 
+- **Suites name a benchmark matrix; drafts expand it into ordinary plans** (ww44, 10-26).  The
+  user's "MI45x DPX standard full sweep" (TP1, TP1x2, TP2 on one physical GPU x 1k/1k, 8k/1k,
+  70k/300 x conc 4-64) is measured for many recipes and boxes, and was re-typed into plans by
+  hand, each time a little differently.  A suite (`suites/<name>.toml`) fixes it once; the
+  term was chosen over sweep (any ad-hoc parameter sweep), matrix and "hyper-profile" (a
+  profile is what is served, a suite what is measured).  `draft --suite` writes one plan per
+  layout rather than a new runner: each layout uses the GPUs differently, a plan is one set of
+  servers, and plans are already the unit oaka checks, compiles and reruns without oaka.  A
+  layout needing a different recipe (TP2's all-reduce, PD's `[pd]`) serves
+  `<profile><suffix>`, a library profile, instead of the suite patching the recipe: what is
+  served stays in profiles.
+
 ### Decisions on the stack (milestone 2)
 
 - **One stack per plan, from `stacks.toml` in the library.**  A container has one venv, so

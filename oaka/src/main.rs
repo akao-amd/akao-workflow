@@ -4,6 +4,7 @@ mod draft;
 mod plan;
 mod profile;
 mod stack;
+mod suite;
 mod sys;
 
 use anyhow::{bail, Context, Result};
@@ -41,9 +42,19 @@ enum Cmd {
         /// Client to add for every server: gsm8k or fixed-seq; repeatable
         #[arg(long = "client", value_name = "KIND")]
         clients: Vec<String>,
-        /// Package of the library's stacks.toml to install from a tree (sglang); repeatable
+        /// Package of the library's stacks.toml to install from a tree, as <package>[@<commit>]; repeatable
         #[arg(long = "stack", value_name = "PACKAGE")]
         stacks: Vec<String>,
+        /// gsm8k clients with thinking on (reasoning models such as gpt-oss)
+        #[arg(long)]
+        thinking: bool,
+        /// A suite of the library: one plan per layout, in <dir>/<layout>/plan.toml, measuring
+        /// --profile on --gpus (see `oaka suite ls`)
+        #[arg(long, value_name = "NAME")]
+        suite: Option<String>,
+        /// With --suite: pin the servers' ports, from this one up (each layout reuses them)
+        #[arg(long, requires = "suite")]
+        port: Option<u16>,
         /// Overwrite an existing plan.toml
         #[arg(long)]
         force: bool,
@@ -67,6 +78,17 @@ enum Cmd {
     /// Browse and extend the profile library
     #[command(subcommand)]
     Profile(ProfileCmd),
+    /// Browse the library's suites (named benchmark matrices; `oaka draft --suite`)
+    #[command(subcommand)]
+    Suite(SuiteCmd),
+}
+
+#[derive(Subcommand)]
+enum SuiteCmd {
+    /// List suites
+    Ls,
+    /// Show a suite with its extends chain applied
+    Show { name: String },
 }
 
 #[derive(Subcommand)]
@@ -119,6 +141,24 @@ fn run(cli: Cli) -> Result<()> {
             gpus,
             clients,
             stacks,
+            thinking,
+            suite: Some(suite),
+            port,
+            force,
+        } => {
+            if profiles.len() != 1 || !clients.is_empty() {
+                bail!("--suite takes one --profile and no --client (the suite says what is measured)");
+            }
+            draft_suite(&dir, &lib, &suite, &profiles[0], &gpus, &stacks, thinking, port, force)
+        }
+        Cmd::Draft {
+            profiles,
+            gpus,
+            clients,
+            stacks,
+            thinking,
+            suite: None,
+            port: _,
             force,
         } => draft::run(
             &dir,
@@ -128,6 +168,7 @@ fn run(cli: Cli) -> Result<()> {
                 gpus,
                 clients,
                 stacks,
+                thinking,
                 force,
             },
         ),
@@ -164,7 +205,68 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Doctor { json } => doctor::run(&lib, json),
         Cmd::Profile(cmd) => profile_cmd(&dir, &lib, cmd),
+        Cmd::Suite(SuiteCmd::Ls) => {
+            for name in lib.suites()? {
+                let s = lib.suite(&name)?;
+                println!("{name:<28} {}", s.description);
+            }
+            Ok(())
+        }
+        Cmd::Suite(SuiteCmd::Show { name }) => {
+            print!("{}", lib.suite(&name)?.text());
+            Ok(())
+        }
     }
+}
+
+/// `oaka draft --suite`: <dir>/<layout>/plan.toml for each of the suite's layouts.
+#[allow(clippy::too_many_arguments)]
+fn draft_suite(
+    dir: &Path,
+    lib: &Library,
+    name: &str,
+    profile: &str,
+    gpus: &[u32],
+    stacks: &[String],
+    thinking: bool,
+    port: Option<u16>,
+    force: bool,
+) -> Result<()> {
+    let s = lib.suite(name)?;
+    let machine = plan::Machine::probe();
+    let plans = suite::render(
+        lib,
+        &s,
+        &suite::DraftOptions {
+            profile,
+            gpus,
+            stacks,
+            thinking,
+            port,
+            machine: &machine,
+        },
+    )?;
+    for (layout, _) in &plans {
+        let path = dir.join(layout).join(plan::PLAN);
+        if path.exists() && !force {
+            bail!("{} exists; use --force to overwrite it", path.display());
+        }
+    }
+    for (layout, text) in &plans {
+        let d = dir.join(layout);
+        std::fs::create_dir_all(&d)?;
+        std::fs::write(d.join(plan::PLAN), text)?;
+        println!("wrote {}", d.join(plan::PLAN).display());
+    }
+    println!(
+        "run each layout, one after another: {}",
+        plans
+            .iter()
+            .map(|(l, _)| format!("oaka -C {} run", dir.join(l).display()))
+            .collect::<Vec<_>>()
+            .join(" && ")
+    );
+    Ok(())
 }
 
 /// "ROCm 10.0.0", "ROCm unknown", or "CUDA" on NVIDIA.

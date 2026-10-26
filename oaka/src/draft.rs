@@ -18,6 +18,8 @@ pub struct Options {
     pub clients: Vec<String>,
     /// Packages of stacks.toml to add [stack.<name>] blocks for.
     pub stacks: Vec<String>,
+    /// gsm8k clients with thinking on (reasoning models, e.g. gpt-oss).
+    pub thinking: bool,
     pub force: bool,
 }
 
@@ -41,15 +43,15 @@ fn server_name(profile: &str, taken: &[String]) -> String {
     name
 }
 
-fn toml_list<T: ToString>(v: &[T]) -> String {
+pub fn toml_list<T: ToString>(v: &[T]) -> String {
     format!("[{}]", v.iter().map(T::to_string).collect::<Vec<_>>().join(", "))
 }
 
-fn client_block(kind: &str, server: &str, commented: bool) -> String {
+fn client_block(kind: &str, server: &str, thinking: bool, commented: bool) -> String {
     let body = match kind {
         "gsm8k" => format!(
             "[[client]]\nkind = \"gsm8k\"            # accuracy gate: the run stops below min_score\n\
-             server = \"{server}\"\nthinking = false\nmin_score = 0.90\n"
+             server = \"{server}\"\nthinking = {thinking}\nmin_score = 0.90\n"
         ),
         "trace" => format!(
             "[[client]]\nkind = \"trace\"            # SGLang GPU traces of these points' steady state (sets SGLANG_PROFILE_V2=1)\n\
@@ -69,14 +71,28 @@ fn client_block(kind: &str, server: &str, commented: bool) -> String {
     }
 }
 
-fn stack_block(name: &str, repo: &str, tree: &str) -> String {
+/// `--stack <package>[@<commit>]`: the package and the revision to fill in, if given.
+pub fn stack_arg(s: &str) -> (&str, Option<&str>) {
+    match s.split_once('@') {
+        Some((p, c)) => (p, Some(c)),
+        None => (s, None),
+    }
+}
+
+pub fn stack_block(name: &str, repo: &str, tree: &str, commit: Option<&str>) -> String {
     [
         format!(
             "[stack.{name}]                # install {name} from a git tree before the servers (library stacks.toml)"
         ),
         format!("# a worktree of {repo}; created at the revision when missing"),
         format!("tree = \"{tree}\""),
-        "commit = \"\"                   # REQUIRED unless the tree exists; remove to install the tree as it is".into(),
+        match commit {
+            Some(c) => format!("commit = {}", toml::Value::String(c.into())),
+            None => {
+                "commit = \"\"                   # REQUIRED unless the tree exists; remove to install the tree as it is"
+                    .into()
+            }
+        },
         "# commits = [\"<A>\", \"<B>\", \"<A>\"]          # instead: the whole plan once per revision (A-B-A)".into(),
         "# bisect = { good = \"<A>\", bad = \"<B>\" }   # instead: git bisect; needs a gate (gsm8k, min_output_tok_s)"
             .into(),
@@ -145,7 +161,8 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
         opts.profiles.clone()
     };
     let stacks = stack::load(lib)?;
-    for name in &opts.stacks {
+    for arg in &opts.stacks {
+        let (name, _) = stack_arg(arg);
         if stacks.get(name).is_none() {
             bail!(
                 "--stack {name}: not in {}; it has: {}",
@@ -210,10 +227,16 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
         .ok()
         .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "task".into());
-    for name in &opts.stacks {
+    for arg in &opts.stacks {
+        let (name, commit) = stack_arg(arg);
         let repo = &stacks.get(name).unwrap().repo;
         out += "\n";
-        out += &stack_block(name, repo, &format!("/{}/nocopy/{name}-{task}", sys::work_year()));
+        out += &stack_block(
+            name,
+            repo,
+            &format!("/{}/nocopy/{name}-{task}", sys::work_year()),
+            commit,
+        );
     }
 
     out += "\n";
@@ -221,13 +244,13 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
         out += "# clients run in this order once every server is ready; uncomment what you need.\n";
         for kind in CLIENT_KINDS {
             out += "\n";
-            out += &client_block(kind, &names[0], true);
+            out += &client_block(kind, &names[0], opts.thinking, true);
         }
     } else {
         for kind in &opts.clients {
             for name in &names {
                 out += "\n";
-                out += &client_block(kind, name, false);
+                out += &client_block(kind, name, opts.thinking, false);
             }
         }
     }
@@ -266,6 +289,7 @@ mod tests {
                 gpus: vec![],
                 clients: vec![],
                 stacks: vec![],
+                thinking: false,
                 force: false,
             },
         )
@@ -282,6 +306,7 @@ mod tests {
             gpus: vec![5, 6, 7],
             clients: vec!["gsm8k".into(), "fixed-seq".into()],
             stacks: vec![],
+            thinking: false,
             force: false,
         };
         let text = render(&lib, &opts).unwrap();

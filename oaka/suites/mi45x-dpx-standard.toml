@@ -1,0 +1,49 @@
+# MI45x DPX standard suite ("MI45x DPX standard full sweep"), defined 2026-10-26 (user, ww44 controller).
+#
+# What a recipe is worth on one physical MI45x GPU in DPX mode (gfx1250 DPX/NPS2: two partitions of
+# 96 CUs / 144 GiB each, plan GPUs 2k and 2k+1), in the three ways it can be served there:
+#   tp1    one TP1 server on the first partition; the sibling stays idle (no foreign load on the
+#          shared physical GPU while measuring)
+#   tp1x2  two TP1 servers, one per partition, measured at the same time (fixed-seq in lockstep):
+#          what each partition gives while its sibling is busy.  results/lockstep_tp1x2/summary.csv
+#          has per point the slower server's number; the GPU's throughput is the two servers' sum
+#   tp2    one TP2 server on both partitions
+# at 3 ISL/OSL pairs x 5 concurrencies, each server first gated by GSM8K (strict: 1319 complete).
+#
+# The client policy is oaka's fixed-seq, i.e. InferenceX's own: 10 prompts per unit of concurrency,
+# its in-client warmups, run 1 is a point's number (repeats 1), range ratio 0.8.  Nothing here
+# changes it.  70000/300 at conc 32-64 is KV-bound on one partition: SGLang queues what does not
+# fit, so expect long points, not failures.
+#
+# Draft:  oaka draft --suite mi45x-dpx-standard --profile <model>/<recipe> --gpus 4,5 [--thinking]
+#         [--port 31341] [--stack aiter@<commit> --stack sglang@<commit>]
+# writes tp1/, tp1x2/, tp2/ plan.toml under the task dir; run them one after another.
+# TP2 serves <profile>-tp2, the recipe's TP2 variant (tp = 2 and what TP2 needs: on these boxes
+# --disable-custom-all-reduce, as AiterCustomAllreduce hung TP2 across a GPU's partitions in DPX,
+# ROCm 10.0.0).  The draft fails, naming it, when the library has none: write it once per recipe.
+
+description = "MI45x DPX standard: TP1, TP1x2 (both partitions at once), TP2 on one physical GPU; 1k/1k 8k/1k 70k/300 x conc 4-64; GSM8K gate"
+arch = ["gfx1250"]
+gpus = 2
+partitions_of_one_gpu = true
+isl_osl = [[1024, 1024], [8192, 1024], [70000, 300]]
+conc = [4, 8, 16, 32, 64]
+range_ratio = 0.8
+gsm8k = { min_score = 0.93 }
+
+[[layout]]
+name = "tp1"
+description = "TP1 on one partition, sibling idle"
+servers = [[0]]
+
+[[layout]]
+name = "tp1x2"
+description = "TP1 on each partition, measured together"
+servers = [[0], [1]]
+lockstep = true
+
+[[layout]]
+name = "tp2"
+description = "TP2 across both partitions"
+servers = [[0, 1]]
+profile_suffix = "-tp2"

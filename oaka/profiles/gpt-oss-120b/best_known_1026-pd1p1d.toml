@@ -1,0 +1,25 @@
+# gpt-oss-120b/best_known_1026 as prefill-decode disaggregation on one physical MI45x GPU in DPX mode:
+# one TP1 prefill server and one TP1 decode server, one per partition, sglang_router in front (the
+# pd1p1d layout of the mi45x-dpx-extra suite).  Created 2026-10-26; not measured yet.
+#
+# KV moves between the two servers by Mooncake over TCP, as gpt-oss-120b/base1021-tp2-pdd (the only
+# PD recipe measured here so far; no RDMA between a GPU's partitions is set up in these images).
+# Everything else is best_known_1026's, including its trees (see there for the [stack]).
+
+description = "gpt-oss-120b best_known_1026, PD: 1 TP1 prefill + 1 TP1 decode (Mooncake over TCP), sglang_router in front"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/best_known_1026"
+tp = 1
+
+[env]
+MOONCAKE_PROTOCOL = "tcp"
+MC_FORCE_TCP = "1"
+
+[args]
+disaggregation-transfer-backend = "mooncake"
+
+[pd.prefill]
+count = 1
+
+[pd.decode]
+count = 1

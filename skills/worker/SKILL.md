@@ -47,6 +47,11 @@ read an A-B-A, the bisect journey). The rules that are yours to keep:
   fit this container, pick the profile made for it (`oaka profile ls`); never widen a
   profile's `arch` to make a plan pass. A tweak worth keeping becomes a profile with
   `oaka profile save`.
+- **A named sweep is a suite** (`oaka suite ls`): "the MI45x DPX standard (full sweep)" or
+  "extra" of a recipe is `oaka draft --suite mi45x-dpx-standard --profile <recipe> --gpus 2k,2k+1`,
+  one plan per layout to run one after another; do not re-type its points into a plan of your
+  own. A layout needing the recipe's TP2 or PD variant names the missing profile: write it
+  extending the recipe, as `gpt-oss-120b/best_known_1026-tp2` and `-pd1p1d` do.
 - **Gates** stop a run with exit 3. A gsm8k score below `min_score` means the server answers
   wrongly: do not report its throughput. A fixed-seq `min_output_tok_s` is a speed
   threshold you set (what a bisect decides on).

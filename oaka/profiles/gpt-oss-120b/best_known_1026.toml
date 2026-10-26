@@ -25,14 +25,24 @@
 # the branch; with it off the two are the same code.  A plan installs the branches with:
 #
 #   [stack.aiter]
-#   tree = "/2026/nocopy/aiter-best-known-20261026"      # a worktree of /sgl-workspace/aiter
+#   tree = "/root/trees/aiter-best-known-20261026"      # a worktree of /sgl-workspace/aiter
 #   commit = "eb90748e7aed4000955f728988243eb18371a0b5"
 #   [stack.sglang]
-#   tree = "/2026/nocopy/sglang-best-known-20261026"     # a worktree of /sgl-workspace/sglang
+#   tree = "/root/trees/sglang-best-known-20261026"     # a worktree of /sgl-workspace/sglang
 #   commit = "bad1b2e947bda16e9f8922f0015b6bc0a3d9e357"
 #
 # after `git -C /sgl-workspace/<repo> fetch https://github.com/akao-amd/<repo> best-known-20261026`
-# (stack.sh never fetches).  Triton stays the image's (triton-custom f4c37587).
+# for repo aiter and sglang (public forks; stack.sh never fetches).  Trees are the worker's own: under
+# /root, never a shared /<year>/nocopy path (a worktree belongs to one container's checkout).  stack.sh
+# creates them at the commits and installs (AITER builds, SGLang's AOT kernels rebuild: minutes); it
+# refuses while any server runs in the container.  Triton stays the image's (triton-custom f4c37587).
+# Checked on h21-5 10-26: fetch, `oaka check`, and stack.sh's install (1.5 min for both; SGLang's needs
+# cargo, which a worker's /root lacks: install it first, as the worker skill says).
+#
+# The sweep of this recipe is a suite: `oaka draft --suite mi45x-dpx-standard (or -extra)
+# --profile gpt-oss-120b/best_known_1026 --gpus 4,5 --thinking --stack aiter@<AITER commit>
+# --stack sglang@<SGLang commit>` (commits as above); its TP2 and PD layouts serve
+# best_known_1026-tp2 and best_known_1026-pd1p1d.
 #
 # ON ANY OTHER IMAGE these commits are not the image's base: the worker carries the enhancements
 # over itself -- rebase the patch commits (all but the AITER image-edit commit, which belongs to

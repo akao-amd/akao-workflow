@@ -173,13 +173,13 @@ akao/
 oaka/
   Cargo.toml
   README.md           worker reference, next to the library it describes
-  profiles/, stacks.toml  the library (OAKA_LIB default: $AKAO_REPO_ROOT/oaka); tracked
+  profiles/, suites/, stacks.toml  the library (OAKA_LIB default: $AKAO_REPO_ROOT/oaka); tracked
   .gitignore          /bin/: the hook's static oaka
   build.rs            stamps the git sha into the version
   templates/*.j2      script templates (minijinja), embedded with include_str!: bash, and
                       metrics.py, the trace driver and its probe in Python
   src/
-    main.rs           CLI: draft, check, compile, run, profile ls|show|save|diff
+    main.rs           CLI: draft [--suite], check, compile, run, profile ls|show|save|diff, suite ls|show
     sys.rs            work year, artifact root, GPU archs (KFD topology; nvidia-smi: sm_*), free ports, q()
     profile.rs        Library ($OAKA_LIB, $AKAO_REPO_ROOT/oaka, legacy /<year>/oaka), profiles,
                       extends, overlays, Engine
@@ -187,6 +187,7 @@ oaka/
     stack.rs          the library's stacks.toml: swappable packages, recipes, clean paths
     compile.rs        plan + library + templates -> scripts/
     draft.rs          plan.toml starter from hints + machine
+    suite.rs          suites/<name>.toml (layouts x ISL/OSL x conc), `draft --suite`: one plan per layout
     doctor.rs         `oaka doctor` — worker prerequisites (library, GPUs, InferenceX, engines)
   tests/run_all.rs    real binary + compiled bash vs. stand-ins for sglang/vllm/ATOM/InferenceX/sgl-eval
                       and a stand-in package in a scratch git repo (stack, A-B-A, bisect)

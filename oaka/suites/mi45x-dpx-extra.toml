@@ -1,0 +1,19 @@
+# MI45x DPX extra suite: the standard suite plus prefill-decode disaggregation on one physical GPU,
+# defined 2026-10-26 (user, ww44 controller).
+#
+#   pd1p1d  one TP1 prefill server on the first partition, one TP1 decode server on the second,
+#           sglang_router in front (oaka's [pd] profiles: the router is the plan server).  Same ISL/OSL
+#           pairs, concurrencies and GSM8K gate as the standard layouts.
+#
+# It serves <profile>-pd1p1d: the measured recipe's PD variant, a profile in the library that extends
+# it with tp = 1 and a [pd] table (one prefill, one decode; KV transfer settings).  The draft fails,
+# naming it, when there is none: write it once per recipe (gpt-oss-120b/best_known_1026-pd1p1d is one).
+
+description = "MI45x DPX extra: the standard suite + PD 1 prefill (TP1) / 1 decode (TP1) on the two partitions"
+extends = "mi45x-dpx-standard"
+
+[[layout]]
+name = "pd1p1d"
+description = "1 TP1 prefill + 1 TP1 decode on the two partitions, router in front"
+servers = [[0, 1]]
+profile_suffix = "-pd1p1d"

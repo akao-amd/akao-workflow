@@ -11,6 +11,7 @@ hand-write, when to stop and ask) are in the worker skill, `$AKAO_REPO_ROOT/skil
 $AKAO_REPO_ROOT/oaka/
   bin/oaka                          static binary (git-ignored; the hook builds it, init ships it)
   profiles/<model>/<recipe>.toml    server launch recipes, self-contained (see Profiles)
+  suites/<name>.toml                named benchmark matrices applied to a profile (see Suites)
   stacks.toml                       packages a plan may install from a git tree (see Stack)
 ```
 
@@ -27,12 +28,16 @@ oaka run        # compile, then scripts/run_all.sh
 oaka doctor     # this worker: GPU arch, ROCm version, prerequisites; --json for agents
                 # (`gpu index`: plan GPU = amd-smi GPU, where amd-smi numbers them differently)
 oaka profile ls | show <p> | diff <a> <b> | save <server> --as <model>/<recipe>
+oaka suite ls | show <s>
+oaka draft --suite <s> --profile <model>/<recipe> --gpus 4,5 [--thinking] [--port N] [--stack <pkg>@<commit>]
+                # one plan per layout: <dir>/<layout>/plan.toml (see Suites)
 ```
 
 - `draft` pre-fills from the hints and the machine (GPU arch, fitting profiles, models
   under `/model`).  One server gets all `--gpus`; several take their pinned `tp` (or 1) each,
   in order.  Each `--client` is added for every server; each `--stack` adds a
-  `[stack.<package>]` block.
+  `[stack.<package>]` block (`<package>@<commit>` fills in its commit).  `--thinking` sets
+  the gsm8k clients' `thinking` (reasoning models such as gpt-oss).
 - Work in a numbered task dir under the worker's artifact root (`$AKAO_ARTIFACT_ROOT`, pinned
   by `akao init`): `check` warns when the Work Directory is outside it, or is the root itself.
 - `check --json` prints `{"ok": true, "machine", "servers", "clients", "stack", "vary",
@@ -256,6 +261,45 @@ image's `GPU_ARCH_LIST` (what it was built for) names another arch.
 - Caches cleaned before an install (`clean = "before-install"`): sglang `~/.cache`,
   `~/.tilelang`; aiter `~/.aiter`, `~/.flydsl` and its JIT builds in the tree; triton
   `~/.triton`, `~/.cache`; and `__pycache__` in every tree.
+
+## Suites (`suites/<name>.toml`)
+
+A suite is a named benchmark matrix: which layouts (how servers sit on the GPUs), ISL/OSL pairs and
+concurrencies are measured, and the gsm8k gate, so that "the MI45x DPX standard suite" is the same
+runs on every box and for every recipe.  The profile says what is served; the suite, what is
+measured.  `oaka draft --suite <s> --profile <p> --gpus <...>` writes one ordinary plan per layout,
+`<dir>/<layout>/plan.toml`; check, compile and run each like any plan, one after another
+(`oaka -C <dir>/<layout> run`).  Per server: a gsm8k client (when the suite has a gate), then a
+fixed-seq client over all its points with the client policy above (run 1 is the number).
+
+```toml
+# provenance and reasons as comments, as in profiles
+description = "one line"
+arch = ["gfx1250"]               # what it is for; the draft refuses another machine's arch
+extends = "<suite>"              # optional: its fields, overridden; its layouts, then these
+gpus = 2                         # how many GPUs --gpus must give
+partitions_of_one_gpu = true     # they are one physical GPU's partitions: --gpus 2k,2k+1 (DPX)
+isl_osl = [[1024, 1024], [8192, 1024], [70000, 300]]
+conc = [4, 8, 16, 32, 64]
+range_ratio = 0.8                # default 0.8
+gsm8k = { min_score = 0.93 }     # optional: a gate per server
+
+[[layout]]
+name = "tp1x2"                   # the plan's directory; its servers are tp1x2_0, tp1x2_1 (one: tp1x2)
+servers = [[0], [1]]             # one entry per server: positions in --gpus
+lockstep = true                  # measure them together (their fixed-seq clients in lockstep)
+# profile_suffix = "-tp2"        # serve <profile><suffix>: the recipe's variant for this layout
+```
+
+A layout whose servers need another recipe than the measured one (TP2's all-reduce setting, PD's
+`[pd]` table) names it by suffix: the library must have `<profile><suffix>`, and the draft fails,
+naming it, when it does not.  `--port N` pins the servers' ports from N up (every layout reuses
+them; PD bootstrap ports are still picked); pin them when other workers share the box's network.
+
+| suite | layouts (on `--gpus 2k,2k+1`) | points |
+|---|---|---|
+| `mi45x-dpx-standard` | `tp1` (first partition, sibling idle), `tp1x2` (TP1 on each, in lockstep), `tp2` (`<profile>-tp2`) | 1024/1024, 8192/1024, 70000/300 x conc 4, 8, 16, 32, 64; gsm8k 0.93 |
+| `mi45x-dpx-extra` | the standard's, + `pd1p1d` (TP1 prefill + TP1 decode, router; `<profile>-pd1p1d`) | the same |
 
 ## Profiles (`profiles/<model>/<recipe>.toml`)
 

@@ -1,0 +1,16 @@
+# gpt-oss-120b/best_known_1026 at TP2: both partitions of one physical MI45x GPU in DPX mode (the tp2
+# layout of the mi45x-dpx-standard suite).  Created 2026-10-26; not measured yet.
+#
+# The recipe, its trees and its [stack] are best_known_1026's (inherited), with tp 1 -> 2 and
+# --disable-custom-all-reduce: AiterCustomAllreduce hung TP2 on a GPU's two partitions in DPX mode
+# (gpt-oss-120b/tp2, ROCm 10.0.0), so every TP2 recipe here falls back to RCCL all-reduce, as
+# gpt-oss-120b/base1021-tp2 does.  The tuned gfx1250 Triton MoE table was swept for the TP1 shapes:
+# at TP2 the expert GEMMs run on entries tuned for other shapes (best-tp2's caveat).
+
+description = "gpt-oss-120b best_known_1026 at TP2 (both partitions of one DPX GPU), RCCL all-reduce"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/best_known_1026"
+tp = 2
+
+[args]
+disable-custom-all-reduce = true
