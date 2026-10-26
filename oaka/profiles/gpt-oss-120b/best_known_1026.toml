@@ -19,7 +19,7 @@
 #   SGLang best-known-20261026  on 3ea7e210d2 (the image's commit; its pyproject/hipify edits are
 #   build edits the sglang recipe redoes, so not committed)
 #     b11640901a  0001  rocprofiler register (PR 44292), what trace clients need
-#     0a353e5967  0007r2  SGLANG_GFX1250_LM_HEAD_TGEMM     LM head via aiter tgemm.mm
+#     bad1b2e947  0007r2  SGLANG_GFX1250_LM_HEAD_TGEMM     LM head via aiter tgemm.mm
 #
 # The measured tree also carried A001 (AITER_GFX1250_UA3D_NHD_TDM_LOAD, unset = off), left out of
 # the branch; with it off the two are the same code.  A plan installs the branches with:
@@ -29,7 +29,7 @@
 #   commit = "eb90748e7aed4000955f728988243eb18371a0b5"
 #   [stack.sglang]
 #   tree = "/2026/nocopy/sglang-best-known-20261026"     # a worktree of /sgl-workspace/sglang
-#   commit = "0a353e59672dd8bd93ef5a1721c6b7671285b952"
+#   commit = "bad1b2e947bda16e9f8922f0015b6bc0a3d9e357"
 #
 # after `git -C /sgl-workspace/<repo> fetch https://github.com/akao-amd/<repo> best-known-20261026`
 # (stack.sh never fetches).  Triton stays the image's (triton-custom f4c37587).
