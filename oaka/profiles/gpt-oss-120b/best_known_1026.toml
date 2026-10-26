@@ -1,0 +1,110 @@
+# gpt-oss-120b (AMD Quark W4A8, amd/gpt-oss-120b-w-mxfp4-a-fp8): best known on gfx1250 as of 2026-10-26.
+# From the ww43 h21-5 overnight campaign (controller records 399-603, 10-25 UTC): the server that won
+# the LM-head A1/B/A2 bracket (arm B), written out whole -- no extends.  It was gpt-oss-120b/base1021
+# (base + best + base1021) with a plan overlay; every line it served with is below, and nothing else.
+# Measured on h21-5 (Helios-P B0, gfx1250 DPX/NPS2), plan GPU 5, TP1, image
+# rocm/sgl-dev:v0.5.22-rocm101-mi45x-20261024, ROCm 10.1.0.
+#
+# ---------------------------------------------------------------------------------------
+# The trees: best-known-20261026 branches (akao-amd forks of SGLang and AITER)
+#
+# The switches below act only where SGLang/AITER implement them; on stock trees they are env vars
+# nobody reads.  The trees it was measured on are these branches (each commit one change):
+#
+#   AITER  best-known-20261026  on 2bb549102 (the image's commit)
+#     e46ea90d  the image's own uncommitted aiter edits (as shipped in /sgl-workspace/aiter)
+#     34e3582c  0003  AITER_TRITON_A8W4_BM16_NUM_STAGES    BM16 MoE GEMM pipeline stages
+#     5b711912  0004  AITER_GFX1250_UA2D_RUNTIME_SEQ        runtime-seq Gluon 2D attention (C1)
+#     eb90748e  0005  AITER_GFX1250_UA3D_NHD_CFG            3D NHD attention config (D3)
+#   SGLang best-known-20261026  on 3ea7e210d2 (the image's commit; its pyproject/hipify edits are
+#   build edits the sglang recipe redoes, so not committed)
+#     b11640901a  0001  rocprofiler register (PR 44292), what trace clients need
+#     0a353e5967  0007r2  SGLANG_GFX1250_LM_HEAD_TGEMM     LM head via aiter tgemm.mm
+#
+# The measured tree also carried A001 (AITER_GFX1250_UA3D_NHD_TDM_LOAD, unset = off), left out of
+# the branch; with it off the two are the same code.  A plan installs the branches with:
+#
+#   [stack.aiter]
+#   tree = "/2026/nocopy/aiter-best-known-20261026"      # a worktree of /sgl-workspace/aiter
+#   commit = "eb90748e7aed4000955f728988243eb18371a0b5"
+#   [stack.sglang]
+#   tree = "/2026/nocopy/sglang-best-known-20261026"     # a worktree of /sgl-workspace/sglang
+#   commit = "0a353e59672dd8bd93ef5a1721c6b7671285b952"
+#
+# after `git -C /sgl-workspace/<repo> fetch https://github.com/akao-amd/<repo> best-known-20261026`
+# (stack.sh never fetches).  Triton stays the image's (triton-custom f4c37587).
+#
+# ON ANY OTHER IMAGE these commits are not the image's base: the worker carries the enhancements
+# over itself -- rebase the patch commits (all but the AITER image-edit commit, which belongs to
+# rocm/sgl-dev:...-20261024 only) onto the new image's commits, commit that image's own uncommitted
+# edits first if it has any, resolve conflicts (or merge where upstream took a change in another
+# form; drop a patch upstream already has), and check each switch still reaches its code (the
+# server log's env lines; a trace for the kernels).  Numbers from such a tree are its own: re-run
+# GSM8K and a same-GPU A1/B/A2 before quoting the figures below.
+#
+# ---------------------------------------------------------------------------------------
+# What it is worth: the LM-head bracket, h21-5 GPU 5, fresh server per arm, A1/A2 = this recipe
+# with SGLANG_GFX1250_LM_HEAD_TGEMM=0.  Output tok/s, fixed-seq run 1, range ratio 0.8:
+#
+#                 1k/1k c4   1k/1k c16   8k/1k c4   8k/1k c16
+#   A1               735.2      1828.2      638.3      1419.6
+#   this (B)         889.6      2029.4      731.1      1514.1
+#   A2               740.3      1826.5      633.6      1401.0
+#   B vs A mean    +20.6%      +11.1%     +15.0%      +7.4%     (A-A drift <= 1.3%)
+#
+#   Mean TPOT -7..-18% at every point.  Costs: mean TTFT 8k/1k c4 +3.1..3.3%; p99 TTFT 1k/1k c16
+#   +3.0..4.1%.  GSM8K (strict, 1319/1319, 0 errors, 0 truncations): A1 0.9606, B 0.9568, A2 0.9598.
+#   Where decode time goes on this recipe without the LM-head switch (trace, c16): MoE GEMM1
+#   38-42%, GEMM2 17-21%, LM head ~12%, full attention 3D 2.5% (1k) / 10.5% (8k), QKV+O ~6.5%.
+#   Qualified only on h21-5 TP1, ISL <= 8k, conc <= 16.  h21-5's unchanged stack is not
+#   bit-reproducible run to run (MoE layer repeats differ, within reference tolerance), so judge
+#   changes by reference tolerance and serving brackets, not bitwise repeats.
+#
+# ---------------------------------------------------------------------------------------
+# Why each line is here
+#
+#   [args], TRITON_HIP_USE_EXPERT_SCHEDULING, ENABLE_CK      gpt-oss-120b/base's tuned recipe
+#       (aiter unified attention with page 64, 3072-token prefill chunks); its comments say why.
+#   HIP_FORCE_DEV_KERNARG                                     deliberately absent: base's "0" made
+#       some torch kernels 4-117x slower on b0 (gpt-oss-120b/best); the image exports 1.
+#   SGLANG_GFX1250_W4A8_BACKEND = "triton"                    expert GEMMs on AITER's plain-Triton
+#       _moe_gemm_a8w4 (the switch moved from AITER to SGLang in the draft-1021 trees).
+#   SGLANG_GFX1250_W4A8_KERNEL_GATHER = "0"                   the campaign's qualified baseline kept
+#       the torch gather; gpt-oss-120b/best's "1" was not re-qualified on these trees.
+#   AITER_TRITON_A8W4_BM16_NUM_STAGES = "2"                   0003; the value every bracket ran.
+#   AITER_GFX1250_UA2D_RUNTIME_SEQ = "1"                      0004 (C1), carried from h21-17.
+#   AITER_GFX1250_UA3D_NHD_CFG = '{"waves_per_eu":2}'         0005 (D3), carried from h21-17.
+#   SGLANG_GFX1250_LM_HEAD_TGEMM = "1"                        0007r2: the LM head (201088 x 2880 bf16)
+#       through aiter tgemm.mm instead of torch.matmul's untuned hipBLASLt (~1.02 ms, ~12% of a step).
+#
+# Not set: gpt-oss-120b/best's SGLANG_LM_HEAD_AITER_TGEMM (no reader in these trees);
+# AITER_TRITON_USE_HERD (approximates the expert routing).  Rejected the same night, all default
+# off and not on the branches: A001 attention TDM K/V load (operator +15-37%, serving mixed),
+# 0201 MoE program order (-3..-8%), 0101 fused scatter (slower at all points).
+# A server that crashes at its first kernel launch with TMPDIR set: TMPDIR must exist (the
+# campaign's plans pointed it at a task dir they had not created).
+
+description = "gpt-oss-120b W4A8, best known gfx1250 recipe 2026-10-26 (h21-5): best-known-20261026 trees, Triton expert GEMMs, C1/D3 attention, aiter LM head; self-contained"
+arch = ["gfx1250"]
+model = "/model/gpt-oss-120b-w-mxfp4-a-fp8"
+tp = 1
+
+[env]
+TRITON_HIP_USE_EXPERT_SCHEDULING = "0"
+ENABLE_CK = "0"
+SGLANG_GFX1250_W4A8_BACKEND = "triton"
+SGLANG_GFX1250_W4A8_KERNEL_GATHER = "0"
+AITER_TRITON_A8W4_BM16_NUM_STAGES = "2"
+AITER_GFX1250_UA2D_RUNTIME_SEQ = "1"
+AITER_GFX1250_UA3D_NHD_CFG = '{"waves_per_eu":2}'
+SGLANG_GFX1250_LM_HEAD_TGEMM = "1"
+
+[args]
+trust-remote-code = true
+max-running-requests = 512
+mem-fraction-static = 0.9
+attention-backend = "aiter"
+page-size = 64
+chunked-prefill-size = 3072
+max-prefill-tokens = 3072
+disable-radix-cache = true
