@@ -71,7 +71,9 @@
 #       _moe_gemm_a8w4 (the switch moved from AITER to SGLang in the draft-1021 trees).
 #   SGLANG_GFX1250_W4A8_KERNEL_GATHER = "0"                   the campaign's qualified baseline kept
 #       the torch gather; gpt-oss-120b/best's "1" was not re-qualified on these trees.
-#   AITER_TRITON_A8W4_BM16_NUM_STAGES = "2"                   0003; the value every bracket ran.
+#   AITER_TRITON_A8W4_BM16_NUM_STAGES = "2"                   0003, at the value every bracket ran: the
+#       tuned table's own value for the gpt-oss shapes, so inert here (kept to pin it).  0003's gain came
+#       from 1 (h21-17: +4.5..+13%), but stages 1 failed run-to-run bitwise repeats on h21-5 on every GPU.
 #   AITER_GFX1250_UA2D_RUNTIME_SEQ = "1"                      0004 (C1), carried from h21-17.
 #   AITER_GFX1250_UA3D_NHD_CFG = '{"waves_per_eu":2}'         0005 (D3), carried from h21-17.
 #   SGLANG_GFX1250_LM_HEAD_TGEMM = "1"                        0007r2: the LM head (201088 x 2880 bf16)
