@@ -79,6 +79,13 @@ pub fn stack_arg(s: &str) -> (&str, Option<&str>) {
     }
 }
 
+/// The tree a drafted `[stack.<name>]` installs from: in the container's own /root, never the box-wide
+/// `/<year>`.  A worktree is registered in one container's checkout only, and two workers' task dirs
+/// often share a name (`0001_...`), so a shared path would collide.
+pub fn tree_path(name: &str, task: &str) -> String {
+    format!("/root/trees/{name}-{task}")
+}
+
 pub fn stack_block(name: &str, repo: &str, tree: &str, commit: Option<&str>) -> String {
     [
         format!(
@@ -231,12 +238,7 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
         let (name, commit) = stack_arg(arg);
         let repo = &stacks.get(name).unwrap().repo;
         out += "\n";
-        out += &stack_block(
-            name,
-            repo,
-            &format!("/{}/nocopy/{name}-{task}", sys::work_year()),
-            commit,
-        );
+        out += &stack_block(name, repo, &tree_path(name, &task), commit);
     }
 
     out += "\n";
@@ -325,6 +327,28 @@ mod tests {
         .unwrap();
         let checked = plan::check_plan(&root, toml::from_str(&text).unwrap(), &lib, &plan::Machine::default()).unwrap();
         assert!(checked.plan.traced("triton") && checked.plan.traced("tp2"));
+
+        // --stack: the tree is the worker's own, under /root/trees
+        fs::write(
+            lib.root.join("stacks.toml"),
+            "[sglang]\nrepo = '/sgl-workspace/sglang'\nmodule = 'sglang'\ninstall = 'true'\n",
+        )
+        .unwrap();
+        let text = render(
+            &lib,
+            &Options {
+                profiles: vec!["m/triton".into()],
+                gpus: vec![5],
+                clients: vec![],
+                stacks: vec!["sglang@abc123".into()],
+                thinking: false,
+                force: false,
+            },
+        )
+        .unwrap();
+        let p: plan::Plan = toml::from_str(&text).unwrap();
+        let tree = &p.stack["sglang"].tree;
+        assert!(tree.starts_with("/root/trees/sglang-"), "{tree}");
         fs::remove_dir_all(root).unwrap();
     }
 }

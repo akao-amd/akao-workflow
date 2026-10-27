@@ -106,7 +106,7 @@ conc = [16]
 range_ratio = 0.8
 
 [stack.sglang]             # optional: install a package of stacks.toml first (see Stack)
-tree = "/2026/nocopy/sglang-mytask"
+tree = "/root/trees/sglang-mytask"
 commit = "aa5551d9b6"
 ```
 
@@ -171,7 +171,7 @@ plan does not name keep what the container has.
 
 ```toml
 [stack.sglang]
-tree = "/2026/nocopy/sglang-mytask"   # required: a git worktree of the package's repo;
+tree = "/root/trees/sglang-mytask"    # required: a git worktree of the package's repo;
                                       # created (git worktree add --detach) when missing
 commit = "aa5551d9b6"     # install this revision.  No commit: the tree as it is (local patches)
 # commits = ["<A>", "<B>", "<A>"]     # instead: the whole plan once per revision
@@ -179,6 +179,10 @@ commit = "aa5551d9b6"     # install this revision.  No commit: the tree as it is
 # clean = "never"         # or "before-install": delete stacks.toml's clean paths first.
                           # Default: before-install for bisect, never otherwise
 ```
+
+Keep the tree under the container's `/root` (`oaka draft` puts it in `/root/trees/`): a
+worktree belongs to one container's checkout, and `/<year>` is shared by every worker on the
+box, whose task dirs often have the same names.
 
 One of `commit`/`commits`/`bisect`, and only one package may vary.  The tree may not be the
 repo itself (the image's checkout is dirty with build edits); revisions are not fetched,
