@@ -1,0 +1,45 @@
+# gpt-oss-120b/base1028 at TP2: both partitions of one physical MI45x GPU in DPX mode (the tp2 layout of the
+# mi45x-dpx-standard suite).  Written out whole, as base1028 is (no extends): the same trees, env and args, with
+# tp 2 and --disable-custom-all-reduce.  Read base1028.toml for the trees (base1028-20261028 branches), how to
+# carry them to another image, and why each line is here; only the TP2 differences are noted below.
+#
+# TP2 differences:
+#   tp = 2, disable-custom-all-reduce   AiterCustomAllreduce hung TP2 across a GPU's two partitions in DPX mode
+#       (gpt-oss-120b/tp2, ROCm 10.0.0), so every TP2 recipe here uses RCCL all-reduce.
+#   MIN_TOKENS stays 384: each rank's MoE intermediate is 1440 (FlyDSL pads it to 1536, gluon runs it rounded
+#       to 128, also 1536); the per-layer crossover sits higher at TP2 (~1536, flat 320-1024), but the branch is
+#       fixed per graph bucket and served batches fall below 64 or above 832, so the value does not move a point
+#       (mintok_h13/0001).
+#
+# Measured on h13-14 (GPUs 6+7, adjacent brackets, unfixed weights; srvargs_h13/0001) against
+# trial-mix-moe-prefill-breakable-1028-tp2: 1024/1024 c64 1.036, 8192/1024 c64 1.075, 70000/300 c16 1.092
+# (8192/1024 c16 1.128, not counted: control drift 12.7 %).  Memory fix at TP2 (prtest_h13/0001): weights
+# 41.23 -> 34.58 GB per rank, full KV pool 3,689,280 -> 4,074,944 tokens per rank.  EV unset at TP2: 8192/1024
+# +0.3..3.9 % (ev_h13/0001).  The whole recipe at TP2 is not measured.
+
+description = "gpt-oss-120b base1028 at TP2 (both partitions of one DPX GPU), RCCL all-reduce; self-contained"
+arch = ["gfx1250"]
+model = "/model/gpt-oss-120b-w-mxfp4-a-fp8"
+tp = 2
+
+[env]
+ENABLE_CK = "0"
+SGLANG_USE_AITER = "1"
+SGLANG_GFX1250_W4A8_BACKEND = "triton"
+SGLANG_GFX1250_W4A8_KERNEL_GATHER = "0"
+SGLANG_GFX1250_W4A8_FLYDSL = "1"
+SGLANG_GFX1250_W4A8_FLYDSL_MIN_TOKENS = "384"
+AITER_GFX1250_UA3D_NHD_CFG = '{"waves_per_eu":2}'
+
+[args]
+trust-remote-code = true
+max-running-requests = 128
+mem-fraction-static = 0.9
+attention-backend = "aiter"
+page-size = 64
+chunked-prefill-size = 16384
+max-prefill-tokens = 16384
+enable-mixed-chunk = true
+disable-radix-cache = true
+cuda-graph-backend-prefill = "breakable"
+disable-custom-all-reduce = true

@@ -1,0 +1,135 @@
+# gpt-oss-120b (AMD Quark W4A8, amd/gpt-oss-120b-w-mxfp4-a-fp8) on gfx1250: base1028, the recipe distilled
+# 2026-10-28 on h13-14 (MI450X MC-Hammer, gfx1250 DPX/NPS2) from B2 ("mix MoE": FlyDSL a8w4 expert GEMMs for
+# large batches, the gluon a8w4 kernel over a zero-copy view of FlyDSL's weights for small ones, SGLang's
+# breakable prefill CUDA graph).  Written out whole: no extends.  Controller records 100-118 (ww44); the
+# evidence for each line is in the worker reports named below (on h13-14 under /2026/ww44/).
+#
+# ---------------------------------------------------------------------------------------
+# The trees: base1028-20261028 branches (akao-amd forks of AITER and SGLang)
+#
+# One change per commit, each message ending in an "Upstream:" line that says where the change lives upstream.
+# Measured on image rocm/sgl-dev:v0.5.22-rocm101-mi45x-20261027 (SGLang 7e5cd57028, AITER 2bb549102,
+# triton-custom 844849714b), ROCm 10.1.0:
+#
+#   AITER  base1028-20261028 on 2bb549102                              tree 525915b57bc0
+#     e26ac5a8a  the -20261027 image's uncommitted aiter edits         (the image's own; see below)
+#     e98355cee  2D unified attention: runtime num_seqs / block_table_stride   ROCm/aiter#6999 (open)
+#     184d64cdc  FlyDSL a8w4 TDM GEMM: the N tile's offset in the bias read    ROCm/aiter#6663 (merged 10-23)
+#     46d727fa7  3D NHD attention config, AITER_GFX1250_UA3D_NHD_CFG (D3)      not filed (fork branch
+#                                                                              pr-gfx1250-ua3d-bf16-waves)
+#   SGLang base1028-20261028 on 7e5cd57028                             tree 19ac3963e309
+#     6463b82b8d  rocprofiler register (GPU kernels in profiler traces)        sgl-project/sglang#44292 (merged)
+#     39868f906c  bf16 LM head via aiter tgemm on gfx1250                      sgl-project/sglang#44455 (open)
+#     a0b926dd22  the FlyDSL/gluon switch, SGLANG_GFX1250_W4A8_FLYDSL           PR A, not filed (akao-amd/sglang
+#     c00481c654  the switch keeps FlyDSL's weights in a MemPool of their own    pr-gfx1250-w4a8-flydsl-mix-moe)
+#
+# A plan installs them with
+#
+#   [stack.aiter]
+#   tree = "/root/trees/aiter-base1028"       # a worktree of /sgl-workspace/aiter
+#   commit = "46d727fa784ee3cf74da62ddeca43a5487f10834"
+#   [stack.sglang]
+#   tree = "/root/trees/sglang-base1028"      # a worktree of /sgl-workspace/sglang
+#   commit = "c00481c65493e02adaad424e2e8aba80961feb4d"
+#
+# after `git -C /sgl-workspace/<repo> fetch https://github.com/akao-amd/<repo> base1028-20261028` (public forks;
+# stack.sh never fetches).  Trees under /root, never under /<year>.  SGLang's install needs cargo (worker skill).
+# Triton stays the image's.
+#
+# ON ANY OTHER IMAGE the branches are not the image's base: rebase them onto the image's own AITER and SGLang
+# commits.  Drop e26ac5a8a and commit that image's own uncommitted aiter edits first, if it has any.  Drop every
+# commit whose Upstream change the image already has (a merged PR: compare, do not trust the PR number alone),
+# resolve the rest.  Then check before quoting numbers: the switch's unit test
+# (test/registered/amd/test_gpt_oss_w4a8_flydsl_moe_gfx1250.py on the PR A branch, run against the installed
+# tree); the server log shows SGLANG_GFX1250_W4A8_FLYDSL in effect and ~68.9 GB of weights after load at TP1
+# (82.4 GB means the MemPool commit is missing); GSM8K after load (fresh server, fixed-seq 8192/1024 c16 then
+# 1024/1024 c16, then GSM8K strict 1319, gate 0.93).  When every Upstream change is in an image, the recipe needs
+# no fork branch at all.
+#
+# ---------------------------------------------------------------------------------------
+# What it is worth, h13-14, TP1 on one partition (sibling idle), fixed-seq run 1, range ratio 0.8
+#
+# Against B2-1028 (trial-mix-moe-prefill-breakable-1028), adjacent brackets on one GPU, one change at a time:
+#   memory fix (MemPool commit)  weights 82.36 -> 68.90 GB, full KV pool 596,736 -> 987,776 tokens;
+#                                70000/300 c4 1.003, c16 1.045, median TTFT c16 28.4 -> 6.6 s; GSM8K 0.9613
+#                                (prtest_h13/0001)
+#   these [args] (unfixed weights)  1024/1024 c4 1.006, c64 1.015; 8192/1024 c16 1.037, c64 1.064;
+#                                70000/300 c4 1.078, c16 1.107, median TTFT c16 28.4 -> 19.6 s; GSM8K 0.9598
+#                                TP2: 1024/1024 c64 1.036, 8192/1024 c64 1.075, 70000/300 c16 1.092
+#                                (srvargs_h13/0001)
+#   EV unset                     +0.4..0.9 % at 5 of 6 TP1 points, TP2 8192/1024 +0.3..3.9 %; GSM8K 0.9621
+#                                (ev_h13/0001)
+# The memory fix and the [args] were each measured against B2-1028, not together: the pool of the whole recipe
+# (MemPool + max-running-requests 128 + chunk 16384) is estimated at ~1.1M tokens at TP1, not measured.
+# B2-1028 itself over best_known_1026 (A), same box: 1.37-1.50 at 1024/1024, 1.31-1.46 at 8192/1024, 1.16-1.21 at
+# 70000/300 (mi45x-dpx-standard, 10-28; ww44 summary 094).
+#
+# Numbers on h13-14 move with what the box's other GPUs do (power-limited: a GPU's GFX clock falls to 0.9-1.3 GHz
+# under load, and one GPU measured +7..13 % when the others went idle).  Quote only adjacent brackets.
+#
+# ---------------------------------------------------------------------------------------
+# Why each line is here
+#
+#   SGLANG_GFX1250_W4A8_FLYDSL = "1"            the switch: one weight copy in FlyDSL's layout (gate/up
+#       interleaved, 2880 -> 3072 padded); batches >= MIN_TOKENS run aiter.fused_moe FlyDSL a8w4 (MXFP8
+#       activations), smaller ones gluon moe_gemm_a8w4 over moe_weight_decode_view of the same storage on
+#       128-aligned dims (2944).
+#   SGLANG_GFX1250_W4A8_FLYDSL_MIN_TOKENS = "384"   decode batches (<= 64) must stay on gluon, prefill buckets
+#       (>= 832) on FlyDSL; the branch is fixed per graph bucket, and served traffic almost never falls between
+#       128 and 1024, so 256-1024 serve the same.  Per-layer crossover ~450 tokens at TP1 (flat 320-768), ~1536
+#       at TP2.  MIN 16 (the switch's old code default): -19 % at 1024/1024 c64 and 8192/1024 c16
+#       (mintok_h13/0001).
+#   SGLANG_GFX1250_W4A8_BACKEND = "triton", _KERNEL_GATHER = "0"   act only where FlyDSL is not used (expert
+#       parallelism): with the switch off this is best_known_1026's MoE.
+#   AITER_GFX1250_UA3D_NHD_CFG = '{"waves_per_eu":2}'   D3 (46d727fa7).
+#   SGLANG_USE_AITER = "1"                      #44455's gate (the image exports it too; pinned here).
+#   ENABLE_CK = "0"                             gpt-oss-120b/base's.
+#   TRITON_HIP_USE_EXPERT_SCHEDULING            deliberately absent.  Unset is "1" on gfx1250 (triton-custom's
+#       default: the LLVM amdgpu-expert-scheduling-mode, every Triton/Gluon kernel); every earlier profile's "0"
+#       turned it off for no recorded reason.  Absent rather than "1", so a later Triton's default is followed.
+#   attention-backend = "aiter", page-size = 64      aiter unified attention needs a real page; 64 is still the
+#       peak (32: -22 % at 70000/300; 128: -10 % at 8192/1024 c64).
+#   chunked-prefill-size = max-prefill-tokens = 16384   (was 3072, tuned for the old Triton MoE in ww41) the
+#       main lever: over 3072, 8192/1024 +3.5/+4.9 %, 70000/300 +7.3/+9.0 % (4096 +0..2 %, 8192 +3..5 %);
+#       1024/1024 flat.  Costs a larger prefill graph (7.79 GB vs 4.37) and ~27k pool tokens.  Set both.
+#   max-running-requests = 128                  (was 512) with the radix cache off, SGLang sizes the SWA pool
+#       for the request cap: (window + 128 + 2 x page) x cap + 2 x chunk + page tokens.  512 held 147k SWA
+#       tokens no point up to c64 uses; 128 gives them to the full pool (+120k).  Every decode batch up to c64
+#       is still graphed (decode graphs to bs 128).  Not for concurrency above 128.
+#   enable-mixed-chunk = true                   decode rows ride in prefill batches: +2..3 % at 1024/1024 c64
+#       and 8192/1024; costs median TTFT (1024/1024 c64 62 -> 70 ms, 8192/1024 c64 ~295 -> 365 ms alone).
+#   cuda-graph-backend-prefill = "breakable"    prefill CUDA graphs: FlyDSL costs ~1 ms of CPU per eager call;
+#       the graph's buckets follow the chunk size.
+#   mem-fraction-static = 0.9                   unchanged.  With attention-backend aiter and context > 8192 SGLang
+#       multiplies it by 0.85 (0.9 runs as 0.765; opt-out SGLANG_AITER_HONOR_EXPLICIT_MEM_FRACTION=1).  1.0
+#       (0.85) gave the unfixed B2 +355k pool tokens and one retraction; not re-measured with the memory fix.
+#   disable-radix-cache, trust-remote-code      the benchmark's random prompts share no prefix.
+#
+# Not set: AITER_TRITON_A8W4_BM16_NUM_STAGES, AITER_GFX1250_UA2D_RUNTIME_SEQ, SGLANG_GFX1250_LM_HEAD_TGEMM
+# (best_known_1026's switches; no reader in these trees: #6999 and #44455 replace the last two).
+
+description = "gpt-oss-120b W4A8 gfx1250 base1028: B2 mix MoE (FlyDSL >= 384, gluon below) + MemPool fix, chunk 16384, mixed chunk, EV default; base1028-20261028 trees; self-contained"
+arch = ["gfx1250"]
+model = "/model/gpt-oss-120b-w-mxfp4-a-fp8"
+tp = 1
+
+[env]
+ENABLE_CK = "0"
+SGLANG_USE_AITER = "1"
+SGLANG_GFX1250_W4A8_BACKEND = "triton"
+SGLANG_GFX1250_W4A8_KERNEL_GATHER = "0"
+SGLANG_GFX1250_W4A8_FLYDSL = "1"
+SGLANG_GFX1250_W4A8_FLYDSL_MIN_TOKENS = "384"
+AITER_GFX1250_UA3D_NHD_CFG = '{"waves_per_eu":2}'
+
+[args]
+trust-remote-code = true
+max-running-requests = 128
+mem-fraction-static = 0.9
+attention-backend = "aiter"
+page-size = 64
+chunked-prefill-size = 16384
+max-prefill-tokens = 16384
+enable-mixed-chunk = true
+disable-radix-cache = true
+cuda-graph-backend-prefill = "breakable"
