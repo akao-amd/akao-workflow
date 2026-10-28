@@ -82,6 +82,10 @@ cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test
   - `rm.rs`: running, stopped, paused and dead containers and `--rm` races, by id; `--home`
     only after a successful mount census; dry runs and failures keeping data.
   - `doctor.rs`: below, layer 3.
+  - `hbm_stream.rs`: the host-only HBM utility's Python report tests, without RVS or
+    ROCm. Covers selected DPX partitions, physical sensor ownership, loaded power and
+    clock samples, missing telemetry, failed/incomplete runs, GPU index mapping, and
+    refusal before benchmarking when the output directory or GPU probe fails.
 - A profile for another ROCm version: `oaka check` aborts, and scripts compiled for 10.1
   refuse to start servers when rerun by hand with `OAKA_ROCM=10.0.0`.  The sandbox pins
   `OAKA_ROCM` and removes `GPU_ARCH_LIST`, so the host's ROCm does not leak in.
