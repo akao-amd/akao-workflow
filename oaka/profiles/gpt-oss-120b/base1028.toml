@@ -11,12 +11,16 @@
 # Measured on image rocm/sgl-dev:v0.5.22-rocm101-mi45x-20261027 (SGLang 7e5cd57028, AITER 2bb549102,
 # triton-custom 844849714b), ROCm 10.1.0:
 #
-#   AITER  base1028-20261028 on 2bb549102                              tree 525915b57bc0
+#   AITER  base1028-20261028 on 2bb549102                              tree e136e8c1d155
 #     e26ac5a8a  the -20261027 image's uncommitted aiter edits         (the image's own; see below)
 #     e98355cee  2D unified attention: runtime num_seqs / block_table_stride   ROCm/aiter#6999 (open)
 #     184d64cdc  FlyDSL a8w4 TDM GEMM: the N tile's offset in the bias read    ROCm/aiter#6663 (merged 10-23)
 #     46d727fa7  3D NHD attention config, AITER_GFX1250_UA3D_NHD_CFG (D3)      not filed (fork branch
 #                                                                              pr-gfx1250-ua3d-bf16-waves)
+#     484470dfa  gluon a8w4 MoE decode stores its output from registers       not filed (akao-amd/aiter
+#                (the TDM store of an LDS-staged tile read stale LDS on gfx1250)  pr-gfx1250-moe-a8w4-decode-gstore)
+#     a302ebe52  gluon unified attention 2D: decode output from registers,     not filed (akao-amd/aiter
+#                gpt-oss shapes only (same race; extend still open, below)        pr-gfx1250-ua2d-decode-register-store)
 #   SGLang base1028-20261028 on 7e5cd57028                             tree 19ac3963e309
 #     6463b82b8d  rocprofiler register (GPU kernels in profiler traces)        sgl-project/sglang#44292 (merged)
 #     39868f906c  bf16 LM head via aiter tgemm on gfx1250                      sgl-project/sglang#44455 (open)
@@ -27,14 +31,16 @@
 #
 #   [stack.aiter]
 #   tree = "/root/trees/aiter-base1028"       # a worktree of /sgl-workspace/aiter
-#   commit = "46d727fa784ee3cf74da62ddeca43a5487f10834"
+#   commit = "a302ebe5275ed214b00872f066be072ab2786cbe"
 #   [stack.sglang]
 #   tree = "/root/trees/sglang-base1028"      # a worktree of /sgl-workspace/sglang
 #   commit = "c00481c65493e02adaad424e2e8aba80961feb4d"
 #
 # after `git -C /sgl-workspace/<repo> fetch https://github.com/akao-amd/<repo> base1028-20261028` (public forks;
 # stack.sh never fetches).  Trees under /root, never under /<year>.  SGLang's install needs cargo (worker skill).
-# Triton stays the image's.
+# Triton stays the image's.  On rocm/sgl-dev:v0.5.22-rocm101-mi45x-20261028 (SGLang 86f72e5b5c, AITER 2bb549102 with
+# the same uncommitted edits) the AITER branch applies as is, and the SGLang branch rebases onto 86f72e5b5c by dropping
+# 6463b82b8d (#44292 is in that image): expected SGLang tree 9bea27f850d7 (three workers built it, 10-29).
 #
 # ON ANY OTHER IMAGE the branches are not the image's base: rebase them onto the image's own AITER and SGLang
 # commits.  Drop e26ac5a8a and commit that image's own uncommitted aiter edits first, if it has any.  Drop every
@@ -64,10 +70,19 @@
 # B2-1028 itself over best_known_1026 (A), same box: 1.37-1.50 at 1024/1024, 1.31-1.46 at 8192/1024, 1.16-1.21 at
 # 70000/300 (mi45x-dpx-standard, 10-28; ww44 summary 094).
 #
-# Accuracy: TP1 passed every after-load GSM8K gate on h13-14 (-20261027: B2 0.9636/0.9621/0.9613, memory fix 0.9613,
-# these args 0.9598; -20261028: lowc_h13 4 of 4, l70k_h13 0.9598).  But the FlyDSL switch is not clean everywhere: B2 failed
-# the same gate on f19-14 (MC Lyte, 10-27; never root-caused), and base1028-tp2 fails it intermittently on h13-14
-# (see that profile's STATUS).  Gate every new box, image and layout.
+# Accuracy and the gfx1250 TDM-store race (10-29, lowc_h13/0001).  On gfx1250 a tensor_store_from_lds of an
+# LDS-staged tile can read LDS before the waves' ds_stores are visible to it (no documented wait or fence closes it;
+# only delay or an extra LDS round trip do), so the gluon kernels that end that way corrupted served rows silently:
+#   - MoE decode (the switch's < 384-token path): TP2 after-load GSM8K failed 9 of 14 runs ('!!!!'), TP1 had the same
+#     bad rows more rarely.  Fixed by 484470dfa (registers -> global stores): 12 of 12 TP2 and TP1 gates, in-graph pair
+#     counters 0 over ~1M calls per rank; no cost against healthy runs (c4-c64 within 0.5 %).
+#   - Unified attention 2D decode (sliding window, 64+ requests): TP1 472-535 and TP2 4-7 corrupted served rows per
+#     run, invisible in GSM8K.  Fixed for gpt-oss shapes by a302ebe52: 0 in 3 of 3 serving runs, GSM8K 0.9583 / 0.9613
+#     / 0.9568; kernel time fix / original 0.981-1.000 on gpt-oss decode shapes (no end-to-end bracket: the box was
+#     power-capped that night).
+#   - **Open bug**: unified attention 2D *extend* still corrupts a few rows per run (0-27); the register store breaks
+#     extend at TP1 heads, so extend keeps the TDM store.  Issue drafts: lowc_h13/0001 pr_drafts/.
+# TP1 and TP2 pass every after-load gate with these trees.  B2's f19-14 failure (10-27) is most likely this race.
 #
 # Numbers on h13-14 move with what the box's other GPUs do (power-limited: a GPU's GFX clock falls to 0.9-1.3 GHz
 # under load, and one GPU measured +7..13 % when the others went idle).  Quote only adjacent brackets.
@@ -113,7 +128,7 @@
 # Not set: AITER_TRITON_A8W4_BM16_NUM_STAGES, AITER_GFX1250_UA2D_RUNTIME_SEQ, SGLANG_GFX1250_LM_HEAD_TGEMM
 # (best_known_1026's switches; no reader in these trees: #6999 and #44455 replace the last two).
 
-description = "gpt-oss-120b W4A8 gfx1250 base1028: B2 mix MoE (FlyDSL >= 384, gluon below) + MemPool fix, chunk 16384, mixed chunk, EV default; base1028-20261028 trees; self-contained"
+description = "gpt-oss-120b W4A8 gfx1250 base1028: mix MoE (FlyDSL >= 384, gluon below), MemPool, gfx1250 TDM-store race fixes (MoE, attention decode), chunk 16384, mixed chunk, EV default; base1028-20261028 trees; self-contained"
 arch = ["gfx1250"]
 model = "/model/gpt-oss-120b-w-mxfp4-a-fp8"
 tp = 1

@@ -3,15 +3,10 @@
 # tp 2 and --disable-custom-all-reduce.  Read base1028.toml for the trees (base1028-20261028 branches), how to
 # carry them to another image, and why each line is here; only the TP2 differences are noted below.
 #
-# ---------------------------------------------------------------------------------------
-# STATUS: NOT QUALIFIED.  On image -20261028 (h13-14, 10-29 night, lowc_h13/0001) this recipe failed the after-load
-# GSM8K gate (fresh server, fixed-seq 8192/1024 c16, 1024/1024 c16, GSM8K strict 1319, gate 0.93) in 6 of 8 runs
-# on two GPU pairs: right answers first, then every generation ends in '!!!!' to max tokens and the server stays
-# corrupted (as B2 on f19-14, 10-27).  With SGLANG_GFX1250_W4A8_FLYDSL=0 it passed 3 of 3; B2-1028-tp2 exactly
-# (chunk 3072, no mixed chunk) failed too; dropping mixed chunk or the prefill graph passed once each and failed on
-# repeat.  Intermittent: a single pass proves nothing.  Root cause under investigation (ww44 controller record 124).
-# Use it for timing only until this block is gone.  TP1 (base1028) passed every gate (4 of 4 that night).
-# ---------------------------------------------------------------------------------------
+# Qualified on h13-14 (10-29) with base1028's trees incl. the race fixes (484470dfa, a302ebe52): after-load GSM8K
+# 10 of 10 with the MoE fix (6 with in-graph pair counters at 0, 4 without debug hooks), 1 more with both fixes
+# (0.9583, attention pair counters 0 in decode).  Before the fixes it failed 9 of 14 (the gfx1250 TDM-store race;
+# base1028's Accuracy note).  Attention extend's rare corruption is still open (same note).
 #
 # TP2 differences:
 #   tp = 2, disable-custom-all-reduce   AiterCustomAllreduce hung TP2 across a GPU's two partitions in DPX mode
@@ -27,7 +22,7 @@
 # 41.23 -> 34.58 GB per rank, full KV pool 3,689,280 -> 4,074,944 tokens per rank.  EV unset at TP2: 8192/1024
 # +0.3..3.9 % (ev_h13/0001).  The whole recipe at TP2 is not measured.
 
-description = "gpt-oss-120b base1028 at TP2 (both partitions of one DPX GPU), RCCL all-reduce; NOT QUALIFIED (intermittent GSM8K failures); self-contained"
+description = "gpt-oss-120b base1028 at TP2 (both partitions of one DPX GPU), RCCL all-reduce; self-contained"
 arch = ["gfx1250"]
 model = "/model/gpt-oss-120b-w-mxfp4-a-fp8"
 tp = 2
