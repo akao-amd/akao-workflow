@@ -49,7 +49,10 @@ worker's into its container; a controller may be given its own). Unset: a worker
 container's working directory, a controller's `/<year>/<work_week>/controller/`.
 
 **Worker:** your working directory is the task dir `<NNNN>_<desc>`, *not* the container
-dir above it. Everything you produce goes there. Sibling containers' dirs are visible —
+dir above it. Everything you produce goes there, except checkouts (clones, worktrees,
+source tarballs) and builds (binaries, `.so` files, wheels, build dirs, kernel caches): never
+under any artifact root, a controller's included; where they go instead is in the role
+skills ("Checkouts and builds"). Sibling containers' dirs are visible —
 never write into them; hand work off with a report file and let the controller pass the
 path along.
 
