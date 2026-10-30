@@ -1,0 +1,37 @@
+# gpt-oss-120b on MI355X (gfx950): the user's best recipe, copied as is.  Created 2026-10-30.
+# (gpt-oss-120b/best is the gfx1250 W4A8 recipe, hence the -mi355 name.)
+#
+# Source: given by the user 2026-10-30:
+#   SGLANG_AITER_KV_CACHE_LAYOUT=vectorized_5d SGLANG_USE_AITER_MOE_GU_ITLV=False \
+#   python3 -m sglang.launch_server --model-path /path/to/gpt-oss-120b/ --tp 1 \
+#     --trust-remote-code --mem-fraction-static 0.85 \
+#     --prefill-attention-backend aiter --decode-attention-backend aiter \
+#     --chunked-prefill-size 131072 --max-running-requests 256 \
+#     --page-size 64 --disable-radix-cache --port 8000 --kv-cache-dtype fp8_e4m3
+#   --model-path, --tp and --port are oaka's (tp pinned to the recipe's 1 below).
+#
+# Checkpoint: openai/gpt-oss-120b, the MXFP4 release, as in gpt-oss-120b/mi35x-nightly; `model`
+# below is <model_path>/gpt-oss-120b (on n10-17 /data2/openai/gpt-oss-120b: override `model`
+# in the plan there).
+#
+# Not yet measured with oaka.
+
+description = "gpt-oss-120b MXFP4 (openai), MI355X at TP1: the user's best recipe (aiter attention, fp8 KV in the vectorized 5D layout, page 64)"
+arch = ["gfx950"]
+model = "/model/gpt-oss-120b"
+tp = 1
+
+[env]
+SGLANG_AITER_KV_CACHE_LAYOUT = "vectorized_5d"
+SGLANG_USE_AITER_MOE_GU_ITLV = "False"
+
+[args]
+trust-remote-code = true
+mem-fraction-static = 0.85
+prefill-attention-backend = "aiter"
+decode-attention-backend = "aiter"
+chunked-prefill-size = 131072
+max-running-requests = 256
+page-size = 64
+disable-radix-cache = true
+kv-cache-dtype = "fp8_e4m3"
