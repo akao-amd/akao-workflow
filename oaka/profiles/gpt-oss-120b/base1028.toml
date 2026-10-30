@@ -30,14 +30,14 @@
 # A plan installs them with
 #
 #   [stack.aiter]
-#   tree = "/root/trees/aiter-base1028"       # a worktree of /sgl-workspace/aiter
+#   tree = "<root>/repos/aiter"               # a worktree of /sgl-workspace/aiter
 #   commit = "a302ebe5275ed214b00872f066be072ab2786cbe"
 #   [stack.sglang]
-#   tree = "/root/trees/sglang-base1028"      # a worktree of /sgl-workspace/sglang
+#   tree = "<root>/repos/sglang"              # a worktree of /sgl-workspace/sglang
 #   commit = "c00481c65493e02adaad424e2e8aba80961feb4d"
 #
 # after `git -C /sgl-workspace/<repo> fetch https://github.com/akao-amd/<repo> base1028-20261028` (public forks;
-# stack.sh never fetches).  Trees under /root, never under /<year>.  SGLang's install needs cargo (worker skill).
+# stack.sh never fetches).  <root> = $AKAO_ARTIFACT_ROOT, never a task dir.  SGLang's install needs cargo (worker skill).
 # Triton stays the image's.  On rocm/sgl-dev:v0.5.22-rocm101-mi45x-20261028 (SGLang 86f72e5b5c, AITER 2bb549102 with
 # the same uncommitted edits) the AITER branch applies as is, and the SGLang branch rebases onto 86f72e5b5c by dropping
 # 6463b82b8d (#44292 is in that image): expected SGLang tree 9bea27f850d7 (three workers built it, 10-29).

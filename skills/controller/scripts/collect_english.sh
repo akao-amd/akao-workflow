@@ -19,11 +19,12 @@ cd "$LOCAL_2026"
 # Which weeks to scan: the args, or the whole tree if none given.
 if [ "$#" -gt 0 ]; then ROOTS=("$@"); else ROOTS=(.); fi
 
-# Newest-first: epoch for sorting, human date + path to keep. 'nocopy' scratch excluded.
+# Newest-first: epoch for sorting, human date + path to keep. 'nocopy' scratch and the artifact
+# roots' repos/, bin/, misc/ (checkouts, binaries: CLAUDE.md, "Where you are") are not searched.
 mapfile -t ROWS < <(
   for r in "${ROOTS[@]}"; do
-    find "$r" -type f -name english.md -not -path '*/nocopy/*' \
-      -printf '%T@\t%TY-%Tm-%Td\t%p\n' 2>/dev/null
+    find "$r" -type d \( -name nocopy -o -name repos -o -name bin -o -name misc \) -prune \
+      -o -type f -name english.md -printf '%T@\t%TY-%Tm-%Td\t%p\n' 2>/dev/null
   done | sort -rn | cut -f2-
 )
 

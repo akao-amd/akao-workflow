@@ -4,7 +4,7 @@ description: The worker role's manual — an agent in a worker container (akao_<
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.9.0"
+  version: "2.10.0"
   category: development
   tags: ["worker", "sglang", "oaka", "bisect", "benchmark", "profiling", "git"]
 compatibility:
@@ -21,36 +21,35 @@ directory is not such a task dir.
 
 **Defaults**, unless the request says otherwise: SGLang = `/sgl-workspace/sglang`, AITER =
 `/sgl-workspace/aiter`, Triton = `/sgl-workspace/triton-custom` (gfx1250 images only);
-everything you produce in the task dir, except checkouts and builds ("Checkouts and builds"
-below).
+everything you produce under your artifact root, sorted as below.
 
-## Checkouts and builds — never under the artifact root
+## Artifact root layout — what goes where
 
-A clone, a `git worktree`, an extracted source tarball, and what is compiled from them
-(binaries, `.so`/`.o` files, wheels, `build/` and `target/` dirs, kernel and Triton caches):
-none goes into a task dir or anywhere else under `$AKAO_ARTIFACT_ROOT`. The user rsyncs every
-box's `/<year>` into one tree and reads the task dirs as results; a checkout or a build there
-is gigabytes of upstream code or machine output, and a nested `.git` among them. The task dir
-keeps what *describes* them instead: the repo, base commit and path, the build command and
-its log, `patches/` and `patch_revision.md` ("Artifacts"). oaka keeps to this already: a
-server's compile caches under the step's `logs/` are removed when the step stops it. Build
-inside the tree (it is outside the root), and put a checkout in the first of these that fits:
+Your artifact root (`$AKAO_ARTIFACT_ROOT`, e.g. `/2026/ww44/<name>`) is part of the user's
+journal (akao-amd/script-journal): the journal keeps the task dirs and leaves `repos/`, `bin/`
+and `misc/` out. Put each thing where it belongs, so the task dirs stay worth keeping:
 
-1. **Your home**, `/root/trees/<pkg>-<task>` (where `oaka draft` puts a stack's tree): yours
-   alone, kept across container restarts, and the place for a worktree of the image's
-   checkout (`oaka/README.md`, the stack).
-2. **`/<year>/nocopy/<name>/<task>/<pkg>`**, when `/root` lacks the room or another worker
-   must read the tree. `/<year>/nocopy` is shared by every worker on the box and their task
-   dirs often have the same names, so always under your container's name, never a bare
-   `/<year>/nocopy/<pkg>`.
-3. **A temporary dir in the model dir**, `/model/tmp/<name>-<task>-<pkg>`, only when both
-   are short of space: it is the box's model store. Remove it when the task ends, and say in
-   the report that you did.
+| What | Where |
+|---|---|
+| what a person reads: `.md` `.sh` `.py` `.patch` `.toml` `.log` `.err` `.txt`, and the `.csv`/`.json` results oaka writes | the task dir `<NNNN>_<desc>/`, as always |
+| checkouts: a clone, a `git worktree`, an unpacked source tarball | `<root>/repos/<repo>` |
+| binaries: built kernels (`.hsaco`, `.co`, `.cubin`), compiled tools and tests, `.so`, `.o`, wheels | `<root>/bin/<name>/<task>/...` (`<name>`: your container's name; below it any hierarchy that says what each is) |
+| anything else: archives, core or memory dumps, images, other binary data | `<root>/misc/<task>/...` |
 
-A built binary that is not in a tree (a tool you compiled, a standalone kernel test) goes to
-the same places. A brief that names another place outside the artifact root wins; one that
-puts a checkout or a build in the task dir is a slip: use the list above and say so in the
-report.
+- **One checkout per repo.** `repos/<repo>` already there (an earlier task's)? Reuse it, and
+  keep this task's work apart with a branch named for the task (`<NNNN>_<desc>`), never a
+  second copy (`repos/sglang-2`). A stack's tree is the same checkout: `oaka draft --stack`
+  puts it at `<root>/repos/<pkg>`, a worktree of the image's checkout, and `stack.sh` reuses
+  it (it refuses a checkout over modified tracked files: commit them on your branch first).
+- **Build inside the checkout**: its `build/`, `target/` and caches stay in `repos/`. Copy
+  only the binaries you keep or hand over into `bin/`.
+- **The task dir records the rest**: the repo, branch and base commit, the build command and
+  its log, `patches/` and `patch_revision.md` ("Artifacts"), and the paths in `repos/`,
+  `bin/`, `misc/` that the task made. A report links to them; it does not copy them back.
+- Two exceptions stay where `akao init` put them: your clone of this repo (`/root/akao-workflow`)
+  and `/<year>/nocopy/InferenceX`.
+- A brief that puts a checkout or a binary in the task dir is a slip: follow this table and
+  say so in the report.
 
 ## Servers, benchmarks, other revisions, A-B-A, bisect → `oaka`
 
@@ -302,8 +301,8 @@ the pre-push hook checks a commit *range* that, on a new branch, can include oth
 
 ## Artifacts
 
-Save everything that is part of the task into the task dir, except checkouts and builds
-("Checkouts and builds" above: the dir records them, never holds them). The test: can someone arriving
+Save everything that is part of the task into the task dir, but checkouts, binaries and
+other non-text into `repos/`, `bin/`, `misc/` ("Artifact root layout" above). The test: can someone arriving
 later see what you did and rerun it without you? Keep names descriptive
 (`probe_kv_cache_dtype.py`, not `test2.py`).
 

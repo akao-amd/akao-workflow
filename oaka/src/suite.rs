@@ -11,7 +11,7 @@
 //! fields replace the parent's, its layouts are added after the parent's (one of the same
 //! name replaces it in place).
 
-use crate::draft::{stack_arg, stack_block, toml_list};
+use crate::draft::{stack_arg, stack_block, toml_list, tree_path};
 use crate::plan::valid_server_name;
 use crate::profile::Library;
 use crate::stack;
@@ -408,7 +408,7 @@ pub fn render(lib: &Library, suite: &Suite, o: &DraftOptions) -> Result<Vec<(Str
                 );
             };
             out += "\n";
-            out += &stack_block(s, &pkg.repo, &format!("/root/trees/{s}"), commit);
+            out += &stack_block(s, &pkg.repo, &tree_path(s), commit);
         }
         // The plan's own rules (GPUs per server, PD shares, ports, clients), without its stack,
         // whose commit may still be the caller's to fill in.

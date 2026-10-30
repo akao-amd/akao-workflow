@@ -40,6 +40,7 @@ files.
 ```
 /<year>/<work_week>/<container_name>/<NNNN>_<brief_description>/   a worker's task dirs
           ww40/        dsv4_exp/        0001_baseline/
+/<year>/<work_week>/<container_name>/{repos,bin,misc}/              its checkouts, binaries, the rest
 /<year>/<work_week>/controller/<NNN>_<desc>.sh                      the controllers' record
 ```
 
@@ -48,11 +49,27 @@ The directory holding an agent's numbered dirs is its **artifact root**. When
 worker's into its container; a controller may be given its own). Unset: a worker's is its
 container's working directory, a controller's `/<year>/<work_week>/controller/`.
 
+Everything an agent produces stays under its artifact root, sorted by what it is:
+
+```
+<artifact root>/                    e.g. /2026/ww44/dsv4_exp, /2026/ww44/controller
+  <NNNN>_<desc>/                    what a person reads: .md .sh .py .patch .toml .log .err .txt
+                                    (and the .csv/.json results oaka writes)
+  repos/<repo>                      checkouts: clones, worktrees, unpacked source trees
+  bin/<container_name>/<...>        binaries: built kernels, tools, .so, .o, wheels
+  misc/<...>                        anything else (archives, dumps, images, ...)
+```
+
+Why: the artifact roots are part of the user's journal (akao-amd/script-journal, years of
+it), which keeps the task dirs and leaves `repos/`, `bin/` and `misc/` out. A checkout or a
+build in a task dir makes that journal hard to keep. A checkout's name is the repo's; when
+`repos/<repo>` already exists, reuse it and keep tasks apart by branch name, never by a
+second copy. Build inside the checkout. The worker skill gives the details ("Artifact root
+layout").
+
 **Worker:** your working directory is the task dir `<NNNN>_<desc>`, *not* the container
-dir above it. Everything you produce goes there, except checkouts (clones, worktrees,
-source tarballs) and builds (binaries, `.so` files, wheels, build dirs, kernel caches): never
-under any artifact root, a controller's included; where they go instead is in the role
-skills ("Checkouts and builds"). Sibling containers' dirs are visible —
+dir above it. What you produce goes there, or into the root's `repos/`, `bin/`, `misc/`
+as above. Sibling containers' dirs are visible —
 never write into them; hand work off with a report file and let the controller pass the
 path along.
 

@@ -4,7 +4,7 @@ description: The controller role's manual — the agent on the console (where `a
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.5.0"
+  version: "2.6.0"
   category: development
   tags: ["controller", "akao", "worker", "tmux"]
 compatibility:
@@ -46,14 +46,13 @@ akao init n10-17 dsv4_exp --image rocm/sgl-dev:v0.5.21-rocm10-mi35x-20261012
   NNN.log` (without pipefail, `tee` hides the failure). A failed attempt stays recorded; the
   retry is the next number, saying what changed.
 - Keep a record short; why an experiment is shaped as it is goes into its brief.
-- **No checkouts or builds in it.** A clone, a `git worktree` or an extracted source tarball
-  (an upstream tree to read, a worker's branch to review), and anything compiled from one
-  (binaries, `.so` files, wheels, `build/`/`target/` dirs, kernel caches), never goes under
-  your artifact root, nor under any worker's: the user rsyncs `/<year>` and reads those dirs
-  as results. The record keeps the repo, commit, path and build command instead. Put them,
-  in this order of preference, in your home (`~/trees/<pkg>-<desc>`), in
-  `/<year>/nocopy/controller/<desc>/<pkg>`, or in a temporary dir of the model dir, removed
-  when done. The same order holds for workers (worker skill, "Checkouts and builds").
+- **Sort it as every artifact root is** (`$AKAO_REPO_ROOT/CLAUDE.md`, "Where you are"; the
+  user's journal keeps the record and leaves the rest out): readable files (`.sh`, `.md`,
+  `.py`, `.patch`, `.toml`, `.log`, `.err`, `.txt`) in `NNN_<desc>.sh` and `NNN_<desc>/`;
+  checkouts (an upstream tree to read, a worker's branch to review) in `<root>/repos/<repo>`,
+  reused with a branch per purpose rather than copied again; binaries (kernels you built,
+  tools) in `<root>/bin/controller/<NNN_desc>/...`; anything else in `<root>/misc/<NNN_desc>/`.
+  The record names the paths it made there.
 
 Which workers exist this week: `grep -hE "akao (init|mirror)" <root>/*.sh`, and
 `docker --context <nick> ps -a --filter name=akao_` on a box for what is still running.
@@ -182,9 +181,9 @@ needed, and missed when they did not have it:
   partition topology (two GPUs may be one device); checked free just before, and checked
   again by the worker. Several workers on one box share the host network: give each its own
   ports (`port = ...` in the plan).
-- **What is measured, as it is**: image, trees (each at a path outside the artifact root:
-  `/root/trees/...` in the worker, else under `/<year>/nocopy/<name>/`; never in the task dir,
-  nor what is built from them — worker skill, "Checkouts and builds"), profiles (`oaka profile show`), model path;
+- **What is measured, as it is**: image, trees (in the worker's `<root>/repos/<repo>`, on a
+  branch named for the task; built binaries in its `<root>/bin/<name>/`; never in the task dir:
+  worker skill, "Artifact root layout"), profiles (`oaka profile show`), model path;
   the points; the number norm (today: a fixed-seq point's number is run 1, `repeats` left at
   its default; earlier briefs asked for run 2 — never reread old numbers by today's norm);
   gates and what a failed one means; deviations from the client policy, marked `OFFSPEC`.

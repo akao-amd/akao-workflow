@@ -106,7 +106,7 @@ conc = [16]
 range_ratio = 0.8
 
 [stack.sglang]             # optional: install a package of stacks.toml first (see Stack)
-tree = "/root/trees/sglang-mytask"
+tree = "/2026/ww44/me/repos/sglang"
 commit = "aa5551d9b6"
 ```
 
@@ -171,7 +171,7 @@ plan does not name keep what the container has.
 
 ```toml
 [stack.sglang]
-tree = "/root/trees/sglang-mytask"    # required: a git worktree of the package's repo;
+tree = "/2026/ww44/me/repos/sglang"   # required: a git worktree of the package's repo;
                                       # created (git worktree add --detach) when missing
 commit = "aa5551d9b6"     # install this revision.  No commit: the tree as it is (local patches)
 # commits = ["<A>", "<B>", "<A>"]     # instead: the whole plan once per revision
@@ -180,9 +180,12 @@ commit = "aa5551d9b6"     # install this revision.  No commit: the tree as it is
                           # Default: before-install for bisect, never otherwise
 ```
 
-Keep the tree under the container's `/root` (`oaka draft` puts it in `/root/trees/`): a
-worktree belongs to one container's checkout, and `/<year>` is shared by every worker on the
-box, whose task dirs often have the same names.
+Keep the tree in the artifact root's `repos/` (`oaka draft` puts it at
+`$AKAO_ARTIFACT_ROOT/repos/<pkg>`), never in a task dir, which holds what a person reads
+(CLAUDE.md, "Where you are").  One tree per package, reused by later tasks: keep a task's
+commits on a branch named for it, since `stack.sh` refuses to check out over modified tracked
+files.  The root is the worker's own, so the worktree, registered in its container's checkout,
+collides with no other worker's.
 
 One of `commit`/`commits`/`bisect`, and only one package may vary.  The tree may not be the
 repo itself (the image's checkout is dirty with build edits); revisions are not fetched,

@@ -25,15 +25,15 @@
 # the branch; with it off the two are the same code.  A plan installs the branches with:
 #
 #   [stack.aiter]
-#   tree = "/root/trees/aiter-best-known-20261026"      # a worktree of /sgl-workspace/aiter
+#   tree = "<root>/repos/aiter"                         # a worktree of /sgl-workspace/aiter
 #   commit = "eb90748e7aed4000955f728988243eb18371a0b5"
 #   [stack.sglang]
-#   tree = "/root/trees/sglang-best-known-20261026"     # a worktree of /sgl-workspace/sglang
+#   tree = "<root>/repos/sglang"                        # a worktree of /sgl-workspace/sglang
 #   commit = "bad1b2e947bda16e9f8922f0015b6bc0a3d9e357"
 #
 # after `git -C /sgl-workspace/<repo> fetch https://github.com/akao-amd/<repo> best-known-20261026`
-# for repo aiter and sglang (public forks; stack.sh never fetches).  Trees are the worker's own: under
-# /root, never a shared /<year>/nocopy path (a worktree belongs to one container's checkout).  stack.sh
+# for repo aiter and sglang (public forks; stack.sh never fetches).  <root> is the worker's artifact root
+# ($AKAO_ARTIFACT_ROOT), its own, so the worktree collides with no other worker's; never a task dir.  stack.sh
 # creates them at the commits and installs (AITER builds, SGLang's AOT kernels rebuild: minutes); it
 # refuses while any server runs in the container.  Triton stays the image's (triton-custom f4c37587).
 # Checked on h21-5 10-26: fetch, `oaka check`, and stack.sh's install (1.5 min for both; SGLang's needs

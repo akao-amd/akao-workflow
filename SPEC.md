@@ -277,6 +277,15 @@ Where the how lives: worker reference (commands, plan and profile fields)
   two candidate roots, and the derived ISO week did not even match the user's own week label
   (ww41 vs ww42 on 2026-10-09).  An existing container's root wins over a derived one; one
   from another year is refused (it mounts only its own `/<year>`).
+- **An artifact root is sorted by kind (ww44).**  Task dirs hold what a person reads (`.md`,
+  `.sh`, `.py`, `.patch`, `.toml`, `.log`, `.err`, `.txt`, oaka's `.csv`/`.json` results);
+  checkouts go to `<root>/repos/<repo>`, binaries to `<root>/bin/<name>/...`, anything else to
+  `<root>/misc/`.  Why: the roots are part of the user's journal (akao-amd/script-journal),
+  which keeps the task dirs; since agents did the work, clones, worktrees and built kernels in
+  task dirs made it hard to keep.  One checkout per repo, reused and told apart by branch, not
+  by another copy.  `oaka draft --stack` follows it
+  (`<root>/repos/<pkg>`, before ww44 `/root/trees/<pkg>-<task>`): the root is per container, so
+  the worktree collision that moved trees out of `/<year>/nocopy` cannot recur there.
 - **Init decides about an existing container before it touches the host.**  Why: adopting
   its root after the host step had already created directories for a root that would not be
   used, and a mirror re-run must not deliver a brief for image B into a container of image A.

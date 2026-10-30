@@ -79,11 +79,20 @@ pub fn stack_arg(s: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// The tree a drafted `[stack.<name>]` installs from: in the container's own /root, never the box-wide
-/// `/<year>`.  A worktree is registered in one container's checkout only, and two workers' task dirs
-/// often share a name (`0001_...`), so a shared path would collide.
-pub fn tree_path(name: &str, task: &str) -> String {
-    format!("/root/trees/{name}-{task}")
+/// The tree a drafted `[stack.<name>]` installs from: `<artifact root>/repos/<name>`, the worker's one
+/// checkout of the package, which later tasks reuse (their work is told apart by branch, not by another
+/// copy).  Checkouts stay out of the task dirs, which hold what a person reads (CLAUDE.md, "Where you
+/// are").  The root is the worker's own, so a worktree of its container's checkout collides with no other
+/// worker's.  Without $AKAO_ARTIFACT_ROOT (a container from before it) the root is the task dir's parent.
+pub fn tree_path(name: &str) -> String {
+    let root = sys::artifact_root()
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|d| d.parent().map(Path::to_path_buf))
+        })
+        .unwrap_or_else(|| "/root".into());
+    format!("{}/repos/{name}", root.display())
 }
 
 pub fn stack_block(name: &str, repo: &str, tree: &str, commit: Option<&str>) -> String {
@@ -230,15 +239,11 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
         names.push(name);
     }
 
-    let task = std::env::current_dir()
-        .ok()
-        .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "task".into());
     for arg in &opts.stacks {
         let (name, commit) = stack_arg(arg);
         let repo = &stacks.get(name).unwrap().repo;
         out += "\n";
-        out += &stack_block(name, repo, &tree_path(name, &task), commit);
+        out += &stack_block(name, repo, &tree_path(name), commit);
     }
 
     out += "\n";
@@ -328,7 +333,7 @@ mod tests {
         let checked = plan::check_plan(&root, toml::from_str(&text).unwrap(), &lib, &plan::Machine::default()).unwrap();
         assert!(checked.plan.traced("triton") && checked.plan.traced("tp2"));
 
-        // --stack: the tree is the worker's own, under /root/trees
+        // --stack: the tree is the worker's one checkout of the package, in its root's repos/
         fs::write(
             lib.root.join("stacks.toml"),
             "[sglang]\nrepo = '/sgl-workspace/sglang'\nmodule = 'sglang'\ninstall = 'true'\n",
@@ -348,7 +353,7 @@ mod tests {
         .unwrap();
         let p: plan::Plan = toml::from_str(&text).unwrap();
         let tree = &p.stack["sglang"].tree;
-        assert!(tree.starts_with("/root/trees/sglang-"), "{tree}");
+        assert!(tree.starts_with('/') && tree.ends_with("/repos/sglang"), "{tree}");
         fs::remove_dir_all(root).unwrap();
     }
 }

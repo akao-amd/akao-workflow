@@ -724,7 +724,7 @@ fn check_stack(
             .recipe(arch)
             .with_context(|| format!("{at}: {name} in {}", stacks.path.display()))?;
         if !s.tree.starts_with('/') || s.tree.contains(['\n', '\t']) {
-            bail!("{at}: tree must be an absolute path, e.g. /root/trees/{name}-<task>");
+            bail!("{at}: tree must be an absolute path, e.g. $AKAO_ARTIFACT_ROOT/repos/{name}");
         }
         let tree = s.tree.trim_end_matches('/').to_string();
         if tree == pkg.repo.trim_end_matches('/') {
