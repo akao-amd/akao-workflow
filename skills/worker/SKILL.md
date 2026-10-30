@@ -31,7 +31,7 @@ and `misc/` out. Put each thing where it belongs, so the task dirs stay worth ke
 
 | What | Where |
 |---|---|
-| what a person reads: `.md` `.sh` `.py` `.patch` `.toml` `.log` `.err` `.txt`, and the `.csv`/`.json` results oaka writes | the task dir `<NNNN>_<desc>/`, as always |
+| what a person reads: `.md` `.sh` `.py` `.patch` `.toml` `.log` `.err` `.txt`, and what oaka writes: `.csv`/`.json` results, `.trace.json.gz` GPU traces (logs, like `.log`) | the task dir `<NNNN>_<desc>/`, as always |
 | checkouts: a clone, a `git worktree`, an unpacked source tarball | `<root>/repos/<repo>` |
 | binaries: built kernels (`.hsaco`, `.co`, `.cubin`), compiled tools and tests, `.so`, `.o`, wheels | `<root>/bin/<name>/<task>/...` (`<name>`: your container's name; below it any hierarchy that says what each is) |
 | anything else: archives, core or memory dumps, images, other binary data | `<root>/misc/<task>/...` |

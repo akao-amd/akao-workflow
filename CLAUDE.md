@@ -54,7 +54,7 @@ Everything an agent produces stays under its artifact root, sorted by what it is
 ```
 <artifact root>/                    e.g. /2026/ww44/dsv4_exp, /2026/ww44/controller
   <NNNN>_<desc>/                    what a person reads: .md .sh .py .patch .toml .log .err .txt
-                                    (and the .csv/.json results oaka writes)
+                                    (and oaka's .csv/.json results and .trace.json.gz traces)
   repos/<repo>                      checkouts: clones, worktrees, unpacked source trees
   bin/<container_name>/<...>        binaries: built kernels, tools, .so, .o, wheels
   misc/<...>                        anything else (archives, dumps, images, ...)

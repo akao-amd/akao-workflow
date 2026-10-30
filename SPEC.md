@@ -278,7 +278,8 @@ Where the how lives: worker reference (commands, plan and profile fields)
   (ww41 vs ww42 on 2026-10-09).  An existing container's root wins over a derived one; one
   from another year is refused (it mounts only its own `/<year>`).
 - **An artifact root is sorted by kind (ww44).**  Task dirs hold what a person reads (`.md`,
-  `.sh`, `.py`, `.patch`, `.toml`, `.log`, `.err`, `.txt`, oaka's `.csv`/`.json` results);
+  `.sh`, `.py`, `.patch`, `.toml`, `.log`, `.err`, `.txt`, oaka's `.csv`/`.json` results and
+  `.trace.json.gz` GPU traces, which count as logs);
   checkouts go to `<root>/repos/<repo>`, binaries to `<root>/bin/<name>/...`, anything else to
   `<root>/misc/`.  Why: the roots are part of the user's journal (akao-amd/script-journal),
   which keeps the task dirs; since agents did the work, clones, worktrees and built kernels in
