@@ -1,0 +1,16 @@
+# gpt-oss-120b/best-mi355 at TP2.  Created 2026-10-30 (ww44, console) for a TP1 / TP2 fixed-seq
+# sweep on m12-17 (8x MI355X, gfx950).
+#
+# Same recipe as best-mi355 (inherited via extends: its flags and env, the openai MXFP4
+# checkpoint); only the tp pin changes, 1 -> 2.  best-mi355 pins tp = 1, so a plan giving it two
+# GPUs is rejected; tp cannot be a plan override, hence this child profile.
+#
+# Custom all-reduce is left on, as in gpt-oss-120b/mi35x-nightly-tp2: the DPX hang the gfx1250
+# TP2 profiles avoid was seen on gfx1250 partitions, not on MI355X.
+#
+# Untested at TP2 as of its creation.
+
+description = "gpt-oss-120b MXFP4 (openai), MI355X at TP2: the user's best-mi355 recipe"
+arch = ["gfx950"]
+extends = "gpt-oss-120b/best-mi355"
+tp = 2
