@@ -170,8 +170,10 @@ if [ "$AOT_TREE" != "$(cat "$STATE/aot_tree" 2>/dev/null)" ]; then
     rm -f "$STATE/aot_tree"
     (
         cd "$AOT"
-        rm -f pyproject.toml
-        [ -f pyproject_rocm.toml ] && mv pyproject_rocm.toml pyproject.toml
+        # A tree with the image's edits committed has the swap done already (pyproject_rocm.toml gone).
+        if [ -f pyproject_rocm.toml ]; then
+            mv -f pyproject_rocm.toml pyproject.toml
+        fi
         AMDGPU_TARGET="$GPU_ARCH" python3 setup_rocm.py install
     )
     if [ -d "$SP/sgl_kernel" ]; then
