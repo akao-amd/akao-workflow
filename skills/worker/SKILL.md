@@ -4,7 +4,7 @@ description: The worker role's manual — an agent in a worker container (akao_<
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.10.1"
+  version: "2.10.2"
   category: development
   tags: ["worker", "sglang", "oaka", "bisect", "benchmark", "profiling", "git"]
 compatibility:
@@ -34,7 +34,7 @@ and `misc/` out. Put each thing where it belongs, so the task dirs stay worth ke
 | what a person reads: `.md` `.sh` `.py` `.patch` `.toml` `.log` `.err` `.txt`, and what oaka writes: `.csv`/`.json` results, `.trace.json.gz` GPU traces (logs, like `.log`) | the task dir `<NNNN>_<desc>/`, as always |
 | checkouts: a clone, a `git worktree`, an unpacked source tarball | `<root>/repos/<repo>/<purpose>` |
 | binaries: built kernels (`.hsaco`, `.co`, `.cubin`), compiled tools and tests, `.so`, `.o`, wheels | `<root>/bin/<name>/<task>/...` (`<name>`: your container's name; below it any hierarchy that says what each is) |
-| anything else: archives, core or memory dumps, images, other binary data | `<root>/misc/<task>/...` |
+| anything else: archives, core or memory dumps, images, compile caches, other binary data | `<root>/misc/<task>/...` (oaka puts its servers' compile caches there itself) |
 
 - **Every checkout is `repos/<repo>/<purpose>`, and nowhere else**: not in a task dir, not in
   `misc/`, not under `/sgl-workspace`. `<repo>` is the repository's own name (`sglang`,

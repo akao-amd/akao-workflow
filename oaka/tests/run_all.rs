@@ -905,6 +905,48 @@ fn servers_start_with_empty_compile_caches() {
     sb.assert_no_leftovers();
 }
 
+/// Under an artifact root the compile caches go to its misc/, at the plan dir's path, not into
+/// the task dir; gone after the step, or kept there with `keep_caches = true`.
+#[test]
+fn compile_caches_live_in_the_roots_misc() {
+    let _servers = servers_shared();
+    let sb = Sandbox::new("caches-misc");
+    let root = sb.root.to_str().unwrap().to_string();
+    let misc = sb.root.join("misc/work");
+    let port = |name: &str| -> u16 {
+        sb.read("plan.lock.toml")
+            .lines()
+            .find_map(|l| l.strip_prefix(&format!("{name} = ")).map(|p| p.trim().parse().unwrap()))
+            .unwrap()
+    };
+    let caches_of = |name: &str| -> serde_json::Value {
+        let rec = fs::read(sb.root.join(format!("state/server_{}.json", port(name)))).unwrap();
+        serde_json::from_slice::<serde_json::Value>(&rec).unwrap()["caches"].clone()
+    };
+    let a = "[[server]]\nname = 'a'\nprofile = 'm/base'\ngpus = [0]\n";
+    let b = "[[server]]\nname = 'b'\nprofile = 'm/base'\ngpus = [1]\n";
+    let (code, out) = sb.run(&format!("{a}{b}{FIXED_SEQ}"), &[("AKAO_ARTIFACT_ROOT", &root)]);
+    assert_eq!(code, 0, "{out}");
+    let c = caches_of("a");
+    assert_eq!(
+        c["TRITON_CACHE_DIR"][0],
+        misc.join("cache_a/triton").to_str().unwrap(),
+        "{c}"
+    );
+    assert!(!sb.work().join("logs/cache_a").exists());
+    assert!(!misc.join("cache_a").exists(), "caches left after the step");
+
+    let (code, out) = sb.run(
+        &format!("keep_caches = true\n{a}{b}{FIXED_SEQ}"),
+        &[("AKAO_ARTIFACT_ROOT", &root)],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("compile caches kept (keep_caches)"), "{out}");
+    assert!(misc.join("cache_a/triton").is_dir(), "kept caches missing: {out}");
+    assert!(!sb.work().join("logs/cache_a").exists());
+    sb.assert_no_leftovers();
+}
+
 #[test]
 fn server_crash_at_startup_stops_the_run() {
     let _servers = servers_shared();

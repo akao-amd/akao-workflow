@@ -16,6 +16,12 @@ case "$LABEL" in
     /* | *..* | *[!A-Za-z0-9_./-]*) echo "step.sh: label $LABEL must be a relative name like 1_abc123 or bisect/abc123" >&2; exit 1 ;;
 esac
 LOGS="$WORKDIR/logs${LABEL:+/$LABEL}"
+{% if caches_dir %}
+# The servers' compile caches: built intermediates, kept out of the task dir.
+CACHES={{ caches_dir | q }}"${LABEL:+/$LABEL}"
+{% else %}
+CACHES="$LOGS"
+{% endif %}
 export RESULTS="$WORKDIR/results${LABEL:+/$LABEL}"
 # A labeled step is a fresh measurement: no numbers from an earlier run of it may remain.
 [ -n "$LABEL" ] && rm -rf "$RESULTS"
@@ -73,8 +79,13 @@ stop_servers() {
         return 1
     fi
     PIDS=()
+{% if keep_caches %}
+    say "compile caches kept (keep_caches): $CACHES/cache_*"
+    rm -rf "$SERVER_STATE_DIR"
+{% else %}
     # The servers' compile caches (up to a GB each) are of no use once they are gone.
-    rm -rf "$LOGS"/cache_* "$SERVER_STATE_DIR"
+    rm -rf "$CACHES"/cache_* "$SERVER_STATE_DIR"
+{% endif %}
 }
 CLIENT_PIDS=()
 PROBE_PID=
@@ -97,14 +108,15 @@ trap finish EXIT
 trap 'exit 130' INT TERM
 
 # start_server <name>: own process group, so stopping it also stops its workers; its empty
-# compile caches in this step's logs/.
+# compile caches in $CACHES.
 start_server() {
     local state="$SERVER_STATE_DIR/$1.json" pid cancelled=0
     : >"$LOGS/server_$1.log"
     # Defer cancellation until the child is registered and its pre-exec identity
     # exists. The bootstrap cannot run server/package code before publishing it.
     trap 'cancelled=1' INT TERM
-    OAKA_SERVER_CACHE="$LOGS/cache_$1" python3 -I -S "$HERE/server_processes.py" start "$state" "$HERE/server_$1.sh" "$$" \
+    mkdir -p "$CACHES"
+    OAKA_SERVER_CACHE="$CACHES/cache_$1" python3 -I -S "$HERE/server_processes.py" start "$state" "$HERE/server_$1.sh" "$$" \
         >"$LOGS/server_$1.log" 2>&1 &
     pid=$!
     PIDS+=("$pid")

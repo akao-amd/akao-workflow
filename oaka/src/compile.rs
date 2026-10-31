@@ -126,6 +126,15 @@ pub struct Compiled {
     pub notes: Vec<String>,
 }
 
+/// Where a plan's servers keep their compile caches: `<artifact root>/misc/<the plan dir's path under the root>`,
+/// outside the task dirs (built intermediates; the user's journal keeps only what a person reads).  None (step.sh
+/// then uses the step's logs/) for a plan dir outside the root, or without $AKAO_ARTIFACT_ROOT.
+pub fn cache_dir(dir: &Path) -> Option<String> {
+    let root = sys::artifact_root()?;
+    let rel = dir.strip_prefix(&root).ok().filter(|r| !r.as_os_str().is_empty())?;
+    Some(root.join("misc").join(rel).display().to_string())
+}
+
 pub fn compile(c: &Checked) -> Result<Compiled> {
     let dir = &c.dir;
     let scripts = dir.join(SCRIPTS);
@@ -221,7 +230,7 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
             .chain(s.effective.engine.cache_env().map(|v| (v, s.effective.engine.as_str())))
             .collect();
         let text = env.get_template("server.sh")?.render(context! {
-            marker, name, profile => s.base.name, description => s.base.description, role,
+            marker, name, profile => s.base.name, caches_dir => cache_dir(&c.dir), description => s.base.description, role,
             overrides => overrides(s), self_path => format!("{SCRIPTS}/{file}"),
             port => port_of(name), gpus => gpus.join(","), env => vars,
             visible => c.machine.visible_devices(), nvidia => c.machine.nvidia(),
@@ -406,6 +415,7 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
     let stages: Vec<Vec<minijinja::Value>> = [servers, routers].into_iter().filter(|s| !s.is_empty()).collect();
     let text = env.get_template("step.sh")?.render(context! {
         marker, self_path => format!("{SCRIPTS}/step.sh"), stages,
+        caches_dir => cache_dir(&c.dir), keep_caches => c.plan.keep_caches,
         runs, ready_timeout_s => READY_TIMEOUT_S,
     })?;
     files.push(("step.sh".into(), text));

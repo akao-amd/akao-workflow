@@ -297,6 +297,12 @@ Where the how lives: worker reference (commands, plan and profile fields)
   moved under the root.  `oaka draft --stack` follows it (`<root>/repos/<pkg>/<task>`; before
   ww44 `/root/trees/<pkg>-<task>`): the root is per container, so the worktree collision that
   moved trees out of `/<year>/nocopy` cannot recur there.
+- **Servers' compile caches go to `<root>/misc/`** (11-01; until then the step's `logs/cache_<name>/`), at the
+  plan dir's path, still emptied at every start and deleted after the step; `keep_caches = true` keeps them for a
+  later scan.  Why: built intermediates (a 650 MB code-object cache in one of mono_e21's brackets) sat in the task
+  dirs, the journal's tree, while servers ran, and stayed there when a step was killed; workers that needed them
+  afterwards (B4 scans) copied them out by hand while the server ran.  `misc/`, not `bin/`: `bin/` holds binaries
+  someone keeps or hands over; caches are disposable.
 - **Init decides about an existing container before it touches the host.**  Why: adopting
   its root after the host step had already created directories for a root that would not be
   used, and a mirror re-run must not deliver a brief for image B into a container of image A.

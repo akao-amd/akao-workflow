@@ -50,7 +50,7 @@ oaka draft --suite <s> --profile <model>/<recipe> --gpus 4,5 [--thinking] [--por
 
   | Script | Does |
   |---|---|
-  | `server_<name>.sh` | one server (for a PD profile: `server_<name>.prefill<i>.sh`, `server_<name>.decode<i>.sh` and `server_<name>.router.sh`; see Prefill-decode disaggregation), in the foreground, on empty compile caches of its own: `TRITON_CACHE_DIR`, `XDG_CACHE_HOME` and the engine's (SGLang `SGLANG_CACHE_DIR`, vllm `VLLM_CACHE_ROOT`) under `logs/cache_<name>/`, emptied at every start (`step.sh`: in the step's logs, removed when it stops the servers).  The plan's or profile's env may point any of them elsewhere, e.g. to a shared warm cache |
+  | `server_<name>.sh` | one server (for a PD profile: `server_<name>.prefill<i>.sh`, `server_<name>.decode<i>.sh` and `server_<name>.router.sh`; see Prefill-decode disaggregation), in the foreground, on empty compile caches of its own: `TRITON_CACHE_DIR`, `XDG_CACHE_HOME` and the engine's (SGLang `SGLANG_CACHE_DIR`, vllm `VLLM_CACHE_ROOT`) emptied at every start, under `<artifact root>/misc/<the plan dir's path under the root>/cache_<name>/` (built intermediates stay out of the task dir; outside a root or without `$AKAO_ARTIFACT_ROOT`: the step's `logs/cache_<name>/`), removed when `step.sh` stops the servers unless the plan says `keep_caches = true` (e.g. to scan the kernels a server built).  The plan's or profile's env may point any of them elsewhere, e.g. to a shared warm cache |
   | `client_<NN>_<kind>_<server>.sh` | one client against its running server |
   | `step.sh [<label>]` | one measurement: start every server, wait until it is ready (SGLang: its ready line; vllm, ATOM: `GET /health` answers 200; a PD router, started after its servers: a one-token `POST /generate` through it answers 200; a crash marker, exit or 30 min timeout of it or of any server started before fails it), the clients in plan order, stop the servers (also on failure and Ctrl-C) |
   | `server_processes.py` | stdlib server ownership helper used by `step.sh`: records leader PID/start/UID/session/group before exec, TERM only the validated leader, then after 60 s KILL surviving owned group members through pidfds, including children of a dead leader, and allows 60 s more for them to go (at most 120 s in all; survivors are named). Requires Linux Python pidfd APIs (`oaka doctor`: `pidfd`); unknown ownership fails the step and retains caches and `logs/.server_ownership.*` |
@@ -70,6 +70,8 @@ oaka draft --suite <s> --profile <model>/<recipe> --gpus 4,5 [--thinking] [--por
 ## Plan (`plan.toml`)
 
 ```toml
+# keep_caches = true       # keep the servers' compile caches after the step (in misc/; see server_<name>.sh)
+
 [[server]]
 name = "quant"
 profile = "gpt-oss-120b"     # = gpt-oss-120b/base

@@ -23,6 +23,10 @@ pub struct Plan {
     /// Packages from the library's stacks.toml to install from a tree before the servers.
     #[serde(default)]
     pub stack: BTreeMap<String, StackSpec>,
+    /// Keep the servers' compile caches after a step (to scan the kernels they built) instead of
+    /// deleting them; they stay in the artifact root's misc/ (compile::cache_dir).
+    #[serde(default)]
+    pub keep_caches: bool,
 }
 
 #[derive(Debug, Deserialize)]
