@@ -14,7 +14,22 @@
 # below is <model_path>/gpt-oss-120b (on n10-17 /data2/openai/gpt-oss-120b: override `model`
 # in the plan there).
 #
-# Not yet measured with oaka.
+# KNOWN ISSUE (2026-11-01): broken under load on images whose AITER carries CK #10180 (AITER from 10-09; rocm/sgl-dev
+# mi35x images from ~10-18 on), and intermittently from CK #9214 (images from ~09-11).  Prefill of gpt-oss's
+# head_dim 64 runs CK's hd-128 batch-prefill tile (FmhaBatchPrefillWithPagedKVCacheKernel), whose unchecked
+# GLOBAL_LOAD_LDS loads read up to one row past the K/V SGLang hands it (exact size on the vectorized_5d page-1
+# extend path): a GPU memory fault, or garbage ("!!!") answers before it.  Reported upstream, unfixed:
+# ROCm/aiter#6518, ROCm/rocm-libraries#13600.  Seen: m12-17 10-30 (all 6 servers failed their GSM8K gate), n10-17
+# 10-31 (reproduced, root-caused).  Serves again with either fix (n10-17 worker best355_n10, task 0001):
+#   - CK range check on the two flat global-load paths of ck_tile::tile_scatter_gather (akao-amd/aiter branch
+#     fix-batch-prefill-hdim-pad-overread bumps AITER's CK submodule to it): full TP1/TP2 sweep, 0 faults, GSM8K
+#     0.948-0.958;
+#   - SGLang handing K and V one zeroed row past their end (the over-read then reads zeros inside SGLang's own
+#     allocation): GSM8K 0.949-0.960 TP1, 0.955 TP2, 8k/1k c64 and 70k/300 c16 without a fault.
+# Unpatched, dropping SGLANG_AITER_KV_CACHE_LAYOUT=vectorized_5d (NHD) avoided the fault there (GSM8K 0.951), at an
+# unmeasured speed cost.
+#
+# Not yet measured with oaka on a working stack.
 
 description = "gpt-oss-120b MXFP4 (openai), MI355X at TP1: the user's best recipe (aiter attention, fp8 KV in the vectorized 5D layout, page 64)"
 arch = ["gfx950"]

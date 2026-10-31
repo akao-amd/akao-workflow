@@ -8,7 +8,8 @@
 # Custom all-reduce is left on, as in gpt-oss-120b/mi35x-nightly-tp2: the DPX hang the gfx1250
 # TP2 profiles avoid was seen on gfx1250 partitions, not on MI355X.
 #
-# Untested at TP2 as of its creation.
+# Untested at TP2 as of its creation.  best-mi355's KNOWN ISSUE (CK batch-prefill over-read, aiter#6518) holds here
+# too: both TP2 servers of 10-30 faulted the same way.
 
 description = "gpt-oss-120b MXFP4 (openai), MI355X at TP2: the user's best-mi355 recipe"
 arch = ["gfx950"]
