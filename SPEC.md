@@ -62,6 +62,11 @@ its box's docker.
   worker's; vllm's images have ENTRYPOINT `vllm serve`, which took `sleep` for a model and
   exited, and `--rm` removed the container.  `--init` reaps the orphans worker processes
   leave behind, which `sleep` would not.
+- **No agent and no tmux inside the container** (2026-10-31; until then init started a `claude` in a
+  container tmux): the worker's agent runs in a window of the console's tmux (`akao open`), where
+  the controller and the user see every worker side by side.  Why: the in-container one was a second,
+  unwatched agent nobody used, and the step broke on an image whose library path shadows the
+  system's libtinfo (rocm/sgl-dev:v0.5.23-rocm724-mi35x-20261031: tmux exits 127).
 - **An NVIDIA box gets the same worker** (2026-10-13; fully set up 10-24, for the GB300
   trays): only the `docker run` skeleton differs, `--gpus all` and the flags of a hand-run
   GB300 container (known to work there), plus the host network; mounts, setup steps and oaka

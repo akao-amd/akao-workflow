@@ -3,7 +3,7 @@
 //! Every step checks what already exists and reuses it, so re-running init on a
 //! half-initialized worker resumes instead of failing.
 
-use crate::exec::{q, show, Runner, ESCALATE};
+use crate::exec::{q, Runner, ESCALATE};
 use crate::state::{self, Host, State};
 use anyhow::{bail, Context, Result};
 use std::path::Path;
@@ -74,7 +74,7 @@ pub enum Gpu {
     Nvidia,
 }
 
-const APT_PACKAGES: &[&str] = &["vim", "less", "tmux", "docker.io", "git"];
+const APT_PACKAGES: &[&str] = &["vim", "less", "docker.io", "git"];
 
 /// Excluded from the control-plane deploy.
 const DEPLOY_EXCLUDES: &[&str] = &[".git", "__pycache__", "*.pyc", ".claude"];
@@ -494,7 +494,7 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
     } else {
         Some(state::shippable_repo()?)
     };
-    let mut s = Steps { n: 0, total: 12 };
+    let mut s = Steps { n: 0, total: 11 };
 
     s.next("resolve host and container");
     let cfg = r.query(&r.ssh_config_argv(nick))?;
@@ -770,7 +770,7 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
         // oaka's gsm8k client.  From PyPI on its own: never sglang[test], which pulls
         // PyPI sglang over the image's.  Its deps are pure Python (no torch/triton/sglang).
         // Not fatal: an image whose pip refuses (e.g. a mirrored vllm/ATOM one) still gets
-        // its tmux and agent; oaka doctor then warns that gsm8k clients cannot run.
+        // its agent; oaka doctor then warns that gsm8k clients cannot run.
         r.run(&p.exec(
             &[],
             "command -v sgl-eval >/dev/null || python3 -m pip install sgl-eval \
@@ -798,25 +798,6 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
     };
     r.run(&p.exec(&[], &infx_script))?;
 
-    s.next("tmux controller window");
-    if r.probe(&p.exec(&[], "tmux has-session"))?.is_some() {
-        println!("  tmux already running in {}; left as is", p.container);
-    } else {
-        r.run(&p.exec(
-            &[],
-            &format!("tmux new-session -d -n controller -c {}", q(&p.artifact_root)),
-        ))?;
-        // The repo is the worker's manual (CLAUDE.md, its skill, oaka's library), outside the
-        // working directory: a working directory of the agent's too, or every read prompts.
-        r.run(&p.exec(
-            &[],
-            &format!(
-                "tmux send-keys -t :controller 'claude --add-dir {}' Enter",
-                state::WORKER_REPO
-            ),
-        ))?;
-    }
-
     s.next("worker doctor");
     // The worker's GPU arch and ROCm version (what plans' profiles are checked against)
     // and every prerequisite oaka's scripts need, now that setup is done: a container
@@ -835,8 +816,9 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
         None => println!("  cannot run {oaka} in {}; skipped", p.container),
     }
 
-    let attach = p.docker(&["exec", "-it", &p.container, "tmux", "attach"]);
-    println!("done. attach with:\n  {}", show(&attach));
+    // The worker's agent runs in a window of the console's tmux (`akao open`), not in the container.
+    let name = p.container.strip_prefix("akao_").unwrap_or(&p.container);
+    println!("done. its agent: akao open {nick} {name} [--cwd <task dir>]");
     Ok(p)
 }
 

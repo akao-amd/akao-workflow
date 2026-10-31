@@ -102,7 +102,7 @@ image (else init fails and names the one it runs):
 4. copy the home template, unless that container's home already exists
 5. create docker context `<nick>` (`host=ssh://<nick>`) if missing, then `docker context use` it
 6. `docker run` the container, unless it already runs
-7. in the container: `apt install vim less tmux docker.io git`, unless all are there
+7. in the container: `apt install vim less docker.io git`, unless all are there
 8. the worker's own clone of this repo at `/root/akao-workflow` (`$AKAO_REPO_ROOT` in the
    container): the console's branches go over as a git bundle (no network, unpushed
    commits included); the first time it is cloned, later fetched as `console/main` and
@@ -115,15 +115,13 @@ image (else init fails and names the one it runs):
     latest `main` (left as is, with a warning, when that would lose uncommitted changes or
     commits of its own `main`); `--keep-infx` instead verifies the existing checkout and
     reports its commit without fetching or changing it
-11. start tmux with window `controller` running `claude` (with the clone as an extra working
-    directory, `--add-dir`, so reading the skills never prompts), unless tmux already runs
-12. run `oaka doctor` in the worker and show its report: GPU arch and ROCm version (what
+11. run `oaka doctor` in the worker and show its report: GPU arch and ROCm version (what
     plans are checked against) and every prerequisite; reported, never fatal
 
 Mounts: model dir → `/model`, docker socket → `/var/run/docker.sock`,
 `<host_home>/<year>` → `/<year>`, the container home → `/root`.  The artifact root
 (`/<year>/<week>/<name>`, or `--artifact-root <dir>` under `/<year>/`) is the working
-directory and `$AKAO_ARTIFACT_ROOT` in the container, so every `docker exec`, tmux window and
+directory and `$AKAO_ARTIFACT_ROOT` in the container, so every `docker exec` and
 agent in it sees the same root, even after the week has changed.  A container created
 before this has no variable: its working directory is its root (to pin one, `docker
 --context <nick> rm -f akao_<name>` and init again; `/root` and `/<year>` are bind mounts and
@@ -138,9 +136,9 @@ Flags: `--dry-run` (probes run, changes are only printed), `--skip-setup` (skip 
 The InferenceX checkout is shared by a host's workers. Use `--keep-infx` when bringing up a
 worker while another is measuring; it fails if the checkout does not already exist.
 
-Attach afterwards with `docker --context <nick> exec -it akao_<name> tmux attach`.  An agent
-driving workers (the controller) opens the worker's `claude` in a window of its own tmux
-instead, and keeps a record of what it ran: `$AKAO_REPO_ROOT/skills/controller/SKILL.md`.
+Init starts no agent in the container: the worker's `claude` runs in a window of the console's
+tmux, opened by `akao open <nick> <name>` (below), where the controller and you see it side by side.
+The controller keeps a record of what it ran: `$AKAO_REPO_ROOT/skills/controller/SKILL.md`.
 
 ## `akao mirror [<nick> [<name>]] --conf <terms>`
 

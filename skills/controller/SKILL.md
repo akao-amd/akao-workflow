@@ -4,7 +4,7 @@ description: The controller role's manual — the agent on the console (where `a
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.6.0"
+  version: "2.6.1"
   category: development
   tags: ["controller", "akao", "worker", "tmux"]
 compatibility:
@@ -110,8 +110,8 @@ container for the old agent (`docker --context <nick> exec akao_<name> ps -eo pi
 grep [c]laude`): a `claude` orphaned by the drop may still run and act; stop it (that pid,
 after checking its working directory is the task's) before a second one resumes the same
 conversation. `/exit` ends the agent and the window; nothing keeps running in the container.
-(`akao init` also starts a `claude` in the worker's own tmux, for the user working on the box
-itself; yours is a separate one.)
+This window is the worker's only agent: `akao init` starts none in the container (containers
+from before 10-31 may still have a tmux with one; leave it).
 
 | Action | Command |
 |---|---|

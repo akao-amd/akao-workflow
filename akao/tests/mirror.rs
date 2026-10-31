@@ -35,7 +35,7 @@ esac
 exit $?
 "#;
 
-/// docker: unreachable when $FAKE_DOCKER_DOWN is set; no tmux in the container with $FAKE_NO_TMUX; $FAKE_EXISTING describes an existing
+/// docker: unreachable when $FAKE_DOCKER_DOWN is set; $FAKE_EXISTING describes an existing
 /// akao_m1-fp4-mi355x-atom (inspect lines separated by |: id, image, workdir, mount/env
 /// lines), running, until $FAKE_REPLACED_ID says another container took its name; without
 /// it there is no container.
@@ -52,7 +52,6 @@ case "$*" in
         [ -n "$FAKE_EXISTING" ] || exit 1
         echo "$FAKE_EXISTING" | tr '|' '\n' ;;
     *"context inspect"*) exit 1 ;;
-    *"tmux has-session"*) [ -z "$FAKE_NO_TMUX" ] || exit 1 ;;
 esac
 exit 0
 "#;
@@ -206,7 +205,7 @@ fn init_runs_nvidia_boxes_with_gpus_all() {
     assert!(!out.contains("--device=/dev/kfd"), "{out}");
     // Set up like an AMD worker: oaka reads NVIDIA GPUs from nvidia-smi.
     assert!(
-        out.contains("[6/12] container") && out.contains("[12/12] worker doctor"),
+        out.contains("[6/11] container") && out.contains("[11/11] worker doctor"),
         "{out}"
     );
     let (code, out) = sb.akao("init", &args, &[]);
@@ -229,19 +228,23 @@ fn mirror_brings_up_the_entrys_image_with_a_brief() {
             "ww07",
             "--dry-run",
         ],
-        &[("FAKE_GFX", "90500 90500"), ("FAKE_NO_TMUX", "1")],
+        &[("FAKE_GFX", "90500 90500")],
     );
     assert_eq!(code, 0, "{out}");
     let root = format!("/{year}/ww07/m1-fp4-mi355x-atom");
-    // The worker's own agent reads the clone without a prompt: it is a working directory too.
-    assert!(out.contains("claude --add-dir /root/akao-workflow"), "{out}");
+    // No agent inside the container: the controller opens it in the console's tmux (`akao open`).
+    assert!(
+        !out.contains("tmux new-session") && !out.contains("tmux has-session"),
+        "{out}"
+    );
+    assert!(out.contains("its agent: akao open fakebox m1-fp4-mi355x-atom"), "{out}");
     for want in [
         "fakebox: 2 x gfx950 as mi355x needs".to_string(),
         "image rocm/atom:1".to_string(),
         format!("-e 'AKAO_ARTIFACT_ROOT={root}' -e 'AKAO_REPO_ROOT=/root/akao-workflow' -w {root}"),
-        "[3/12] deploy extra paths".to_string(),
-        "[7/12] install packages".to_string(),
-        "[9/12] install tools and agents".to_string(),
+        "[3/11] deploy extra paths".to_string(),
+        "[7/11] install packages".to_string(),
+        "[9/11] install tools and agents".to_string(),
         "bash /root/akao-workflow/utils/install_gh.sh".to_string(),
         "bundle create - --branches --tags | docker --context fakebox exec -i akao_m1-fp4-mi355x-atom".to_string(),
         "cat >/root/.cache/akao-workflow.bundle".to_string(),

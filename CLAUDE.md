@@ -176,7 +176,7 @@ akao/
     main.rs           CLI entry point, subcommand dispatch
     exec.rs           Runner: subprocess execution, ssh helpers
     state.rs          State: config.toml + hosts.tsv + home template
-    init.rs           `akao init` — 10-step container bring-up
+    init.rs           `akao init` — 11-step container bring-up
     mirror.rs         `akao mirror` — InferenceX entry (git, serde_yaml) -> init + brief
     dashboard.rs      `akao mirror --dashboard` — the dashboard's API (curl, serde_json):
                       curve, run, commit snapshot, measured points, server logs
@@ -290,7 +290,7 @@ they are appended after the fixed skeleton but before the image in `init`.
 
 ### init.rs — `akao init <nick> <name> [--image <tag>]`
 
-Twelve ordered steps, each idempotent (checks before acting).  Unless `--skip-setup`, the
+Eleven ordered steps, each idempotent (checks before acting).  Unless `--skip-setup`, the
 repo checkout (`$AKAO_REPO_ROOT`, `state::shippable_repo`) is checked before step 1.
 
 1. Resolve nick via `ssh -G` (verifies ssh connectivity); the GPU vendor (`Gpu`) from the
@@ -334,13 +334,12 @@ repo checkout (`$AKAO_REPO_ROOT`, `state::shippable_repo`) is checked before ste
     failed fetch only warns).  Not skipped by `--skip-setup`: oaka's benchmark client needs it.
     `--keep-infx` instead verifies the existing checkout and reports its HEAD without fetching
     or changing it, so another worker's measurements keep their shared benchmark client
-11. Start tmux session with window `controller` running `claude --add-dir /root/akao-workflow`
-   (the clone is the agent's manual, outside its working directory; skipped if tmux already runs)
-12. Worker doctor: the clone's `oaka/bin/oaka doctor` (the legacy `/<year>/oaka/bin/oaka` in
+11. Worker doctor: the clone's `oaka/bin/oaka doctor` (the legacy `/<year>/oaka/bin/oaka` in
     a container without one) in the container, report shown (GPU arch,
     ROCm version, prerequisites); read-only and never fatal
 
-Steps 3, 7, 8 and 9 are skipped together by `--skip-setup`.
+Steps 3, 7, 8 and 9 are skipped together by `--skip-setup`.  Init starts no agent in the container: the worker's
+`claude` runs in a window of the console's tmux (`akao open`), so the container needs no tmux.
 
 **docker run skeleton**: `--rm --init -d --privileged --ulimit nofile=1048576 --network=host
 --device=/dev/kfd --device=/dev/dri --group-add video --cap-add=SYS_PTRACE
@@ -348,7 +347,7 @@ Steps 3, 7, 8 and 9 are skipped together by `--skip-setup`.
 -e TERM=tmux-256color --ipc=host --shm-size=32g`.  On NVIDIA (`NVIDIA_RUN_SKELETON`, the
 flags of a hand-run GB300 container, plus the host network): `--rm --init -d --gpus all
 --network=host --ipc=host --shm-size=32g --ulimit memlock=-1 --ulimit stack=67108864 --cap-add
-SYS_NICE` and the same four `-e`; mounts, workdir, env and steps 7-12 are the same (oaka reads
+SYS_NICE` and the same four `-e`; mounts, workdir, env and steps 7-11 are the same (oaka reads
 NVIDIA GPUs from nvidia-smi; step 7 retries apt over https: the trays close port 80).
 Host's `rest` field appends after this, then `--entrypoint sleep <image> infinity`: the
 container only waits for `docker exec`, whatever the image starts; `--init` reaps orphaned
