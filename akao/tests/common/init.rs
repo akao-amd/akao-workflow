@@ -36,6 +36,9 @@ script=shlex.split(a[-1])[-1]
 if 'systemctl is-active' in script:
     if os.environ.get('FAKE_DIAG_FAIL'): sys.exit(55)
     print(os.environ.get('FAKE_DAEMON','active')); sys.exit(0)
+if 'docker.sock' in script:
+    if os.environ.get('FAKE_SOCK_DENIED'): print('amd'); print('root:docker')
+    sys.exit(0)
 if script.startswith('test -d '): sys.exit(1)
 if os.environ.get('FAKE_SSH_DENIED'): print('Permission denied',file=sys.stderr); sys.exit(255)
 sys.exit(0)

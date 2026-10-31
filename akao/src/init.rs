@@ -539,6 +539,24 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
                      on purpose), `ssh {nick} sudo -n systemctl start docker`, then init again"
                 )));
             }
+            // A running daemon the login may not reach (e21-13's shared `amd`, not in group
+            // docker): docker's own message blames the daemon.
+            let denied = r
+                .probe(&r.ssh_argv(
+                    nick,
+                    "s=/var/run/docker.sock; [ -S $s ] && [ ! -w $s ] && { id -un; stat -c %U:%G $s; } || true",
+                ))
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            if let [user, owner] = denied.split_whitespace().collect::<Vec<_>>()[..] {
+                return Err(e.context(format!(
+                    "{user} on {nick} may not use /var/run/docker.sock ({owner}): someone with sudo there adds it \
+                     to the socket's group (`sudo usermod -aG {} {user}`, effective at its next login), then init \
+                     again",
+                    owner.split(':').nth(1).unwrap_or("docker")
+                )));
+            }
             return Err(e);
         }
     };
