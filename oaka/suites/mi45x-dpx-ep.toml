@@ -1,0 +1,17 @@
+# MI45x DPX suite with expert parallelism: the standard suite plus TP2 with EP 2 on one physical GPU,
+# defined 2026-10-31 (user, ww44 controller: "a 4th layout, derive a base1028-tp2ep2 from base1028-tp2").
+#
+#   tp2ep2  one TP2 server on both partitions, experts split over the two ranks (--ep-size 2).  Same
+#           ISL/OSL pairs, concurrencies and GSM8K gate as the standard layouts.
+#
+# It serves <profile>-tp2ep2: the recipe's TP2 variant with ep-size 2 (gpt-oss-120b/base1028-tp2ep2
+# is one).  The draft fails, naming it, when the library has none.
+
+description = "MI45x DPX EP: the standard suite + TP2 with expert parallelism 2 on the two partitions"
+extends = "mi45x-dpx-standard"
+
+[[layout]]
+name = "tp2ep2"
+description = "TP2 across both partitions, experts split over the ranks (EP 2)"
+servers = [[0, 1]]
+profile_suffix = "-tp2ep2"

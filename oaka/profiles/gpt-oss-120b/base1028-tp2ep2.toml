@@ -1,0 +1,20 @@
+# gpt-oss-120b/base1028-tp2 with expert parallelism 2: attention at TP2 across both partitions of one DPX GPU, the
+# 128 experts split 64 + 64 over the two ranks (--ep-size 2) instead of each expert's columns.  Derived 2026-10-31
+# (user, ww44 controller) as the 4th layout of the MI45x DPX suite (suite mi45x-dpx-ep).  Everything else
+# is base1028-tp2's, inherited: trees, env, args, RCCL all-reduce.
+#
+# What EP changes on the base1028-20261030 trees (SGLang quark_w4a8_mxfp4_moe.py): with moe_ep_size > 1 the scheme
+# builds an expert map and does NOT take the FlyDSL switch ("FlyDSL's grouped MoE has no expert-parallel form here"),
+# so SGLANG_GFX1250_W4A8_FLYDSL and its MIN_TOKENS are inert; every MoE batch runs the gfx1250 W4A8 path picked by
+# SGLANG_GFX1250_W4A8_BACKEND = "triton" (inherited; best_known_1026's MoE), with the torch gather (EP ignores
+# KERNEL_GATHER).  The MemPool commit has nothing to pool.  So this layout measures EP *and* the non-FlyDSL MoE at
+# once; read its numbers against tp2 with that in mind.
+#
+# Untested as of its creation: the first server's GSM8K gate qualifies it.
+
+description = "gpt-oss-120b base1028 at TP2 with expert parallelism 2 (both partitions of one DPX GPU); FlyDSL switch inert under EP; untested"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/base1028-tp2"
+
+[args]
+ep-size = 2
