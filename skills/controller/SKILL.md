@@ -4,7 +4,7 @@ description: The controller role's manual — the agent on the console (where `a
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.6.1"
+  version: "2.6.2"
   category: development
   tags: ["controller", "akao", "worker", "tmux"]
 compatibility:
@@ -49,8 +49,8 @@ akao init n10-17 dsv4_exp --image rocm/sgl-dev:v0.5.21-rocm10-mi35x-20261012
 - **Sort it as every artifact root is** (`$AKAO_REPO_ROOT/CLAUDE.md`, "Where you are"; the
   user's journal keeps the record and leaves the rest out): readable files (`.sh`, `.md`,
   `.py`, `.patch`, `.toml`, `.log`, `.err`, `.txt`) in `NNN_<desc>.sh` and `NNN_<desc>/`;
-  checkouts (an upstream tree to read, a worker's branch to review) in `<root>/repos/<repo>`,
-  reused with a branch per purpose rather than copied again; binaries (kernels you built,
+  checkouts (an upstream tree to read, a worker's branch to review) in
+  `<root>/repos/<repo>/<purpose>` (a serial number when the name is taken), never elsewhere; binaries (kernels you built,
   tools) in `<root>/bin/controller/<NNN_desc>/...`; anything else in `<root>/misc/<NNN_desc>/`.
   The record names the paths it made there.
 
@@ -181,7 +181,7 @@ needed, and missed when they did not have it:
   partition topology (two GPUs may be one device); checked free just before, and checked
   again by the worker. Several workers on one box share the host network: give each its own
   ports (`port = ...` in the plan).
-- **What is measured, as it is**: image, trees (in the worker's `<root>/repos/<repo>`, on a
+- **What is measured, as it is**: image, trees (in the worker's `<root>/repos/<repo>/<purpose>`, on a
   branch named for the task; built binaries in its `<root>/bin/<name>/`; never in the task dir:
   worker skill, "Artifact root layout"), profiles (`oaka profile show`), model path;
   the points; the number norm (today: a fixed-seq point's number is run 1, `repeats` left at

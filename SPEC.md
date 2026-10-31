@@ -285,13 +285,18 @@ Where the how lives: worker reference (commands, plan and profile fields)
 - **An artifact root is sorted by kind (ww44).**  Task dirs hold what a person reads (`.md`,
   `.sh`, `.py`, `.patch`, `.toml`, `.log`, `.err`, `.txt`, oaka's `.csv`/`.json` results and
   `.trace.json.gz` GPU traces, which count as logs);
-  checkouts go to `<root>/repos/<repo>`, binaries to `<root>/bin/<name>/...`, anything else to
+  checkouts go to `<root>/repos/<repo>/<purpose>`, binaries to `<root>/bin/<name>/...`, anything else to
   `<root>/misc/`.  Why: the roots are part of the user's journal (akao-amd/script-journal),
   which keeps the task dirs; since agents did the work, clones, worktrees and built kernels in
-  task dirs made it hard to keep.  One checkout per repo, reused and told apart by branch, not
-  by another copy.  `oaka draft --stack` follows it
-  (`<root>/repos/<pkg>`, before ww44 `/root/trees/<pkg>-<task>`): the root is per container, so
-  the worktree collision that moved trees out of `/<year>/nocopy` cannot recur there.
+  task dirs made it hard to keep.  **Every checkout is `repos/<repo>/<purpose>`** (10-31; until
+  then "one checkout per repo, told apart by branch"): the repository's own name, then a short
+  mnemonic, a serial number when taken.  Why: one checkout cannot be at two revisions, and an
+  installed stack tree cannot move while it serves, so a worker needing the image's stock tree
+  kept three extra worktrees in `misc/` (fix_e21, 10-30) to get round the rule; a dir per
+  purpose under the repo's name is what the user did by hand (`/sgl-workspace/sglang/debug1`),
+  moved under the root.  `oaka draft --stack` follows it (`<root>/repos/<pkg>/<task>`; before
+  ww44 `/root/trees/<pkg>-<task>`): the root is per container, so the worktree collision that
+  moved trees out of `/<year>/nocopy` cannot recur there.
 - **Init decides about an existing container before it touches the host.**  Why: adopting
   its root after the host step had already created directories for a root that would not be
   used, and a mirror re-run must not deliver a brief for image B into a container of image A.

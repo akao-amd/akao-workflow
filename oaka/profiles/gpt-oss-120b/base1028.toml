@@ -31,13 +31,13 @@
 # A plan installs them with
 #
 #   [stack.triton]
-#   tree = "<root>/repos/triton"              # a worktree of /sgl-workspace/triton-custom
+#   tree = "<root>/repos/triton/base1028"     # a worktree of /sgl-workspace/triton-custom
 #   commit = "70d183531f2de1a24eeb0fd8bb408fd72ee256fc"
 #   [stack.aiter]
-#   tree = "<root>/repos/aiter"               # a worktree of /sgl-workspace/aiter
+#   tree = "<root>/repos/aiter/base1028"      # a worktree of /sgl-workspace/aiter
 #   commit = "628e82f8e03309749f38b648a8107bdb07e5853a"
 #   [stack.sglang]
-#   tree = "<root>/repos/sglang"              # a worktree of /sgl-workspace/sglang
+#   tree = "<root>/repos/sglang/base1028"     # a worktree of /sgl-workspace/sglang
 #   commit = "3930b1cd1b2bd5107b78582611a376d5e48486b4"
 #
 # after `git -C /sgl-workspace/<tree> fetch https://github.com/akao-amd/<repo> base1028-20261030` (stack.sh never

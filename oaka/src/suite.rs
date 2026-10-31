@@ -278,6 +278,8 @@ impl Suite {
 }
 
 pub struct DraftOptions<'a> {
+    /// The task dir the layouts are drafted into (it names the stack trees' purpose).
+    pub dir: &'a std::path::Path,
     pub profile: &'a str,
     pub gpus: &'a [u32],
     pub stacks: &'a [String],
@@ -408,7 +410,7 @@ pub fn render(lib: &Library, suite: &Suite, o: &DraftOptions) -> Result<Vec<(Str
                 );
             };
             out += "\n";
-            out += &stack_block(s, &pkg.repo, &tree_path(s), commit);
+            out += &stack_block(s, &pkg.repo, &tree_path(s, o.dir), commit);
         }
         // The plan's own rules (GPUs per server, PD shares, ports, clients), without its stack,
         // whose commit may still be the caller's to fill in.
@@ -468,6 +470,7 @@ mod tests {
 
         let stacks = vec!["sglang@abc123".to_string()];
         let o = DraftOptions {
+            dir: std::path::Path::new("/2026/ww44/w/0009_suite"),
             profile: "m/r",
             gpus: &[4, 5],
             stacks: &stacks,

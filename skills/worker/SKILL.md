@@ -4,7 +4,7 @@ description: The worker role's manual — an agent in a worker container (akao_<
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.10.0"
+  version: "2.10.1"
   category: development
   tags: ["worker", "sglang", "oaka", "bisect", "benchmark", "profiling", "git"]
 compatibility:
@@ -32,15 +32,28 @@ and `misc/` out. Put each thing where it belongs, so the task dirs stay worth ke
 | What | Where |
 |---|---|
 | what a person reads: `.md` `.sh` `.py` `.patch` `.toml` `.log` `.err` `.txt`, and what oaka writes: `.csv`/`.json` results, `.trace.json.gz` GPU traces (logs, like `.log`) | the task dir `<NNNN>_<desc>/`, as always |
-| checkouts: a clone, a `git worktree`, an unpacked source tarball | `<root>/repos/<repo>` |
+| checkouts: a clone, a `git worktree`, an unpacked source tarball | `<root>/repos/<repo>/<purpose>` |
 | binaries: built kernels (`.hsaco`, `.co`, `.cubin`), compiled tools and tests, `.so`, `.o`, wheels | `<root>/bin/<name>/<task>/...` (`<name>`: your container's name; below it any hierarchy that says what each is) |
 | anything else: archives, core or memory dumps, images, other binary data | `<root>/misc/<task>/...` |
 
-- **One checkout per repo.** `repos/<repo>` already there (an earlier task's)? Reuse it, and
-  keep this task's work apart with a branch named for the task (`<NNNN>_<desc>`), never a
-  second copy (`repos/sglang-2`). A stack's tree is the same checkout: `oaka draft --stack`
-  puts it at `<root>/repos/<pkg>`, a worktree of the image's checkout, and `stack.sh` reuses
-  it (it refuses a checkout over modified tracked files: commit them on your branch first).
+- **Every checkout is `repos/<repo>/<purpose>`, and nowhere else**: not in a task dir, not in
+  `misc/`, not under `/sgl-workspace`. `<repo>` is the repository's own name (`sglang`,
+  `aiter`, `triton` for the image's `triton-custom`); `<purpose>` a short mnemonic of what it
+  is for (`base1028`, `pristine`, `bisect`), with a serial number when the name is taken
+  (`debug1`, `debug2`). A worktree of the image's checkout:
+  `git -C /sgl-workspace/sglang worktree add <root>/repos/sglang/<purpose> <commit>`. Another
+  revision while one tree is installed and serving is another purpose dir beside it. Only
+  checking that patches apply needs no checkout: a temporary index in any of them
+  (`GIT_INDEX_FILE=/tmp/i git read-tree <base>`, `git apply --cached` each patch,
+  `git write-tree`, compare with the branch's `^{tree}`).
+- **A stack's tree is one of them**: `oaka draft --stack` puts it at
+  `<root>/repos/<pkg>/<task>` (the task dir's name without its number), which every plan of
+  the task shares, and `stack.sh` reuses it (it refuses a checkout over modified tracked
+  files: commit them on your branch first).
+- **A worktree's history lives in the image's checkout, inside the container**: when the
+  container is retired, the dir stays without its repo. Hand over what matters as patches or
+  a bundle (the report names them), and `git worktree remove` the checkouts you are done with.
+  A root from before 10-31 may hold a flat `repos/<repo>` checkout: it stays as it is.
 - **Build inside the checkout**: its `build/`, `target/` and caches stay in `repos/`. Copy
   only the binaries you keep or hand over into `bin/`.
 - **The task dir records the rest**: the repo, branch and base commit, the build command and

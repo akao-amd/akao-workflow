@@ -13,6 +13,8 @@ use std::fs;
 use std::path::Path;
 
 pub struct Options {
+    /// The work directory the plan is drafted for (its task dir names the stack trees' purpose).
+    pub dir: std::path::PathBuf,
     pub profiles: Vec<String>,
     pub gpus: Vec<u32>,
     pub clients: Vec<String>,
@@ -79,20 +81,41 @@ pub fn stack_arg(s: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// The tree a drafted `[stack.<name>]` installs from: `<artifact root>/repos/<name>`, the worker's one
-/// checkout of the package, which later tasks reuse (their work is told apart by branch, not by another
-/// copy).  Checkouts stay out of the task dirs, which hold what a person reads (CLAUDE.md, "Where you
-/// are").  The root is the worker's own, so a worktree of its container's checkout collides with no other
-/// worker's.  Without $AKAO_ARTIFACT_ROOT (a container from before it) the root is the task dir's parent.
-pub fn tree_path(name: &str) -> String {
-    let root = sys::artifact_root()
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .and_then(|d| d.parent().map(Path::to_path_buf))
-        })
-        .unwrap_or_else(|| "/root".into());
-    format!("{}/repos/{name}", root.display())
+/// The tree a drafted `[stack.<name>]` installs from: `<artifact root>/repos/<name>/<purpose>`, where every
+/// checkout of a worker lives (CLAUDE.md, "Where you are"): `<name>` the package's repository, `<purpose>` the
+/// task the plan is drafted in (its dir name without the number), so every plan of a task shares one tree and
+/// another task gets its own.  The root is the worker's own, so a worktree of its container's checkout
+/// collides with no other worker's.  Without $AKAO_ARTIFACT_ROOT (a container from before it) the root is the
+/// work dir's parent.
+pub fn tree_path(name: &str, dir: &Path) -> String {
+    let root = sys::artifact_root().or_else(|| dir.parent().map(Path::to_path_buf));
+    format!(
+        "{}/repos/{name}/{}",
+        root.as_deref().unwrap_or(Path::new("/root")).display(),
+        checkout_purpose(dir, root.as_deref())
+    )
+}
+
+/// The task a work dir belongs to, as a checkout's purpose: `0007_kv_sweep/tp2` under the root -> `kv_sweep`.
+/// "stack" when the dir names none.
+pub fn checkout_purpose(dir: &Path, root: Option<&Path>) -> String {
+    let task = root
+        .and_then(|r| dir.strip_prefix(r).ok())
+        .and_then(|rel| rel.components().next())
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .or_else(|| dir.file_name().map(|f| f.to_string_lossy().to_string()))
+        .unwrap_or_default();
+    let desc = task.trim_start_matches(|c: char| c.is_ascii_digit());
+    let desc = if desc.len() < task.len() {
+        desc.trim_start_matches('_')
+    } else {
+        desc
+    };
+    if desc.is_empty() || desc.contains(|c: char| c.is_whitespace() || c == '/') {
+        "stack".to_string()
+    } else {
+        desc.to_string()
+    }
 }
 
 pub fn stack_block(name: &str, repo: &str, tree: &str, commit: Option<&str>) -> String {
@@ -243,7 +266,7 @@ pub fn render(lib: &Library, opts: &Options) -> Result<String> {
         let (name, commit) = stack_arg(arg);
         let repo = &stacks.get(name).unwrap().repo;
         out += "\n";
-        out += &stack_block(name, repo, &tree_path(name), commit);
+        out += &stack_block(name, repo, &tree_path(name, &opts.dir), commit);
     }
 
     out += "\n";
@@ -292,6 +315,7 @@ mod tests {
         let bare = render(
             &lib,
             &Options {
+                dir: root.clone(),
                 profiles: vec![],
                 gpus: vec![],
                 clients: vec![],
@@ -309,6 +333,7 @@ mod tests {
         assert!(format!("{e:#}").contains("profile is empty"));
 
         let opts = Options {
+            dir: root.clone(),
             profiles: vec!["m/triton".into(), "m/tp2".into()],
             gpus: vec![5, 6, 7],
             clients: vec!["gsm8k".into(), "fixed-seq".into()],
@@ -342,6 +367,7 @@ mod tests {
         let text = render(
             &lib,
             &Options {
+                dir: root.join("0007_kv_sweep"),
                 profiles: vec!["m/triton".into()],
                 gpus: vec![5],
                 clients: vec![],
@@ -353,7 +379,24 @@ mod tests {
         .unwrap();
         let p: plan::Plan = toml::from_str(&text).unwrap();
         let tree = &p.stack["sglang"].tree;
-        assert!(tree.starts_with('/') && tree.ends_with("/repos/sglang"), "{tree}");
+        assert!(
+            tree.starts_with('/') && tree.ends_with("/repos/sglang/kv_sweep"),
+            "{tree}"
+        );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_checkouts_purpose_is_its_tasks_name() {
+        let root = Path::new("/2026/ww44/w");
+        let p = |d: &str| checkout_purpose(&root.join(d), Some(root));
+        assert_eq!(p("0007_kv_sweep"), "kv_sweep");
+        assert_eq!(p("0007_kv_sweep/tp1x2"), "kv_sweep");
+        assert_eq!(p("scratch"), "scratch");
+        assert_eq!(p("0012"), "stack");
+        assert_eq!(
+            checkout_purpose(Path::new("/elsewhere/0003_bisect"), Some(root)),
+            "bisect"
+        );
     }
 }

@@ -164,6 +164,7 @@ fn run(cli: Cli) -> Result<()> {
             &dir,
             &lib,
             &draft::Options {
+                dir: dir.clone(),
                 profiles,
                 gpus,
                 clients,
@@ -238,6 +239,7 @@ fn draft_suite(
         lib,
         &s,
         &suite::DraftOptions {
+            dir,
             profile,
             gpus,
             stacks,
