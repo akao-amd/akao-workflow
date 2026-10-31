@@ -1,0 +1,24 @@
+# Trace suite of 2026-11-01 ("a suite for collecting runtime traces: 1 layout (TP1), 3 shape/conc tuples",
+# user, ww44 controller record 241): SGLang GPU traces (prefill and decode, 10 steps each, by oaka's trace
+# client) of one TP1 server at three points, the same on MI355X and MI45x so the traces sit side by side.
+#
+# On a DPX box (gfx1250 DPX/NPS2) give it plan GPU 2k and leave its sibling 2k+1 idle, as the standard suite's
+# tp1 does.  A recipe with --enable-mixed-chunk serves its prefill as MIXED steps (prefill + every running
+# decode row), which the trace client does not take as prefill captures: trace a variant with it off
+# (gpt-oss-120b/base1028-trace).  The traced server's numbers are each point's warm run (warm.json), not a
+# fixed-seq sweep.
+#
+# Draft:  oaka draft --suite trace-1101 --profile <model>/<recipe> --gpus <g> [--port N] [--stack ...]
+
+description = "Traces: TP1, 1024/1024 c64, 8192/1024 c64, 70000/300 c4; GSM8K gate"
+arch = ["gfx950", "gfx1250"]
+gpus = 1
+client = "trace"
+points = [[1024, 1024, 64], [8192, 1024, 64], [70000, 300, 4]]
+range_ratio = 0.8
+gsm8k = { min_score = 0.93 }
+
+[[layout]]
+name = "tp1"
+description = "one TP1 server"
+servers = [[0]]

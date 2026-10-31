@@ -1,0 +1,21 @@
+# gpt-oss-120b/base1028 for traces (suite trace-1101), created 2026-11-01 (user, ww44 controller record 241:
+# "for collecting traces, we just disable the mixed chunk now").
+#
+# --enable-mixed-chunk is off.  With it, SGLang runs each new prompt's prefill in one MIXED step together with every
+# running request's decode token (the running rows become one-token extends through the prefill kernels), and
+# labels the step `step[MIXED bs=N]` without its token count.  oaka's trace client takes only EXTEND steps as
+# prefill captures, so it never completes them (suite_e21, 10-31: it re-armed the profiler dozens of times, then
+# that server hung), and a MIXED prefill trace would not compare with a pure prefill one (at 1024/1024 c64 the 63
+# decode rows' attention is about the size of the prompt's).  Off, prefill steps are EXTEND and decode steps DECODE
+# as on best-mi355.  It cost base1028 2-3 % at 1024/1024 c64 and 8192/1024 (srvargs_h13/0001): the trace points'
+# warm-run numbers are for this variant, not base1028's.
+#
+# Stack: base1028's trees (base1028-20261030 branches of akao-amd/{triton,aiter,sglang}), rebased onto the image's
+# own Triton, AITER and SGLang as base1028's comments say for any other image, and checked as they say before
+# quoting a number.
+
+description = "gpt-oss-120b/base1028 for traces: --enable-mixed-chunk off (prefill as EXTEND steps)"
+extends = "gpt-oss-120b/base1028"
+
+[args]
+enable-mixed-chunk = false

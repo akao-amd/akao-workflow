@@ -1,0 +1,17 @@
+# gpt-oss-120b/best-mi355 for traces (suite trace-1101), created 2026-11-01 (user, ww44 controller record 241).
+#
+# The recipe is best-mi355's, unchanged: it serves prefill as plain EXTEND steps (no --enable-mixed-chunk), so
+# the trace client captures it as it is served.  What this profile adds is the stack it is traced with, which a
+# profile cannot carry (a plan's [stack.*]):
+#
+#   SGLang = the image's SGLang + the K/V tail-row workaround of best-mi355's KNOWN ISSUE (CK's batch-prefill
+#   over-read): K and V handed to the kernel with one zeroed row past their end.  Two commits, from n10-17
+#   worker best355_n10, task 0001 (/2026/ww44/best355_n10/0001_best355_fault_debug/patches/):
+#     0001_sglang_k_tail_row.patch   aiter_utils.linear_k_with_tail; the 5D gather pads K (key_tail_rows=1)
+#     0002_sglang_v_tail_row.patch   V the same (linear_kv_with_tail; gather tail_rows=1)
+#   on SGLang 86f72e5b5c, the base of image rocm/sgl-dev:v0.5.22-rocm10-mi35x-20261028 (applied with `git am` on a
+#   branch of a worktree of /sgl-workspace/sglang, installed by [stack.sglang]).  AITER, Triton: the image's.
+#   Gated there: GSM8K 0.949-0.960 TP1, 0.955 TP2; 8k/1k c64 and 70k/300 c16 without a fault.
+
+description = "gpt-oss-120b/best-mi355 for traces: the recipe unchanged; trace it on the SGLang K/V tail-row workaround (comments)"
+extends = "gpt-oss-120b/best-mi355"

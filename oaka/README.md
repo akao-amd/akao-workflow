@@ -314,6 +314,7 @@ them; PD bootstrap ports are still picked); pin them when other workers share th
 | `mi45x-dpx-standard` | `tp1` (first partition, sibling idle), `tp1x2` (TP1 on each, in lockstep), `tp2` (`<profile>-tp2`) | 1024/1024, 8192/1024, 70000/300 x conc 4, 8, 16, 32, 64; gsm8k 0.93 |
 | `mi45x-dpx-extra` | the standard's, + `pd1p1d` (TP1 prefill + TP1 decode, router; `<profile>-pd1p1d`) | the same |
 | `mi45x-dpx-ep` | the standard's, + `tp2ep2` (TP2 with `--ep-size 2`; `<profile>-tp2ep2`) | the same |
+| `trace-1101` | `tp1` (one GPU; on a DPX box give it `2k` and leave `2k+1` idle) | traces (`client = "trace"`) of 1024/1024 c64, 8192/1024 c64, 70000/300 c4; gsm8k 0.93 |
 
 ## Profiles (`profiles/<model>/<recipe>.toml`)
 
