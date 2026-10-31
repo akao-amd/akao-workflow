@@ -1,12 +1,13 @@
 # gpt-oss-120b/base1028 at TP2: both partitions of one physical MI45x GPU in DPX mode (the tp2 layout of the
 # mi45x-dpx-standard suite).  Written out whole, as base1028 is (no extends): the same trees, env and args, with
-# tp 2 and --disable-custom-all-reduce.  Read base1028.toml for the trees (base1028-20261028 branches), how to
-# carry them to another image, and why each line is here; only the TP2 differences are noted below.
+# tp 2 and --disable-custom-all-reduce.  Read base1028.toml for the trees (base1028-20261030 branches on image
+# -20261030), how to carry them to another image, and why each line is here; only the TP2 differences are noted below.
 #
 # Qualified on h13-14 (10-29) with base1028's trees incl. the race fixes (484470dfa, a302ebe52): after-load GSM8K
 # 10 of 10 with the MoE fix (6 with in-graph pair counters at 0, 4 without debug hooks), 1 more with both fixes
 # (0.9583, attention pair counters 0 in decode).  Before the fixes it failed 9 of 14 (the gfx1250 TDM-store race;
-# base1028's Accuracy note).  Attention extend's rare corruption is still open (same note).
+# base1028's Accuracy note).  With the base1028-20261030 trees (attention extend fixed too: B4 + B1c), e21-13 10-31:
+# 4 fresh TP2 servers, GSM8K after load 0.9568-0.9636.
 #
 # TP2 differences:
 #   tp = 2, disable-custom-all-reduce   AiterCustomAllreduce hung TP2 across a GPU's two partitions in DPX mode
@@ -22,7 +23,7 @@
 # 41.23 -> 34.58 GB per rank, full KV pool 3,689,280 -> 4,074,944 tokens per rank.  EV unset at TP2: 8192/1024
 # +0.3..3.9 % (ev_h13/0001).  The whole recipe at TP2 is not measured.
 
-description = "gpt-oss-120b base1028 at TP2 (both partitions of one DPX GPU), RCCL all-reduce; self-contained"
+description = "gpt-oss-120b base1028 at TP2 (both partitions of one DPX GPU), RCCL all-reduce; base1028-20261030 trees; self-contained"
 arch = ["gfx1250"]
 model = "/model/gpt-oss-120b-w-mxfp4-a-fp8"
 tp = 2
