@@ -208,7 +208,8 @@ oaka/
     stack.rs          the library's stacks.toml: swappable packages, recipes, clean paths
     compile.rs        plan + library + templates -> scripts/
     draft.rs          plan.toml starter from hints + machine
-    suite.rs          suites/<name>.toml (layouts x ISL/OSL x conc), `draft --suite`: one plan per layout
+    suite.rs          suites/<name>.toml (layouts x ISL/OSL x conc, or exact points; fixed-seq or trace),
+                      `draft --suite`: one plan per layout
     doctor.rs         `oaka doctor` — worker prerequisites (library, GPUs, InferenceX, engines)
   tests/run_all.rs    real binary + compiled bash vs. stand-ins for sglang/vllm/ATOM/InferenceX/sgl-eval
                       and a stand-in package in a scratch git repo (stack, A-B-A, bisect)

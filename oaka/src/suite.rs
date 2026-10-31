@@ -1,7 +1,7 @@
 //! Suites: `<lib>/suites/<name>.toml`, a named benchmark matrix applied to any profile.
 //!
-//! A suite fixes what is measured (layouts x ISL/OSL pairs x concurrencies, and the gsm8k
-//! gate) so that "the MI45x DPX standard suite" means the same runs on every box and for
+//! A suite fixes what is measured (layouts x ISL/OSL pairs x concurrencies, or a list of
+//! exact points, the client that measures them, and the gsm8k gate) so that "the MI45x DPX standard suite" means the same runs on every box and for
 //! every recipe; the profile says what is served.  `oaka draft --suite <name> --profile <p>
 //! --gpus <a,b>` writes one plan per layout, `<layout>/plan.toml`, each an ordinary plan
 //! (check, compile and run it as any other).  A layout places servers on the suite's GPUs
@@ -34,11 +34,35 @@ pub struct SuiteFile {
     pub partitions_of_one_gpu: Option<bool>,
     pub isl_osl: Option<Vec<[u32; 2]>>,
     pub conc: Option<Vec<u32>>,
+    /// Exact `[isl, osl, conc]` points instead of the isl_osl x conc matrix.
+    pub points: Option<Vec<[u32; 3]>>,
+    /// What measures the points (default fixed-seq).
+    pub client: Option<SuiteClient>,
     pub range_ratio: Option<f64>,
     /// A gsm8k gate per server, before its throughput points.
     pub gsm8k: Option<Gsm8kGate>,
     #[serde(default)]
     pub layout: Vec<Layout>,
+}
+
+/// The client kind a suite measures its points with.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SuiteClient {
+    /// InferenceX's fixed-seq throughput points.
+    #[default]
+    FixedSeq,
+    /// SGLang GPU traces of the points' steady state (the plan's `trace` client).
+    Trace,
+}
+
+impl SuiteClient {
+    fn kind(self) -> &'static str {
+        match self {
+            SuiteClient::FixedSeq => "fixed-seq",
+            SuiteClient::Trace => "trace",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -73,6 +97,9 @@ pub struct Suite {
     pub partitions_of_one_gpu: bool,
     pub isl_osl: Vec<[u32; 2]>,
     pub conc: Vec<u32>,
+    /// Exact points; when given, isl_osl and conc are empty.
+    pub points: Vec<[u32; 3]>,
+    pub client: SuiteClient,
     pub range_ratio: f64,
     pub gsm8k: Option<Gsm8kGate>,
     pub layouts: Vec<Layout>,
@@ -131,6 +158,8 @@ impl Library {
             partitions_of_one_gpu: false,
             isl_osl: Vec::new(),
             conc: Vec::new(),
+            points: Vec::new(),
+            client: SuiteClient::FixedSeq,
             range_ratio: 0.8,
             gsm8k: None,
             layouts: Vec::new(),
@@ -149,11 +178,22 @@ impl Library {
             if let Some(v) = f.partitions_of_one_gpu {
                 s.partitions_of_one_gpu = v;
             }
+            // A child's points replace its parent's matrix, and a child's matrix its points.
+            if let Some(v) = f.points {
+                s.points = v;
+                s.isl_osl.clear();
+                s.conc.clear();
+            }
             if let Some(v) = f.isl_osl {
                 s.isl_osl = v;
+                s.points.clear();
             }
             if let Some(v) = f.conc {
                 s.conc = v;
+                s.points.clear();
+            }
+            if let Some(v) = f.client {
+                s.client = v;
             }
             if let Some(v) = f.range_ratio {
                 s.range_ratio = v;
@@ -189,11 +229,25 @@ impl Suite {
         if self.partitions_of_one_gpu && self.gpus != 2 {
             bail!("{at}: partitions_of_one_gpu takes 2 GPUs, not {}", self.gpus);
         }
-        if self.isl_osl.is_empty() || self.conc.is_empty() {
-            bail!("{at}: isl_osl and conc are required");
-        }
-        if self.isl_osl.iter().flatten().any(|&v| v == 0) || self.conc.contains(&0) {
-            bail!("{at}: isl_osl and conc must be positive");
+        if self.points.is_empty() {
+            if self.isl_osl.is_empty() || self.conc.is_empty() {
+                bail!("{at}: isl_osl and conc, or points, are required");
+            }
+            if self.isl_osl.iter().flatten().any(|&v| v == 0) || self.conc.contains(&0) {
+                bail!("{at}: isl_osl and conc must be positive");
+            }
+        } else {
+            if !self.isl_osl.is_empty() || !self.conc.is_empty() {
+                bail!("{at}: points, or isl_osl and conc, not both");
+            }
+            if self.points.iter().flatten().any(|&v| v == 0) {
+                bail!("{at}: points must be positive");
+            }
+            let mut seen = self.points.clone();
+            seen.sort();
+            if seen.windows(2).any(|w| w[0] == w[1]) {
+                bail!("{at}: a point is listed twice");
+            }
         }
         if let Some(g) = &self.gsm8k {
             if !(0.0..=1.0).contains(&g.min_score) {
@@ -228,13 +282,39 @@ impl Suite {
             if l.lockstep && l.servers.len() < 2 {
                 bail!("{at}, layout {}: lockstep needs two servers or more", l.name);
             }
+            if l.lockstep && self.client == SuiteClient::Trace {
+                bail!("{at}, layout {}: lockstep is for fixed-seq clients, not traces", l.name);
+            }
         }
         Ok(())
+    }
+
+    /// The points as client-sized groups, (isl_osl, conc), whose cross products are exactly
+    /// the suite's points: the matrix is one group; exact points are grouped by concurrency, in
+    /// the order they are listed.
+    pub fn groups(&self) -> Vec<(Vec<[u32; 2]>, Vec<u32>)> {
+        if self.points.is_empty() {
+            return vec![(self.isl_osl.clone(), self.conc.clone())];
+        }
+        let mut groups: Vec<(Vec<[u32; 2]>, Vec<u32>)> = Vec::new();
+        for &[i, o, c] in &self.points {
+            match groups.iter_mut().find(|(_, conc)| conc[0] == c) {
+                Some((pairs, _)) => pairs.push([i, o]),
+                None => groups.push((vec![[i, o]], vec![c])),
+            }
+        }
+        groups
     }
 
     /// The suite's own description, as `oaka suite show` prints it.
     pub fn text(&self) -> String {
         let pairs: Vec<String> = self.isl_osl.iter().map(|[i, o]| format!("{i}/{o}")).collect();
+        let what = if self.points.is_empty() {
+            format!("{} x conc {}", pairs.join(" "), toml_list(&self.conc))
+        } else {
+            let points: Vec<String> = self.points.iter().map(|[i, o, c]| format!("{i}/{o} c{c}")).collect();
+            points.join(", ")
+        };
         let mut out = format!("{}: {}\n", self.name, self.description);
         out += &format!(
             "  {} GPUs{}{}\n",
@@ -251,9 +331,9 @@ impl Suite {
             }
         );
         out += &format!(
-            "  fixed-seq {} x conc {} (range ratio {}), {}\n",
-            pairs.join(" "),
-            toml_list(&self.conc),
+            "  {} {} (range ratio {}), {}\n",
+            self.client.kind(),
+            what,
             self.range_ratio,
             match &self.gsm8k {
                 Some(g) => format!("gsm8k gate {} per server", g.min_score),
@@ -388,16 +468,24 @@ pub fn render(lib: &Library, suite: &Suite, o: &DraftOptions) -> Result<Vec<(Str
                 );
             }
         }
-        let pairs: Vec<String> = suite.isl_osl.iter().map(|[i, o]| format!("[{i}, {o}]")).collect();
-        for name in &names {
-            out += &format!(
-                "\n[[client]]\nkind = \"fixed-seq\"\nserver = \"{name}\"\nisl_osl = [{}]\nconc = {}\nrange_ratio = {}\n",
-                pairs.join(", "),
-                toml_list(&suite.conc),
-                suite.range_ratio
-            );
-            if l.lockstep {
-                out += &format!("lockstep = \"{}\"\n", l.name);
+        let groups = suite.groups();
+        for (k, (isl_osl, conc)) in groups.iter().enumerate() {
+            let pairs: Vec<String> = isl_osl.iter().map(|[i, o]| format!("[{i}, {o}]")).collect();
+            for name in &names {
+                out += &format!(
+                    "\n[[client]]\nkind = \"{}\"\nserver = \"{name}\"\nisl_osl = [{}]\nconc = {}\nrange_ratio = {}\n",
+                    suite.client.kind(),
+                    pairs.join(", "),
+                    toml_list(conc),
+                    suite.range_ratio
+                );
+                if l.lockstep {
+                    // One lockstep per group: each takes one client per server, the same points.
+                    match groups.len() {
+                        1 => out += &format!("lockstep = \"{}\"\n", l.name),
+                        _ => out += &format!("lockstep = \"{}_{k}\"\n", l.name),
+                    }
+                }
             }
         }
         for arg in o.stacks {
@@ -593,6 +681,76 @@ mod tests {
         )
         .unwrap();
         assert!(format!("{:#}", lib.suite("bad").err().unwrap()).contains("GPU position 2"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn exact_points_and_trace_clients() {
+        let (root, lib) = lib();
+        fs::write(
+            lib.suite_path("tr"),
+            "description = 'tr'\ngpus = 1\nclient = 'trace'\ngsm8k = { min_score = 0.93 }\n\
+             points = [[1024, 1024, 64], [8192, 1024, 64], [70000, 300, 4]]\n\
+             [[layout]]\nname = 'tp1'\nservers = [[0]]\n",
+        )
+        .unwrap();
+        let s = lib.suite("tr").unwrap();
+        assert_eq!(
+            s.groups(),
+            [
+                (vec![[1024, 1024], [8192, 1024]], vec![64]),
+                (vec![[70000, 300]], vec![4])
+            ]
+        );
+        assert!(s.text().contains("trace 1024/1024 c64, 8192/1024 c64, 70000/300 c4"));
+        let o = DraftOptions {
+            dir: std::path::Path::new("/2026/ww44/w/0001_trace"),
+            profile: "m/r",
+            gpus: &[6],
+            stacks: &[],
+            thinking: false,
+            port: None,
+            machine: &plan::Machine::default(),
+        };
+        let plans = render(&lib, &s, &o).unwrap();
+        let c = plan::check_plan(
+            &root,
+            toml::from_str(&plans[0].1).unwrap(),
+            &lib,
+            &plan::Machine::default(),
+        )
+        .unwrap();
+        let kinds: Vec<&str> = c.plan.clients.iter().map(|c| c.kind()).collect();
+        assert_eq!(kinds, ["gsm8k", "trace", "trace"]);
+        assert!(c.plan.traced("tp1"));
+        assert!(plans[0]
+            .1
+            .contains("isl_osl = [[1024, 1024], [8192, 1024]]\nconc = [64]"));
+        assert!(plans[0].1.contains("isl_osl = [[70000, 300]]\nconc = [4]"));
+
+        // A child's points replace the parent's matrix; lockstep gets one name per group.
+        fs::write(
+            lib.suite_path("pts"),
+            "extends = 'std'\npoints = [[1024, 1024, 4], [70000, 300, 64], [8192, 1024, 4]]\n",
+        )
+        .unwrap();
+        let s = lib.suite("pts").unwrap();
+        assert!(s.isl_osl.is_empty() && s.conc.is_empty() && s.client == SuiteClient::FixedSeq);
+        let plans = render(&lib, &s, &DraftOptions { gpus: &[4, 5], ..o }).unwrap();
+        let tp1x2 = &plans[1].1;
+        plan::check_plan(&root, toml::from_str(tp1x2).unwrap(), &lib, &plan::Machine::default()).unwrap();
+        assert_eq!(tp1x2.matches("lockstep = \"tp1x2_0\"").count(), 2);
+        assert_eq!(tp1x2.matches("lockstep = \"tp1x2_1\"").count(), 2);
+
+        let err = |name: &str, text: &str| {
+            fs::write(lib.suite_path(name), text).unwrap();
+            format!("{:#}", lib.suite(name).err().unwrap())
+        };
+        assert!(err("both", "extends = 'tr'\nconc = [4]\n").contains("isl_osl and conc, or points"));
+        assert!(err("twice", "extends = 'tr'\npoints = [[1, 1, 1], [1, 1, 1]]\n").contains("listed twice"));
+        assert!(err("zero", "extends = 'tr'\npoints = [[1, 0, 1]]\n").contains("points must be positive"));
+        assert!(err("tracelock", "extends = 'std'\nclient = 'trace'\n").contains("lockstep is for fixed-seq"));
+        assert!(err("kind", "extends = 'tr'\nclient = 'gsm8k'\n").contains("unknown variant"));
         fs::remove_dir_all(root).unwrap();
     }
 }

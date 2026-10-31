@@ -279,7 +279,8 @@ runs on every box and for every recipe.  The profile says what is served; the su
 measured.  `oaka draft --suite <s> --profile <p> --gpus <...>` writes one ordinary plan per layout,
 `<dir>/<layout>/plan.toml`; check, compile and run each like any plan, one after another
 (`oaka -C <dir>/<layout> run`).  Per server: a gsm8k client (when the suite has a gate), then a
-fixed-seq client over all its points with the client policy above (run 1 is the number).
+fixed-seq client over all its points with the client policy above (run 1 is the number), or, with
+`client = "trace"`, a trace client (its capture practice above; such a plan is for traces, not numbers).
 
 ```toml
 # provenance and reasons as comments, as in profiles
@@ -290,6 +291,9 @@ gpus = 2                         # how many GPUs --gpus must give
 partitions_of_one_gpu = true     # they are one physical GPU's partitions: --gpus 2k,2k+1 (DPX)
 isl_osl = [[1024, 1024], [8192, 1024], [70000, 300]]
 conc = [4, 8, 16, 32, 64]
+# points = [[1024, 1024, 64], [70000, 300, 4]]   # or exact [isl, osl, conc] points instead of the
+                                 # matrix: one client per concurrency, in the order listed
+# client = "trace"               # default "fixed-seq"; trace layouts take no lockstep
 range_ratio = 0.8                # default 0.8
 gsm8k = { min_score = 0.93 }     # optional: a gate per server
 
