@@ -1,0 +1,48 @@
+# gpt-oss-120b perf1101: base1028 plus the gfx1250 perf plan's kept features, frozen 2026-11-01
+# 17:55 CST (perf1101_e21/0001 on e21-13, MI45x MC Mocha, gfx1250 DPX/NPS2; controller record 254).
+# Extends gpt-oss-120b/base1028: every base1028 line holds.  Read base1028.toml for why each is there.
+# Only the differences are here.
+#
+# Trees, on image rocm/sgl-dev:v0.5.23-rocm101-mi45x-20261031 (ROCm 10.1.0).  Not the base1028-20261030
+# branches.  Image commits: Triton 241f94439f, AITER 26f4f1fb2 (plus 3 uncommitted edits), SGLang
+# e9c18259c7 (plus 19).  base1028-1031 is base1028 rebased onto those (trace1101_e21/0001): Triton
+# b509148826 (tree 0e8d7c0d3c; the B4 fix, unchanged below), AITER 9d55e4f1b (tree ba74be7c63), SGLang
+# 0ed4c14aae (tree f8ef437b5f).  Branch perf1101-final on that base (message-only rewording of the
+# tested commits; F7 and F8 removed):
+#   AITER  6d71c4a80 (tree 0b56ff1074)   P1 large-M a16w16 dispatch and register-store epilogues,
+#           P6a RMSNorm grid, P3 decode retune and the LM-head files
+#   SGLang 5fe484b8fc (tree 27eca9871e)  F6 MoE decode glue (env-gated, on below), P6b strided q
+# Not in the trees: fp8 KV (F7/F8; RULER2 64k 0.697 vs bf16 0.803), P5 (1.05-1.15x slower at
+# M >= 3000), P6c/d/e, P7.  Nothing was pushed.  The format-patches from the image commits are with
+# task perf1101_e21/0001.
+#
+# Env, both kept on a box-idle bracket (11-01 17:02, final trees, TP1):
+#   SGLANG_GFX1250_W4A8_FUSED_GATHER_QUANT = "1"
+#   SGLANG_GFX1250_W4A8_BYPASS_TOPK = "1"   F6, MoE decode glue, 10 kernels down to 4.
+#       1k/1k c4 1.148, c64 1.052; 8k/1k c16 1.071, c64 1.033; 70k/300 c4 1.014.
+#   AITER_GFX1250_UA3D_NHD_CFG = the JSON below   P4's bf16 Triton 3D retune.  base1028's value is
+#       '{"waves_per_eu":2}'.  Full-layer decode attention 8k c64 179 -> 149 us, 70k c4 94 -> 82 us.
+#       Serving: 1k/1k c64 1.008, 8k/1k c16 1.016, c64 1.036, 70k/300 c4 1.004.
+# AITER_GFX1250_A16W16_STORE stays unset.  It is an A/B override only.
+#
+# In the trees, each with its own same-GPU A-B-A (box idle; TP1 unless noted):
+#   P1   1k c64 1.008, 8k c64 1.067, 70k c4 1.302; TP2 1k c64 1.011, 8k c64 1.183, 70k c4 1.265
+#   P3   1k c64 1.111, 8k c64 1.061, 70k c4 1.019
+#   P6a  8k c64 1.012, 70k c4 1.010
+#   P6b  8k c64 1.007, 70k c4 1.007
+# Together, same-pair A-B-A, TP1 on GPU 0 with only that GPU busy (base1028, perf1101, base1028),
+# B/avg(A): 1024/1024 c64 1.197 (6064.1 -> 7259.7 tok/s), 8192/1024 c64 1.225 (3187.3 -> 3900.4),
+# 70000/300 c4 1.375 (97.6 -> 134.2).  At 70k the mean TTFT did not fall (3584 / 3755 / 3975 ms);
+# the TPOT did (27.75 -> 15.71 ms).
+# GSM8K strict 1319, thinking, after a fixed-seq load: TP1 0.9621.  TP2 is in perf1101-tp2.toml.
+# This arm's mi45x-dpx-standard round finished 18:15-21:32; the cross-arm table was not compiled
+# (the box rebooted with the results still on e21-13).  Quote the idle brackets above.
+
+description = "gpt-oss-120b perf1101: base1028 + P1 large-M GEMM dispatch, P3 decode GEMM retune, P6a/P6b, F6 MoE decode glue, bf16 3D attention retune; perf1101 trees (image -20261031)"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/base1028"
+
+[env]
+SGLANG_GFX1250_W4A8_FUSED_GATHER_QUANT = "1"
+SGLANG_GFX1250_W4A8_BYPASS_TOPK = "1"
+AITER_GFX1250_UA3D_NHD_CFG = '{"waves_per_eu":2,"SEGMENTS_PER_CU":16,"num_stages":3,"MIN_SEGMENTS":4}'

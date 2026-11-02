@@ -1,0 +1,16 @@
+# gpt-oss-120b/perf1101 at TP2: both partitions of one physical MI45x GPU in DPX mode.  Extends
+# base1028-tp2 (RCCL all-reduce; read its comments) and repeats perf1101.toml's three env lines, so a
+# TP2-only change in base1028-tp2 is inherited here.  Trees and the rest of the evidence: perf1101.toml.
+#
+# GSM8K strict 1319, thinking, after a fixed-seq load, on the perf1101-final trees: 0.9629 and 0.9598
+# on a second fresh server (gates_tp2).  An earlier 0.9515 on the first server was noise
+# (0.9515 / 0.9629 / 0.9598; base1028-tp2 the same day was 0.9553-0.9636).
+
+description = "gpt-oss-120b perf1101 at TP2 (both partitions of one DPX GPU), RCCL all-reduce; perf1101 trees"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/base1028-tp2"
+
+[env]
+SGLANG_GFX1250_W4A8_FUSED_GATHER_QUANT = "1"
+SGLANG_GFX1250_W4A8_BYPASS_TOPK = "1"
+AITER_GFX1250_UA3D_NHD_CFG = '{"waves_per_eu":2,"SEGMENTS_PER_CU":16,"num_stages":3,"MIN_SEGMENTS":4}'
