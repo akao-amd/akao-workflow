@@ -5,7 +5,7 @@
 //! list it) is reported, not an error, so running it again finishes what an earlier run left.
 //! A failure with one name does not stop the others; the command fails at the end.
 
-use crate::exec::{q, Runner, ESCALATE};
+use crate::exec::{escalate, q, Runner};
 use crate::state::{self, State};
 use anyhow::{bail, Context, Result};
 use std::time::{Duration, Instant};
@@ -218,7 +218,7 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
                 failed.push(format!("{c} (home)"));
                 continue;
             }
-            match r.run(&r.ssh_argv(&nick, &format!("{ESCALATE}$S rm -rf -- {}", q(&home)))) {
+            match r.run(&r.ssh_argv(&nick, &format!("{}$S rm -rf -- {}", escalate(host.home()), q(&home)))) {
                 Ok(()) if r.dry_run => {}
                 Ok(()) => println!("  {home}: removed"),
                 Err(e) => {

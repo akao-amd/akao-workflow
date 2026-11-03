@@ -3,7 +3,7 @@
 //! Every step checks what already exists and reuses it, so re-running init on a
 //! half-initialized worker resumes instead of failing.
 
-use crate::exec::{q, Runner, ESCALATE};
+use crate::exec::{escalate, q, Runner};
 use crate::state::{self, Host, State};
 use anyhow::{bail, Context, Result};
 use std::path::Path;
@@ -586,7 +586,8 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
 
     s.next("prepare host directories");
     let script = format!(
-        "{ESCALATE}$S mkdir -p {} {}/container_home",
+        "{}$S mkdir -p {} {}/container_home",
+        escalate(p.host.home()),
         q(&format!("{}{}", p.host.home(), p.artifact_root)),
         q(p.host.home())
     );
@@ -612,7 +613,7 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
         if paths.is_empty() {
             println!("  nothing to deploy (deploy_paths is empty)");
         } else {
-            let extract = format!("{ESCALATE}$S tar -xzf - -C {}", q(&p.host_year_dir()));
+            let extract = format!("{}$SI tar -xzf - -C {}", escalate(p.host.home()), q(&p.host_year_dir()));
             r.pipe(
                 &tar_create(Path::new(&src), &paths, DEPLOY_EXCLUDES, true),
                 &r.ssh_argv(nick, &extract),
@@ -629,7 +630,10 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<Plan> {
         if !template.is_dir() {
             bail!("home template missing: {}", template.display());
         }
-        let extract = format!("{ESCALATE}$S mkdir -p {home} && $S tar -xzf - -C {home}");
+        let extract = format!(
+            "{}$S mkdir -p {home} && $SI tar -xzf - -C {home}",
+            escalate(p.host.home())
+        );
         r.pipe(
             &tar_create(&template, &[".".into()], &[], false),
             &r.ssh_argv(nick, &extract),

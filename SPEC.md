@@ -89,10 +89,15 @@ its box's docker.
 - **A copy keeps its source path** (`akao cp <src> <nick>:`, the normal form).  Why: every
   box's `/<year>` is rsync'd into one superset; a copy at another path nests inside another
   worker's dir there instead of merging with its original.
-- **Host reads and writes escalate with `sudo -n` only.**  A box's `/<year>` and worker homes are
-  root-owned (root containers write them): a non-root login uses passwordless sudo, else
-  writes as itself (fine where it owns `<host_home>`, e.g. the GB300 trays) and fails loudly
-  elsewhere; never a password prompt mid-command.
+- **Host reads and writes run as root: `sudo -n`, else a docker helper.**  A box's `/<year>` and
+  worker homes are root-owned (root containers write them, and docker creates a missing bind
+  source as root): a non-root login uses passwordless sudo; without it, a login in the docker
+  group (the GB300 trays, e21-13) runs the command in a throwaway container with only
+  `<host_home>` mounted, at its own path; else it writes as itself and fails loudly where it
+  does not own the path; never a password prompt mid-command.  Why the helper: writing as the
+  login broke as soon as a container had left a root-owned `/<year>` or `container_home`
+  (03-f3, ww45), and the docker group is root on the box anyway.  `ubuntu:24.04`: small,
+  multi-arch, GNU tar.
 - **docker reaches the boxes through an `ssh` wrapper on PATH.**  Why: docker's `ssh://`
   contexts run plain `ssh` from PATH and cannot be given `-F`; with akao's own config
   directory docker would silently read `~/.ssh/config` (wrong login, unknown hosts), and a

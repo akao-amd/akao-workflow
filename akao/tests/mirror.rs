@@ -253,10 +253,11 @@ fn mirror_brings_up_the_entrys_image_with_a_brief() {
         "ln -sf /root/akao-workflow/oaka/bin/oaka /usr/local/bin/oaka".to_string(),
         "--entrypoint sleep rocm/atom:1 infinity".to_string(),
         "[mirror] brief".to_string(),
-        format!(
-            "[fakebox] if [ \"$(id -u)\" -ne 0 ] && sudo -n true 2>/dev/null; then S=\"sudo -n\"; else S=; fi; \
-             $S mkdir -p /h{root}"
-        ),
+        // As root: sudo, else a throwaway container with the host home mounted (the GB300 trays).
+        "[fakebox] H=/h; akao_root() { docker run --rm --network=none --log-driver=none -v \"$H:$H\" ubuntu:24.04"
+            .to_string(),
+        "then S=akao_root SI=akao_root_i;".to_string(),
+        format!("$S mkdir -p /h{root} && $SI tar -xzf - -C /h{root}"),
         format!(
             "done. the worker's brief: {root}/mirror/m1-fp4-mi355x-atom@{}/MIRROR.md",
             &sb.rev[..12]
@@ -298,7 +299,7 @@ fn mirror_reuses_its_own_container() {
     );
     assert!(out.contains("reusing running akao_m1-fp4-mi355x-atom"), "{out}");
     assert!(
-        out.contains(&format!("$S mkdir -p /h{root} && $S tar -xzf - -C /h{root}")),
+        out.contains(&format!("$S mkdir -p /h{root} && $SI tar -xzf - -C /h{root}")),
         "{out}"
     );
     // Replaced under the same name between the checks and the reuse (another controller).

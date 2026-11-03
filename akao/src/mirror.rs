@@ -14,7 +14,7 @@
 //! the server logs with the arguments each server really had, all added to the brief.
 
 use crate::dashboard::{self, Evidence};
-use crate::exec::{q, Runner, ESCALATE};
+use crate::exec::{escalate, q, Runner};
 use crate::init;
 use crate::state::State;
 use anyhow::{bail, Context, Result};
@@ -1219,7 +1219,12 @@ pub fn run(state: &State, r: &Runner, opts: &Options) -> Result<()> {
             "mirror".into(),
         ])
         .collect();
-    let extract = format!("{ESCALATE}$S mkdir -p {} && $S tar -xzf - -C {}", q(&dest), q(&dest));
+    let extract = format!(
+        "{}$S mkdir -p {} && $SI tar -xzf - -C {}",
+        escalate(p.host.home()),
+        q(&dest),
+        q(&dest)
+    );
     let shipped = r.pipe(&tar, &r.ssh_argv(nick, &extract));
     let _ = fs::remove_dir_all(&local);
     shipped?;

@@ -6,10 +6,25 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-/// Shell prelude: escalate with passwordless sudo if the login is not root and has it;
-/// otherwise write as the login (a box whose dirs it owns; elsewhere the write fails loudly).
-/// Prepend to remote scripts; use `$S cmd` afterwards.
-pub const ESCALATE: &str = r#"if [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null; then S="sudo -n"; else S=; fi; "#;
+/// The image of the throwaway container `escalate` writes through: small, multi-arch, with
+/// GNU tar (`--owner`).
+pub const ROOT_HELPER_IMAGE: &str = "ubuntu:24.04";
+
+/// Shell prelude for a box whose `host_home` is `home`: `$S cmd` runs `cmd` as root, `$SI cmd`
+/// too, passing it stdin (`$S` passes none).  A root login runs it as is; another login through
+/// passwordless sudo, else, when it may use the box's docker (the GB300 trays, e21-13), in a
+/// throwaway container of `ROOT_HELPER_IMAGE` (no network, no log: a tar stream passes through)
+/// with only `home` mounted, at its own path: every host path akao writes lies under it.  Else
+/// as the login: where it does not own the path, the write fails loudly.
+/// Prepend to remote scripts.
+pub fn escalate(home: &str) -> String {
+    let run = format!(r#"docker run --rm --network=none --log-driver=none -v "$H:$H" {ROOT_HELPER_IMAGE}"#);
+    format!(
+        r#"H={}; akao_root() {{ {run} "$@"; }}; akao_root_i() {{ {} "$@"; }}; if [ "$(id -u)" -eq 0 ]; then S= SI=; elif sudo -n true 2>/dev/null; then S="sudo -n" SI="sudo -n"; elif docker version >/dev/null 2>&1; then S=akao_root SI=akao_root_i; else S= SI=; fi; "#,
+        q(home),
+        run.replacen("--rm", "--rm -i", 1)
+    )
+}
 
 /// Shell-quote a single token. Falls back to the raw string if quoting fails.
 pub fn q(s: &str) -> String {
@@ -198,18 +213,27 @@ impl Runner {
 mod tests {
     use super::*;
 
-    /// `$S` under ESCALATE for a login of uid `uid` whose `sudo -n` exits `sudo`.
-    fn escalate_as(uid: u32, sudo: i32) -> String {
+    /// Runs `script` after `escalate("/h")` for a login of uid `uid` whose `sudo -n` exits
+    /// `sudo` and whose `docker` exits `docker`, echoing its arguments.
+    fn escalate_as(uid: u32, sudo: i32, docker: i32, script: &str) -> String {
         use std::os::unix::fs::PermissionsExt;
-        let bin = std::env::temp_dir().join(format!("akao-escalate-{uid}-{sudo}-{}", std::process::id()));
+        let bin = std::env::temp_dir().join(format!(
+            "akao-escalate-{uid}-{sudo}-{docker}-{}-{}",
+            std::process::id(),
+            script.len()
+        ));
         std::fs::create_dir_all(&bin).unwrap();
-        for (name, body) in [("id", format!("echo {uid}")), ("sudo", format!("exit {sudo}"))] {
+        for (name, body) in [
+            ("id", format!("echo {uid}")),
+            ("sudo", format!("exit {sudo}")),
+            ("docker", format!("[ \"$1\" = version ] || echo \"$*\"; exit {docker}")),
+        ] {
             let f = bin.join(name);
             std::fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
             std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let out = Command::new("sh")
-            .args(["-c", &format!("{ESCALATE}echo \"[$S]\"")])
+            .args(["-c", &format!("{}{script}", escalate("/h"))])
             .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
             .output()
             .unwrap();
@@ -218,11 +242,28 @@ mod tests {
     }
 
     #[test]
-    fn escalate_uses_sudo_only_when_it_works() {
-        assert_eq!(escalate_as(0, 0), "[]");
-        assert_eq!(escalate_as(1000, 0), "[sudo -n]");
-        // No passwordless sudo (a GB300 box): write as the login.
-        assert_eq!(escalate_as(1000, 1), "[]");
+    fn escalate_uses_sudo_else_docker() {
+        let s = "echo \"[$S|$SI]\"";
+        assert_eq!(escalate_as(0, 0, 0, s), "[|]");
+        assert_eq!(escalate_as(1000, 0, 0, s), "[sudo -n|sudo -n]");
+        // No passwordless sudo, but docker (a GB300 tray): a root container.
+        assert_eq!(escalate_as(1000, 1, 0, s), "[akao_root|akao_root_i]");
+        // Neither: write as the login.
+        assert_eq!(escalate_as(1000, 1, 1, s), "[|]");
+    }
+
+    #[test]
+    fn escalate_through_docker_mounts_only_home() {
+        let run = "run --rm --network=none --log-driver=none -v /h:/h ubuntu:24.04";
+        // `$S` gets no stdin: it would eat the tar stream meant for the `$SI` after it.
+        assert_eq!(
+            escalate_as(1000, 1, 0, "$S mkdir -p /h/a"),
+            format!("{run} mkdir -p /h/a")
+        );
+        assert_eq!(
+            escalate_as(1000, 1, 0, "$SI tar -xzf - -C /h/a"),
+            run.replacen("--rm", "--rm -i", 1) + " tar -xzf - -C /h/a"
+        );
     }
 
     #[test]

@@ -253,7 +253,7 @@ Central primitive: wraps subprocess execution.  Every command is echoed before i
 Under `--dry-run`, mutating commands are printed only; probes (`?`) still run.
 
 ```rust
-pub const ESCALATE: &str = ...;  // sudo -n when not root and it works; use as "$S cmd"
+pub fn escalate(home) -> String  // prelude: "$S cmd" as root (sudo -n, else a docker helper); "$SI" with stdin
 pub fn q(s: &str) -> String      // shell-quote one token
 pub fn show(argv: &[String])     // shell-quote an argv for display
 
@@ -306,7 +306,7 @@ repo checkout (`$AKAO_REPO_ROOT`, `state::shippable_repo`) is checked before ste
    `/root` mounted from elsewhere than hosts.tsv says, a mount of its own over the root)
    fails here, before the host is touched
 2. `mkdir -p` the artifact root under `<host_home>` + `container_home` root
-3. Deploy extra paths: `tar -h | ssh tar` with `sudo -n`, `root:root`, no delete:
+3. Deploy extra paths: `tar -h | ssh tar` as root (`escalate`), `root:root`, no delete:
    `deploy_paths` from `deploy_src` into `<host_home>/<year>` (none by default; nothing of
    the repo goes there)
 4. Copy home template (skipped if container home already exists)
@@ -406,7 +406,7 @@ leading with it.  An explicit path, `..` included, is passed through as given.
 
 **Implementation**: `tar -C <src-parent> -czf - <src-base>  |  tar --owner=0 --group=0 -xzf - -C <dst>`.
 Each side is wrapped in `ssh nick -- sh -c '...'` when remote, or `sh -c '...'` when local.
-Both sides use `ESCALATE` (sudo -n) on remote, including reads of root-only worker artifacts;
+Both sides use `escalate` on remote, including reads of root-only worker artifacts;
 local operations run without sudo (we are root in the container).
 
 ### task.rs, open.rs, rm.rs — around a worker
@@ -426,9 +426,12 @@ worker", "Decisions on reaching boxes and moving files").
 
 - **tar over ssh, not rsync**; every write forced to `root:root` (`--owner=0 --group=0`).
 - **Merge, never mirror**: no `--delete` anywhere.
-- **Escalation**: host writes go through `ESCALATE` (`sudo -n` for a non-root login with
-  passwordless sudo; otherwise as the login, failing loudly where it does not own the path;
-  a root login skips sudo).
+- **Escalation**: host writes go through `escalate(host_home)`: `$S cmd` as root, `$SI cmd` the
+  same with stdin (a tar stream; `$S` must not take it).  A root login runs it as is; else
+  `sudo -n` when passwordless; else, when the login may use the box's docker (GB300 trays,
+  e21-13), a throwaway `ubuntu:24.04` container (`--rm`, no network, no log) with only
+  `host_home` mounted at its own path; else as the login, failing loudly where it does not own
+  the path.  So every host path akao writes lies under `host_home`.
 - **docker sees ssh only through PATH**: a wrapper named `ssh` in `~/.local/bin` (ahead of
   `/usr/bin`) execs `/usr/bin/ssh -F $AKAO_CONFIG_ROOT/.ssh/config "$@"` (plain ssh when that
   file is absent).  Its source is `utils/ssh`; install it as `container_home/.local/bin/ssh`

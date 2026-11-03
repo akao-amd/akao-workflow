@@ -128,8 +128,9 @@ before this has no variable: its working directory is its root (to pin one, `doc
 survive, anything installed into the image's own filesystem does not).
 
 Every step reuses what exists, so re-running init resumes a half-done worker.
-Host-side writes use `sudo -n` when the ssh login is not root and has passwordless sudo,
-else run as the login (fine where it owns `<host_home>`).
+Host-side writes run as root: `sudo -n` when the ssh login is not root and has passwordless
+sudo, else (a login in the box's docker group, the GB300 trays) in a throwaway `ubuntu:24.04`
+container with only `<host_home>` mounted, else as the login (fine where it owns the path).
 
 Flags: `--dry-run` (probes run, changes are only printed), `--skip-setup` (skip steps 3, 7, 8 and 9),
 `--keep-infx` (preserve an existing InferenceX checkout), `--week wwNN` or `--artifact-root <dir>`.
@@ -222,8 +223,8 @@ remote source only).
 - Like `cp -a`: the source's basename lands *inside* the destination directory, which is
   created if missing.  Files are overwritten; nothing is deleted (merge, never mirror).
 - `tar | ssh tar`; on a box whose ssh login is not root, files are read and written through
-  `sudo -n` (root-only worker artifacts included), written ones owned root:root (without
-  passwordless sudo: as the login, owned by it).  `--dry-run` prints the commands only.
+  `sudo -n` or, without passwordless sudo, init's docker helper (root-only worker artifacts
+  included), written ones owned root:root (with neither: as the login, owned by it).  `--dry-run` prints the commands only.
 
 akao's ssh gives up on a box that does not answer: `-o ConnectTimeout=10 -o
 ServerAliveInterval=15 -o ServerAliveCountMax=4` (a connection in 10 s, keepalives answered
