@@ -1,0 +1,15 @@
+# gpt-oss-120b/perf1101 for traces (TP1): enable-mixed-chunk off, so prefill steps are EXTEND (oaka's trace client
+# captures only EXTEND steps as prefill; read base1028-trace.toml for the reasoning).  chunked-prefill-size 16384 is
+# perf1101's own (via base1028).
+#
+# Used as plan overlays first in trace_e21/0001 (e21-13, 11-06): perf1101's trees rebased onto image
+# rocm/sgl-dev:v0.5.23-rocm101-mi45x-20261105 (Triton and AITER trees identical to perf1101's; SGLang's four perf1101
+# commits on f3532057e1, P6b dropped as upstream #47822; the patches are with that task).  GSM8K strict 1319,
+# thinking: 0.9583.  Traced 8192/1024 c64 (warm run 3925.5 tok/s) and 70000/300 c4 (120.6 tok/s), range ratio 1.0,
+# with the breakable prefill graph on and no hang: at TP1 it is safe (contrast perf1101-tp2-trace).
+
+description = "gpt-oss-120b/perf1101 for traces (TP1): enable-mixed-chunk off (prefill as EXTEND steps)"
+extends = "gpt-oss-120b/perf1101"
+
+[args]
+enable-mixed-chunk = false

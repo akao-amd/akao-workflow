@@ -1,0 +1,23 @@
+# gpt-oss-120b/perf1101-tp2 for traces: enable-mixed-chunk off (as perf1101-trace), and the prefill CUDA graph
+# disabled, because the breakable one hangs the server under the profiler at TP2.
+#
+# trace_e21/0001 (e21-13, 11-06; HANG.md there), perf1101's trees rebased onto image -20261105:
+#   breakable prefill graph, profiler on: 10/10 servers hung, on 3 physical GPUs, each on the first prefill batch
+#       after a prefill capture was armed (decode captures before it worked); the host waits forever on the GPU in
+#       the graph replay's metadata prep (aiter_backend AiterIndicesUpdaterPrefill.update_single_wrapper).
+#   prefill graph disabled, profiler on: 0/4 hung, every point traced.
+#   no profiler (fixed-seq, mixed chunk on or off): 0/12.
+# Cause not known (that task's future_plan.md lists the tests).  The `full` prefill graph does not start on this
+# stack (ValueError: Invalid forward mode in aiter_backend's graph capture).  TP1 traced fine with breakable on.
+#
+# Cost: prefill steps in these traces run eagerly, not as a graph replay, so their CPU-side launch gaps differ from a
+# served prefill's and from TP1 traces; decode is unaffected.  Warm runs (range 1.0, c32): 1024/1024 4617-4679,
+# 8192/1024 3310-3347 tok/s over 4 servers, against 4665-4673 and 3324-3326 with the graph on (fixed-seq, no
+# profiler).  GSM8K strict 1319, thinking, on the option-1 server: 0.9583.
+
+description = "gpt-oss-120b/perf1101-tp2 for traces: enable-mixed-chunk off, prefill CUDA graph disabled (breakable hangs under the profiler at TP2)"
+extends = "gpt-oss-120b/perf1101-tp2"
+
+[args]
+enable-mixed-chunk = false
+cuda-graph-backend-prefill = "disabled"
