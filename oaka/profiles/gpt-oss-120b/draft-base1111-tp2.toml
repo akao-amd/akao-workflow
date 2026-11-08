@@ -1,0 +1,34 @@
+# gpt-oss-120b/draft-base1111 at TP2: both partitions of one DPX GPU.  The TP2 layout of draft-base1111 (TP1 recipe:
+# read draft-base1111.toml first).  Extends gpt-oss-120b/perf1101-tp2, which extends base1028-tp2 (RCCL all-reduce).
+# Only the differences are here:
+#
+#   disable-custom-all-reduce = false (drops base1028-tp2's true, so custom all-reduce is on)
+#       Nov01, task 6002: AITER #7155 (ab4841a1a).  Decode collectives 3.04 -> 0.52 ms/step; the in-layer all-reduce
+#       is aiter::ar_ll_gfx1250 at 5-7.5 us/call.  Fusion (--enable-aiter-allreduce-fusion) stays OFF: 18 us/call, slower.
+#       Measured, A-B-A on h13-14 GPUs 6,7: 1k/1k c32 x1.325 (custom AR alone), 8k/1k c32 x1.251.
+#   kv-cache-dtype = fp8_e4m3, with SGLANG_6003_PREFILL_Q = static and SGLANG_6003_DECODE_Q = bf16
+#       Nov05, task 6003 arm B3, measured at TP2 on the draft1107 TP2 profile: 1k/1k c32 x1.340, 8k/1k c32 x1.289,
+#       8k/1k c64 x1.223 over perf1101-tp2 (GSM8K 0.958).  Accuracy was checked at TP1 only: RULER2 64k n=600
+#       fp8 0.666 vs bf16 0.664; RULER2 127k n=240 fp8 0.467 vs bf16 0.511 (-4.4 +- 2.2 pts).  RULER at TP2 was NOT
+#       run.  Do not serve fp8 KV above 64k at TP2 without that gate.
+#
+# Trees, the [stack.<pkg>] commits and the feature list: draft-base1111.toml (identical at TP2).  Plan: install
+# Triton 3c186fe6f1, AITER ab4841a1a, SGLang acac58ac7c from akao-amd's draft-base1111 branches.
+#
+# Also inherited at TP2, and measured in the same stack: the breakable prefill graph (Nov08, +13 % at 1k c32, 0
+# hangs without the profiler), the profiler sync (Nov09, which stops the TP2 trace hang; serving does not profile),
+# F6 gather+quant and TopK bypass (perf1101's env), the F17 UA3D config.  Nov04 (BLOCK_M 256 for <= 8 seqs) is on at
+# TP2 too: it gives 70k/300 c4 +2.9 %, and costs about 2.5 % at 1k c16 (6961, B4 vs B1).  Not separated more finely.
+# Not at TP2: Nov03's grouped-MoE tile rows are for TP1's inter_dim 3072 only; TP2 (1536) has no rows in the CSV.
+
+description = "gpt-oss-120b draft-base1111 at TP2 (both partitions of one DPX GPU): perf1101-tp2 + custom all-reduce (AITER #7155) + fp8_e4m3 KV (prefill q static, decode q bf16)"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/perf1101-tp2"
+
+[env]
+SGLANG_6003_PREFILL_Q = "static"
+SGLANG_6003_DECODE_Q = "bf16"
+
+[args]
+disable-custom-all-reduce = false
+kv-cache-dtype = "fp8_e4m3"
