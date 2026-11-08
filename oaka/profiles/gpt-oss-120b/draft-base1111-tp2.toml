@@ -3,7 +3,7 @@
 # Only the differences are here:
 #
 #   disable-custom-all-reduce = false (drops base1028-tp2's true, so custom all-reduce is on)
-#       Nov01, task 6002: AITER #7155 (ab4841a1a).  Decode collectives 3.04 -> 0.52 ms/step; the in-layer all-reduce
+#       Nov01, task 6002: AITER #7155 (b383e3fdd).  Decode collectives 3.04 -> 0.52 ms/step; the in-layer all-reduce
 #       is aiter::ar_ll_gfx1250 at 5-7.5 us/call.  Fusion (--enable-aiter-allreduce-fusion) stays OFF: 18 us/call, slower.
 #       Measured, A-B-A on h13-14 GPUs 6,7: 1k/1k c32 x1.325 (custom AR alone), 8k/1k c32 x1.251.
 #   kv-cache-dtype = fp8_e4m3, with SGLANG_6003_PREFILL_Q = static and SGLANG_6003_DECODE_Q = bf16
@@ -13,7 +13,9 @@
 #       run.  Do not serve fp8 KV above 64k at TP2 without that gate.
 #
 # Trees, the [stack.<pkg>] commits and the feature list: draft-base1111.toml (identical at TP2).  Plan: install
-# Triton 3c186fe6f1, AITER ab4841a1a, SGLang acac58ac7c from akao-amd's draft-base1111 branches.
+# Triton 3c186fe6f1, AITER 33b7a581f, SGLang acac58ac7c from akao-amd's draft-base1111 branches.  Nov06 is dropped
+# (draft-base1111.toml, "Dropped").  Measured on these trees: 1108_suite task 7012, TP2 GSM8K 0.961, 1k/1k c64 10005,
+# 8k/1k c64 6020, 70k/300 c4 237 output tok/s.
 #
 # Also inherited at TP2, and measured in the same stack: the breakable prefill graph (Nov08, +13 % at 1k c32, 0
 # hangs without the profiler), the profiler sync (Nov09, which stops the TP2 trace hang; serving does not profile),

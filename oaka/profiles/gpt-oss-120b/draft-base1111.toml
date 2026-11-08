@@ -13,14 +13,25 @@
 # Trees.  A profile cannot carry a [stack.<pkg>]; the plan installs these, after
 # `git -C /sgl-workspace/<tree> fetch https://github.com/akao-amd/<repo> draft-base1111` (stack.sh never fetches):
 #   Triton  [stack.triton]   commit 3c186fe6f1  (draft-perf1101-1107 tip: Triton 934659d489 + the B4 LDS-barrier fix)
-#   AITER   [stack.aiter]    commit ab4841a1a    (draft-perf1101-1107 4be9451ec, then, in order:
+#   AITER   [stack.aiter]    commit 33b7a581f    (draft-perf1101-1107 4be9451ec, then, in order:
 #           Nov01 #7155 custom all-reduce b383e3fdd; Nov04 gluon UA2D BLOCK_M 256 for <= 8 seqs e34f86543, dd35dbfb4;
 #           Nov05 fp8 PV scale, sink descale, fp8 UA3D cfg 9349c870a, d8493f3a9, ca9e5d1dc, a0f254375;
-#           Nov06 fp8 prefill BLOCK_M 256 / NUM_BUFFERS 3 14426941e; Nov03 gpt-oss prefill grouped-MoE tiles ab4841a1a)
+#           Nov06 14426941e; Nov03 gpt-oss prefill grouped-MoE tiles ab4841a1a; revert of Nov06 33b7a581f)
 #   SGLang  [stack.sglang]   commit acac58ac7c  (draft-perf1101-1107 fc3d097014, then, in order:
 #           Nov02 tiled fused RoPE + KV write de11d17e; Nov09 profiler sync before GPU tracing 4663ff28;
 #           Nov07 breakable-graph attention output in place d4d13bb9; Nov05 fp8 q modes cfe2661a, defaults acac58ac)
 #   Branch draft-base1111 on akao-amd/{triton,aiter,sglang}; not upstream PRs.
+#
+# Dropped 2026-11-08: Nov06 (AITER 14426941e, gluon UA2D fp8 q + fp8 KV prefill config DT_fp8_fp8.NS_LEQ_8:
+#   BLOCK_M 256, NUM_BUFFERS 3, for <= 8 seqs).  It crashes the server.  _unified_attention_2d_gfx1250 falls back
+#   to loop variant 0 when the longest query of a launch is short (next_pow2(max_seqlen_q * 8) < BLOCK_M, under 32
+#   tokens) and keeps NUM_BUFFERS 3, which variant 0 rejects (static_assert NUM_BUFFERS == 2).  Hit at 70000/300 c8
+#   on TP1 (1108_suite task 7010); the 11-07 runs measured 70k at c4 only.  33b7a581f reverts it on the branch, so
+#   fp8 prefill with <= 8 seqs uses DT_fp8_fp8 (BLOCK_M 128, NUM_BUFFERS 2) again.  Its gain (+5.4 % at 70k/300 c4
+#   on the TP1 stack) is not in this profile.  To bring it back, the wrapper must also set NUM_BUFFERS 2 when it
+#   forces loop variant 0.
+# Measured on these trees (33b7a581f): mi45x-dpx-standard, 1108_suite task 7012 (h13-16), all points complete,
+#   GSM8K 0.953-0.961.  TP1 1k/1k c64 7573, 8k/1k c64 4406, 70k/300 c4 162 output tok/s.
 #
 # Not in this profile, on purpose: 6007 (RMSNorm-fused MoE pad, SGLANG_AITER_FUSE_RMSNORM_PAD) and 6964
 # (one-launch routing top-k).  Both were in the measured TP1 stacks (+0.9 % and +0.5 % alone) and are not locked.
