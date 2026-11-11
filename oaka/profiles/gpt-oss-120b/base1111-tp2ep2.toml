@@ -20,7 +20,9 @@
 # Meta's MI450X TP2 comparison (same flags, only --ep-size 2 added; SGLang v0.5.22 era): EP=2 decode 4-40 %
 # below EP=1, prefill MoE overhead 3.1 -> 20.0 ms per 8k prompt (torch gather), expert GEMMs 70.6 -> 50.7 ms.
 #
-# Untested as of its creation: the first server's GSM8K gate qualifies it (3200_base1111_tp2ep2).
+# Measured 2026-11-11, /2026/ww46/suite_base1111/3200_base1111_tp2ep2 (f19-17, all 4 pairs, 15 points): GSM8K 0.959-0.963
+#   on 4 servers.  Output tok/s against base1111-tp2 (3100_base1111_suite): geomean 0.707 (0.635-0.811); 1k/1k 0.66,
+#   8k/1k 0.68, 70k/300 0.80; TPOT +23-58 %.  EP and the triton MoE (no FlyDSL/gluon) are not separated.
 
 description = "gpt-oss-120b base1111 at TP2 with expert parallelism 2 (both partitions of one DPX GPU); FlyDSL switch inert under EP"
 arch = ["gfx1250"]
