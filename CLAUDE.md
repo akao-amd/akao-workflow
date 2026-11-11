@@ -169,6 +169,7 @@ utils/                agent.sh (claude + codex via the AMD gateway), install_gh.
                       controller/Dockerfile (console image),
                       ssh (the PATH wrapper docker's ssh transport goes through; see Design notes)
 TEST.md               test layers: cargo test, real GPU smoke, environment doctors
+.state/               the console's akao state, git-ignored (Runtime state)
 .githooks/post-commit builds akao (release) and a static oaka into oaka/bin
 akao/
   Cargo.toml
@@ -217,17 +218,20 @@ oaka/
 
 ## Runtime state
 
-All state lives in `$AKAO_CONFIG_ROOT` (e.g. `/2026/nocopy/akao-workflow-state`).
-The variable is **required**; every subcommand fails clearly if unset.
+All state lives in the config root (`state::config_root()`): `$AKAO_CONFIG_ROOT` when set,
+else `$AKAO_REPO_ROOT/.state`, the console checkout's git-ignored `.state/` (it holds private
+keys: never commit it, never ship it).  Every subcommand fails clearly when it is not a
+directory.
 
 ```
-$AKAO_CONFIG_ROOT/
+<config root>/        $AKAO_CONFIG_ROOT, else $AKAO_REPO_ROOT/.state
   config.toml         settings: deploy_src, deploy_paths (default: none),
                       infx_repo, infx_local, infx_dashboard, infx_snapshot
   hosts.tsv           one row per remote box (TSV, 4–5 cols)
   container_home/     home template, copied once per akao_<name>
-    .local/bin/ssh    ssh wrapper adding -F $AKAO_CONFIG_ROOT/.ssh/config (utils/ssh; see Design notes)
-  .ssh/config         optional; when present, -F is added to every ssh call
+    .local/bin/ssh    ssh wrapper adding -F <config root>/.ssh/config (utils/ssh; see Design notes)
+  .ssh/config         -F'd to every ssh call when present; `akao doctor` requires it, a private
+                      key beside it and every IdentityFile it names
 ```
 
 Work year and week are always today's ISO values (`state::work_year()`, `state::work_week()`).
@@ -270,7 +274,7 @@ impl Runner {
 }
 ```
 
-**ssh -F**: `Runner::new()` appends `-F $AKAO_CONFIG_ROOT/.ssh/config` to the default
+**ssh -F**: `Runner::new()` appends `-F <config root>/.ssh/config` to the default
 `ssh` when that file exists, after `FAIL_FAST` (connect timeout and keepalives: a dead box
 fails a command instead of hanging it; no BatchMode, a login may need a password).
 `AKAO_SSH` overrides the whole command (including -F).  Docker's own transport (the `ssh`
@@ -433,10 +437,12 @@ worker", "Decisions on reaching boxes and moving files").
   `host_home` mounted at its own path; else as the login, failing loudly where it does not own
   the path.  So every host path akao writes lies under `host_home`.
 - **docker sees ssh only through PATH**: a wrapper named `ssh` in `~/.local/bin` (ahead of
-  `/usr/bin`) execs `/usr/bin/ssh -F $AKAO_CONFIG_ROOT/.ssh/config "$@"` (plain ssh when that
-  file is absent).  Its source is `utils/ssh`; install it as `container_home/.local/bin/ssh`
-  and wherever akao itself runs, with `AKAO_CONFIG_ROOT` exported.  Init step 1 (`docker -H
-  ssh://<nick> version`) fails loudly without it; `akao doctor` checks it offline.
+  `/usr/bin`) execs `/usr/bin/ssh -F <config root>/.ssh/config "$@"` (plain ssh when that
+  file is absent), with the config root's own default (`$AKAO_CONFIG_ROOT`, else
+  `${AKAO_REPO_ROOT:-/root/akao-workflow}/.state`).  Its source is `utils/ssh`; install it as
+  `container_home/.local/bin/ssh` and wherever akao itself runs.  Init step 1 (`docker -H
+  ssh://<nick> version`) fails loudly without it; `akao doctor` checks it offline, and warns
+  when an installed copy differs from `utils/ssh`.
 - **A host entry may be a login shell** (`RemoteCommand`, `RequestTTY force`): akao's ssh
   (`exec::NO_LOGIN_SHELL`) and the wrapper, for every call with a command (docker's
   `dial-stdio`), add `-o RemoteCommand=none` and no tty.  So akao's remote scripts never rely

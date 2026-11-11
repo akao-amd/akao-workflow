@@ -130,11 +130,12 @@ binary and a clone of the repo, but seldom a Rust toolchain, so these are subcom
 cargo tests).  Each prints
 `ok`/`warn`/`FAIL` with the fix and exits 1 on any FAIL.
 
-- `akao doctor` (console): `AKAO_CONFIG_ROOT` exported, `hosts.tsv`, the
-  `ssh` first on PATH honours `$AKAO_CONFIG_ROOT/.ssh/config` (compared with
+- `akao doctor` (console): the config root (`AKAO_CONFIG_ROOT`, else `$AKAO_REPO_ROOT/.state`),
+  `hosts.tsv`, the credentials (`.ssh/config`, a private key beside it, every `IdentityFile`
+  it names), the `ssh` first on PATH honours `<config root>/.ssh/config` (compared with
   `ssh -F <config> -G` for every host, so docker contexts get the same config; a host entry
-  with a RemoteCommand fails unless that `ssh` turns it off for calls with a command), home
-  template, deploy sources incl. a runnable `oaka/bin/oaka`, docker CLI, the repo checkout
+  with a RemoteCommand fails unless that `ssh` turns it off for calls with a command; warn
+  when it or the home template's copy differs from `utils/ssh`), home template, deploy sources incl. a runnable `oaka/bin/oaka`, docker CLI, the repo checkout
   init ships (`$AKAO_REPO_ROOT`: FAIL if missing, warn if dirty); for a controller (warn
   only): its artifact
   root, `tmux`, `claude`, `curl` (`mirror --dashboard`), the InferenceX clone mirror reads.

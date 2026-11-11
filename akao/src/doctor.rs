@@ -3,6 +3,7 @@
 
 use crate::state::{self, State};
 use anyhow::{bail, Result};
+use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -59,15 +60,16 @@ pub fn run() -> Result<()> {
     let mut r = Report::default();
     let state = match State::load() {
         Ok(s) => {
-            r.ok("config root", s.root.display().to_string());
+            r.ok("config root", format!("{} ({})", s.root.display(), s.from));
             s
         }
         Err(e) => {
             r.fail("config root", format!("{e:#}"));
-            bail!("1 check failed; the others need AKAO_CONFIG_ROOT");
+            bail!("1 check failed; the others need the config root");
         }
     };
     let nicks = check_hosts(&mut r, &state);
+    check_credentials(&mut r, &state);
     check_ssh(&mut r, &state, &nicks);
     check_template(&mut r, &state);
     check_deploy(&mut r, &state);
@@ -123,6 +125,15 @@ fn check_repo(r: &mut Report) {
     }
 }
 
+/// `path`'s difference from the repo's utils/ssh, the wrapper's source: `None` when they
+/// match or there is no source to compare with.
+fn stale_wrapper(path: &Path) -> Option<String> {
+    let (repo, _) = state::repo_root().ok()?;
+    let src = Path::new(&repo).join("utils/ssh");
+    let want = fs::read(&src).ok()?;
+    (fs::read(path).ok()? != want).then(|| format!("{} differs from {}; cp it over", path.display(), src.display()))
+}
+
 /// What a controller agent on this console uses besides akao itself: never fatal, akao
 /// runs without them.
 fn check_controller(r: &mut Report, state: &State) {
@@ -175,8 +186,102 @@ fn check_hosts(r: &mut Report, state: &State) -> Vec<String> {
     }
 }
 
+/// akao's ssh credentials in the config root: `.ssh/config` (how to reach the boxes), the
+/// private keys beside it, and every key the config names (ssh skips a missing
+/// IdentityFile silently; the login fails later, far from the cause).
+fn check_credentials(r: &mut Report, state: &State) {
+    let dir = state.root.join(".ssh");
+    let cfg = dir.join("config");
+    let Ok(text) = fs::read_to_string(&cfg) else {
+        return r.fail(
+            "credentials",
+            format!(
+                "no {}: akao's ssh config (hosts, logins, the keys they use) lives there",
+                cfg.display()
+            ),
+        );
+    };
+    let mut keys: Vec<String> = fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| private_key(&e.path()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    keys.sort();
+    if keys.is_empty() {
+        return r.fail(
+            "credentials",
+            format!(
+                "no private key in {}: put the keys the boxes' logins use there",
+                dir.display()
+            ),
+        );
+    }
+    let named = identity_files(&text, &std::env::var("HOME").unwrap_or_default());
+    let missing: Vec<&str> = named
+        .iter()
+        .filter(|p| !Path::new(p).is_file())
+        .map(String::as_str)
+        .collect();
+    if !missing.is_empty() {
+        return r.fail(
+            "credentials",
+            format!(
+                "{} names IdentityFile {} that does not exist (ssh skips it, the login fails)",
+                cfg.display(),
+                missing.join(" ")
+            ),
+        );
+    }
+    let outside: Vec<&str> = named
+        .iter()
+        .filter(|p| !Path::new(p).starts_with(&dir))
+        .map(String::as_str)
+        .collect();
+    let mut detail = format!("{}: config, {}", dir.display(), keys.join(" "));
+    if !outside.is_empty() {
+        detail += &format!(" (keys outside it: {})", outside.join(" "));
+    }
+    r.ok("credentials", detail);
+}
+
+/// Whether `p` is a PEM or OpenSSH private key.
+fn private_key(p: &Path) -> bool {
+    p.is_file()
+        && fs::read(p).is_ok_and(|b| {
+            let head = String::from_utf8_lossy(&b[..b.len().min(64)]).into_owned();
+            head.starts_with("-----BEGIN ") && head.contains("PRIVATE KEY-----")
+        })
+}
+
+/// The IdentityFile paths an ssh config names, `~` and `%d` expanded to `home`; `none` and
+/// paths ssh resolves per host (other `%` tokens, `${VAR}`, relative) are left out.
+fn identity_files(config: &str, home: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in config.lines() {
+        let Some((key, value)) = line.trim().split_once(|c: char| c.is_whitespace() || c == '=') else {
+            continue;
+        };
+        if !key.eq_ignore_ascii_case("identityfile") {
+            continue;
+        }
+        let v = value.trim_start_matches(|c: char| c.is_whitespace() || c == '=').trim();
+        let v = v.trim_matches('"');
+        let v = match v.strip_prefix("~/") {
+            Some(rest) => format!("{home}/{rest}"),
+            None => v.replace("%d", home),
+        };
+        if v.contains('%') || v.contains("${") || !v.starts_with('/') || out.contains(&v) {
+            continue;
+        }
+        out.push(v);
+    }
+    out
+}
+
 /// docker's ssh:// contexts run the `ssh` found on PATH and cannot take -F, so that `ssh`
-/// must be the wrapper that reads $AKAO_CONFIG_ROOT/.ssh/config.  Proof: for every host,
+/// must be the wrapper that reads <config root>/.ssh/config.  Proof: for every host,
 /// `ssh -G` through PATH resolves exactly like `ssh -F <config> -G`.
 fn check_ssh(r: &mut Report, state: &State, nicks: &[String]) {
     let cfg = state.root.join(".ssh/config");
@@ -185,15 +290,7 @@ fn check_ssh(r: &mut Report, state: &State, nicks: &[String]) {
         return;
     };
     if !cfg.exists() {
-        r.ok(
-            "ssh",
-            format!(
-                "{} (no {}; plain ssh config applies)",
-                path_ssh.display(),
-                cfg.display()
-            ),
-        );
-        return;
+        return; // check_credentials fails it
     }
     if nicks.is_empty() {
         r.warn("ssh", "no hosts to compare `ssh -G` on");
@@ -233,6 +330,9 @@ fn check_ssh(r: &mut Report, state: &State, nicks: &[String]) {
             ),
         );
     }
+    if let Some(stale) = stale_wrapper(&path_ssh) {
+        r.warn("ssh", stale);
+    }
     if ignored.is_empty() {
         r.ok("ssh", format!("{} resolves every host through {}", path_s, cfg_s));
     } else {
@@ -240,7 +340,8 @@ fn check_ssh(r: &mut Report, state: &State, nicks: &[String]) {
             "ssh",
             format!(
                 "{path_s} ignores {cfg_s} for {}: docker contexts would use ~/.ssh/config.  Put the wrapper \
-                 (container_home/.local/bin/ssh) ahead of /usr/bin on PATH and export AKAO_CONFIG_ROOT",
+                 (container_home/.local/bin/ssh) ahead of /usr/bin on PATH and export AKAO_CONFIG_ROOT (or \
+                 keep the state in $AKAO_REPO_ROOT/.state)",
                 ignored.join(" ")
             ),
         );
@@ -265,6 +366,8 @@ fn check_template(r: &mut Report, state: &State) {
             "home template",
             format!("{} has no executable .local/bin/ssh wrapper", t.display()),
         );
+    } else if let Some(stale) = stale_wrapper(&t.join(".local/bin/ssh")) {
+        r.warn("home template", format!("{stale} (new workers get the old one)"));
     } else {
         r.ok("home template", t.display().to_string());
     }
@@ -287,6 +390,22 @@ fn check_deploy(r: &mut Report, state: &State) {
         r.fail(
             "deploy",
             format!("missing under {src}: {} (init step 3 ships them)", missing.join(" ")),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identity_files_expand_home_and_skip_what_ssh_resolves_per_host() {
+        let cfg = "Host a\n\tIdentityFile /s/.ssh/id_ed25519\nHost b\n    identityfile ~/.ssh/id_rsa\n\
+                   Host c\n  IdentityFile=\"%d/.ssh/k\"\n  IdentityFile ~/.ssh/id_%r\n  IdentityFile none\n\
+                   # IdentityFile /commented\n  IdentityFile /s/.ssh/id_ed25519\n";
+        assert_eq!(
+            identity_files(cfg, "/root"),
+            ["/s/.ssh/id_ed25519", "/root/.ssh/id_rsa", "/root/.ssh/k"]
         );
     }
 }

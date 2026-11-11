@@ -48,7 +48,7 @@ its box's docker.
   replacing it).  Why: the boxes' specs differ (models on various drives, docker storage
   moved to another drive for space), and on a shared account (`amd`, `root`) my home is a
   directory I export as `HOME` by hand, the root of everything after.  How to reach a box
-  (host names, keys, logins) stays in ssh's config, `$AKAO_CONFIG_ROOT/.ssh/config`.
+  (host names, keys, logins) stays in ssh's config, the config root's `.ssh/config`.
 - **The image is required**, with no default per host or global (ww42): a default image goes
   stale silently, and a worker brought up on an old image costs a debug session.  An existing
   worker keeps the image it runs.
@@ -373,6 +373,12 @@ Where the how lives: worker reference (commands, plan and profile fields)
   saving worker's clone and travels like any fix (commit, patch, `git am`), with review and
   history; the old box libraries had no way back and were silently overwritten by init.
   oaka falls back to `/<year>/oaka` only in a container without its clone.
+- **akao's state lives in the console's checkout, `.state/` (git-ignored), by default**
+  (2026-11-11; `AKAO_CONFIG_ROOT` still overrides it).  Why: the state (hosts, ssh config and
+  keys, the home template) belongs to the console as the checkout does, one default path
+  means no variable to forget in a tmux window or a non-login shell (the `ssh` wrapper falls
+  back to the same path), and `/<year>/nocopy` is year-scoped work space, not configuration.
+  The keys sit in a git work tree: `/.state/` is ignored, and init ships commits only.
 - **Tokens only from the environment, at the moment of use.**  Why: a GitHub token typed
   into a command once ended up in plain text in `.claude/settings.local.json`; `.claude/` is
   now git-ignored.

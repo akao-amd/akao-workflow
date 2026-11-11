@@ -79,7 +79,7 @@ checkout without fetching or changing it. The other setup steps still run normal
 
 **One state, one host home.** Every worker of a box writes under the host home hosts.tsv names
 for it, which is where the user looks for results and what their rsync collects. Do not make a
-second `AKAO_CONFIG_ROOT` or another host home to give some workers other settings (a sprint
+second config root (`AKAO_CONFIG_ROOT`) or another host home to give some workers other settings (a sprint
 on a host home of its own, ww43 072-080, wrote 11.7 GB of results into a tree nobody expected),
 and do not scope a worker to GPUs with `-e HIP_VISIBLE_DEVICES` in hosts.tsv's `rest` (135):
 oaka sets the visible devices of every server it starts, over it. GPUs are assigned in the
@@ -91,7 +91,7 @@ moves no existing container or file).
 Run the worker's `claude` in a window of your own tmux session, so you and the user see it
 next to yours: `akao open <nick> <name> [--cwd <task dir>]` opens window `<name>` running it
 through the worker's login shell (its `~/.bash_profile` holds `AMD_LLM_API_KEY`; nothing secret
-leaves the console), with this console's `AKAO_CONFIG_ROOT` (docker's `ssh` wrapper needs it;
+leaves the console), with this console's config root as `AKAO_CONFIG_ROOT` (docker's `ssh` wrapper needs it;
 without it a box needing akao's ssh config, h21-5, refuses and the window closes at once) and
 `--add-dir $AKAO_REPO_ROOT` (the worker reads its clone of the repo outside its working
 directory; without it the first read stops at a prompt). It refuses a second window of the

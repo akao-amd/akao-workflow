@@ -3,7 +3,6 @@
 
 use anyhow::{bail, Context, Result};
 use std::io::Write;
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 /// The image of the throwaway container `escalate` writes through: small, multi-arch, with
@@ -73,14 +72,14 @@ impl Runner {
     pub fn new(dry_run: bool) -> Result<Runner> {
         // If the caller has set AKAO_SSH, use it verbatim (they own the -F too).
         // Otherwise build "ssh <FAIL_FAST> [-F <config>]" from the default, adding -F when
-        // $AKAO_CONFIG_ROOT/.ssh/config exists.
+        // <config root>/.ssh/config exists.
         let ssh = match std::env::var("AKAO_SSH") {
             Ok(s) if !s.trim().is_empty() => shlex::split(&s).context("cannot parse $AKAO_SSH")?,
             _ => {
                 let mut base = vec!["ssh".to_string()];
                 base.extend(FAIL_FAST.map(String::from));
-                if let Ok(root) = std::env::var("AKAO_CONFIG_ROOT") {
-                    let cfg = PathBuf::from(root).join(".ssh/config");
+                if let Ok((root, _)) = crate::state::config_root() {
+                    let cfg = root.join(".ssh/config");
                     if cfg.exists() {
                         base.extend(["-F".to_string(), cfg.to_string_lossy().into_owned()]);
                     }

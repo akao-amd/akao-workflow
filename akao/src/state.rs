@@ -1,9 +1,11 @@
-//! Persistent state under `$AKAO_CONFIG_ROOT`:
+//! Persistent state under the config root (`config_root`: `$AKAO_CONFIG_ROOT`, else the
+//! console checkout's git-ignored `.state/`):
 //!
 //! ```text
-//! $AKAO_CONFIG_ROOT/
+//! <config root>/
 //!   config.toml       key = "value" settings (see KEYS)
 //!   hosts.tsv         one row per remote box (see Host)
+//!   .ssh/             ssh config (-F) and the keys it names
 //!   container_home/   template copied to <host_home>/container_home/akao_<name>
 //! ```
 //!
@@ -54,17 +56,23 @@ pub const KEYS: &[(&str, Option<&str>, &str)] = &[
 
 pub struct State {
     pub root: PathBuf,
+    /// Where `root` came from (`config_root`).
+    pub from: &'static str,
     config: BTreeMap<String, String>,
 }
 
 impl State {
     pub fn load() -> Result<State> {
-        let root = match std::env::var_os("AKAO_CONFIG_ROOT") {
-            Some(r) if !r.is_empty() => PathBuf::from(r),
-            _ => bail!("AKAO_CONFIG_ROOT is not set (e.g. export AKAO_CONFIG_ROOT=/2026/nocopy/akao-workflow-state)"),
-        };
+        let (root, from) = config_root()?;
         if !root.is_dir() {
-            bail!("AKAO_CONFIG_ROOT={} is not a directory", root.display());
+            if from == CONFIG_ROOT_ENV {
+                bail!("{CONFIG_ROOT_ENV}={} is not a directory", root.display());
+            }
+            bail!(
+                "{} is not a directory: put the state there (config.toml, hosts.tsv, .ssh/, \
+                 container_home/) or export {CONFIG_ROOT_ENV}=<state dir>",
+                root.display()
+            );
         }
         let path = root.join("config.toml");
         let config = if path.exists() {
@@ -73,7 +81,7 @@ impl State {
         } else {
             BTreeMap::new()
         };
-        Ok(State { root, config })
+        Ok(State { root, from, config })
     }
 
     pub fn hosts_path(&self) -> PathBuf {
@@ -173,6 +181,21 @@ pub fn repo_root() -> Result<(String, &'static str)> {
             Ok((r.trim_end_matches('/').to_string(), REPO_ROOT_ENV))
         }
         _ => Ok((WORKER_REPO.to_string(), "default")),
+    }
+}
+
+/// Names the directory holding akao's state (config.toml, hosts.tsv, .ssh/, container_home/).
+pub const CONFIG_ROOT_ENV: &str = "AKAO_CONFIG_ROOT";
+
+/// The config root's default inside the console's checkout (git-ignored); utils/ssh falls
+/// back to the same path.
+pub const STATE_DIR: &str = ".state";
+
+/// The config root and where it came from: `$AKAO_CONFIG_ROOT`, else `<repo root>/.state`.
+pub fn config_root() -> Result<(PathBuf, &'static str)> {
+    match std::env::var_os(CONFIG_ROOT_ENV) {
+        Some(r) if !r.is_empty() => Ok((PathBuf::from(r), CONFIG_ROOT_ENV)),
+        _ => Ok((Path::new(&repo_root()?.0).join(STATE_DIR), "default")),
     }
 }
 

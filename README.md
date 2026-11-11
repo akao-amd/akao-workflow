@@ -21,13 +21,11 @@ rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl   # stati
 git config core.hooksPath .githooks              # enable the post-commit hook
 cargo build --release -p akao
 ln -sf "$PWD/target/release/akao" ~/.local/bin/akao
-export AKAO_CONFIG_ROOT=/2026/nocopy/akao-workflow-state    # in your shell profile
-akao doctor
+akao doctor                                      # the state: .state/ here, or $AKAO_CONFIG_ROOT
 ```
 
 `~/.local/bin` must come before `/usr/bin` on PATH: it also holds the `ssh` wrapper that
-makes docker's `ssh://` contexts read `$AKAO_CONFIG_ROOT/.ssh/config` (`akao doctor`
-checks it).
+makes docker's `ssh://` contexts read akao's `.ssh/config` (`akao doctor` checks it).
 
 **After every commit** the hook (`.githooks/post-commit`) refreshes both tools:
 
@@ -45,13 +43,16 @@ built from: `akao --version`, `oaka --version`.  Code that was not committed is 
 
 ## State
 
-Everything lives in `$AKAO_CONFIG_ROOT` (e.g. `/2026/nocopy/akao-workflow-state`):
+Everything lives in the config root: `$AKAO_CONFIG_ROOT` when set, else `.state/` in this
+checkout (`$AKAO_REPO_ROOT/.state`, git-ignored: it holds private keys).  `akao config ls`
+and `akao doctor` name the one in use.
 
 | File | Content |
 |---|---|
 | `config.toml` | `deploy_src` (default `/<year>`), `deploy_paths` (extra paths under `deploy_src` to ship to every box; none by default: `CLAUDE.md`, the skills, `utils/` and oaka come from the repo), `infx_repo`, `infx_local` (this machine's InferenceX clone, for `akao mirror`; default `/<year>/nocopy/InferenceX`), `infx_dashboard` and `infx_snapshot` (the dashboard and the GitHub tarball URL of a commit, for `akao mirror --dashboard`) |
 | `hosts.tsv` | one row per box: `nick model_path docker_sock host_home rest`; `-` = default (no image: `akao init --image` names it) |
 | `container_home/` | home template, copied once per container to `<host_home>/container_home/akao_<name>` |
+| `.ssh/` | `config` (how to reach the boxes: host names, logins, `IdentityFile`s; `-F`'d to every ssh) and the private keys it names (`akao doctor` checks they exist) |
 
 The work year and week are not stored: they are today's ISO year and week (`2026`, `ww41`).
 
@@ -258,8 +259,8 @@ akao rm h13-16 base1021_pd                                     # stop and remove
 - **`akao open <nick> <name> [--cwd <dir>] [--continue | --resume <id>] [--session <s>]`** opens
   the worker's `claude` in a new window `<name>` of this machine's tmux (the current session, or
   `--session`): `docker -H ssh://<nick> exec -it [-w <dir>] akao_<name> bash -lc 'exec claude
-  --add-dir $AKAO_REPO_ROOT'`, with this `AKAO_CONFIG_ROOT` in the window (docker's `ssh`
-  wrapper reads akao's ssh config through it).  The worker must be running; a window of that
+  --add-dir $AKAO_REPO_ROOT'`, with this config root as `AKAO_CONFIG_ROOT` in the window
+  (docker's `ssh` wrapper reads akao's ssh config through it).  The worker must be running; a window of that
   name refuses.  `--continue` resumes the directory's latest conversation, `--resume <id>` a
   given one.  The agent's trust dialog and the first message are the controller's.
 - **`akao rm <nick> <name>... [--home]`** stops and removes `akao_<name>` (by its id; `stop -t
@@ -298,11 +299,12 @@ hold old control-plane copies under `/<year>`, which agents there may still load
 re-initialized since read their clone instead (oaka falls back to `/<year>/oaka` only
 without one), so remove them, after bringing back any profile saved there (`akao cp`).
 
-**3. State.**  `export AKAO_CONFIG_ROOT=<dir>` in the shell profile, then in it:
+**3. State.**  `.state/` in the checkout (or `export AKAO_CONFIG_ROOT=<dir>` in the shell
+profile to keep it elsewhere), then in it:
 `config.toml` (`akao config set ...`, all keys have defaults), `hosts.tsv` (`akao host add ...`), the
 home template `container_home/` (dotfiles every worker gets; it must hold the `ssh` wrapper
-`.local/bin/ssh`, a copy of this repo's `utils/ssh`), and `.ssh/config` with the keys it names, if the boxes need their own ssh
-settings.  TODO(user): how keys reach a new console.
+`.local/bin/ssh`, a copy of this repo's `utils/ssh`), and `.ssh/` with `config` and the keys it
+names (`IdentityFile <config root>/.ssh/<key>`, an absolute path).  TODO(user): how keys reach a new console.
 
 **4. akao on PATH**, with the `ssh` wrapper ahead of `/usr/bin` (docker's ssh transport finds
 ssh through PATH only):
@@ -311,7 +313,7 @@ ssh through PATH only):
 git clone <this repo> && cd akao-workflow
 git config core.hooksPath .githooks
 cargo build --release -p akao && ln -sf "$PWD/target/release/akao" ~/.local/bin/akao
-cp utils/ssh ~/.local/bin/ssh && cp utils/ssh "$AKAO_CONFIG_ROOT/container_home/.local/bin/ssh"
+cp utils/ssh ~/.local/bin/ssh && cp utils/ssh "${AKAO_CONFIG_ROOT:-.state}/container_home/.local/bin/ssh"
 ```
 
 **5. InferenceX** for `akao mirror`: a clone at `infx_local` (default

@@ -1,13 +1,15 @@
 #!/bin/bash
-# Redirector: every plain `ssh` reads the akao ssh config when
-# $AKAO_CONFIG_ROOT/.ssh/config exists; otherwise it behaves like /usr/bin/ssh.
+# Redirector: every plain `ssh` reads the akao ssh config, <config root>/.ssh/config, when it
+# exists; otherwise it behaves like /usr/bin/ssh.  The config root is akao's:
+# $AKAO_CONFIG_ROOT, else the console checkout's .state ($AKAO_REPO_ROOT, default
+# /root/akao-workflow), which a worker's clone does not have.
 # Install it as ~/.local/bin/ssh on the console and as container_home/.local/bin/ssh in
-# $AKAO_CONFIG_ROOT (`akao doctor` checks both behaviours below).
+# the config root (`akao doctor` checks both behaviours below, and both copies against this).
 #
 # Why: docker's ssh:// contexts (and scp, git, ...) run `ssh` found through PATH
 # and cannot be given -F, so with a custom config directory they would silently
 # use ~/.ssh/config instead (wrong login user, missing hosts). Keep this file
-# ahead of /usr/bin on PATH (~/.local/bin) and AKAO_CONFIG_ROOT exported.
+# ahead of /usr/bin on PATH (~/.local/bin).
 #
 # A call that carries its own remote command (docker's `docker system dial-stdio`, akao's
 # `sh -c ...`) gets RemoteCommand=none and RequestTTY=auto: ssh refuses a command when the
@@ -35,8 +37,8 @@ extra=()
 if has_command "$@"; then
     extra=(-o RemoteCommand=none -o RequestTTY=auto)
 fi
-cfg="${AKAO_CONFIG_ROOT:+$AKAO_CONFIG_ROOT/.ssh/config}"
-if [ -n "$cfg" ] && [ -f "$cfg" ]; then
+cfg="${AKAO_CONFIG_ROOT:-${AKAO_REPO_ROOT:-/root/akao-workflow}/.state}/.ssh/config"
+if [ -f "$cfg" ]; then
     exec /usr/bin/ssh -F "$cfg" "${extra[@]}" "$@"
 fi
 exec /usr/bin/ssh "${extra[@]}" "$@"

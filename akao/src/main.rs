@@ -15,7 +15,8 @@ use state::{Host, State};
 
 /// Local driver: initialize and control worker containers on remote boxes.
 ///
-/// State lives in $AKAO_CONFIG_ROOT (config.toml, hosts.tsv, container_home/).
+/// State lives in $AKAO_CONFIG_ROOT, else the checkout's .state/ (config.toml, hosts.tsv,
+/// .ssh/, container_home/).
 #[derive(Parser)]
 #[command(version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("AKAO_GIT_SHA"), ")"))]
 struct Cli {
@@ -247,7 +248,7 @@ fn main() {
 
 fn run(cli: Cli) -> Result<()> {
     if let Cmd::Doctor = cli.cmd {
-        return doctor::run(); // reports a missing AKAO_CONFIG_ROOT itself
+        return doctor::run(); // reports a missing config root itself
     }
     let mut state = State::load()?;
     match cli.cmd {
@@ -416,7 +417,7 @@ fn host_cmd(state: &State, cmd: HostCmd) -> Result<()> {
 fn config_cmd(state: &mut State, cmd: ConfigCmd) -> Result<()> {
     match cmd {
         ConfigCmd::Ls => {
-            println!("# AKAO_CONFIG_ROOT={}", state.root.display());
+            println!("# config root {} ({})", state.root.display(), state.from);
             println!(
                 "# work year {} / week {} (ISO, from today)",
                 state::work_year(),

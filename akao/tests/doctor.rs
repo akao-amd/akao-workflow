@@ -18,6 +18,9 @@ fi
 exec /usr/bin/ssh "$@"
 "#;
 
+/// Looks like a private key to the doctor; ssh never reads it (`ssh -G` only).
+const FAKE_KEY: &str = "-----BEGIN OPENSSH PRIVATE KEY-----\nnot a key\n-----END OPENSSH PRIVATE KEY-----\n";
+
 struct Sandbox {
     root: PathBuf,
 }
@@ -36,12 +39,17 @@ impl Sandbox {
         sb.write("state/hosts.tsv", "fakebox\t/m\t-\t/h\n");
         sb.write(
             "state/.ssh/config",
-            "Host fakebox\n    HostName 10.9.8.7\n    User akao\n",
+            &format!(
+                "Host fakebox\n    HostName 10.9.8.7\n    User akao\n    IdentityFile {}/.ssh/id_ed25519\n",
+                state.display()
+            ),
         );
+        sb.write("state/.ssh/id_ed25519", FAKE_KEY);
         sb.exe("state/container_home/.local/bin/ssh", SSH_WRAPPER);
         sb.write("deploy/x", "");
         sb.exe("repo/oaka/bin/oaka", "#!/bin/sh\necho 'oaka 0.0.0 (test)'\n");
         sb.write("repo/CLAUDE.md", "# akao-workflow\n");
+        sb.exe("repo/utils/ssh", SSH_WRAPPER);
         let git = Command::new("git")
             .args(["init", "-q"])
             .current_dir(sb.root.join("repo"))
@@ -114,14 +122,85 @@ fn sound_setup_passes() {
     let (code, out) = sb.doctor("bin", Some(&sb.state()));
     assert_eq!(code, 0, "{out}");
     for want in [
+        &format!("ok    config root    {} (AKAO_CONFIG_ROOT)", sb.state().display()),
         "ok    hosts          fakebox",
+        &format!("ok    credentials    {}/.ssh: config, id_ed25519", sb.state().display()),
         "resolves every host through",
         "ok    oaka",
         "ok    docker",
         "ok    repo",
+        "ok    home template",
     ] {
         assert!(out.contains(want), "{want:?} not in {out}");
     }
+    // Both wrappers are utils/ssh as it is (the controller's warnings depend on the machine).
+    assert!(!out.contains("warn  ssh") && !out.contains("warn  home"), "{out}");
+}
+
+#[test]
+fn the_config_root_defaults_to_the_checkouts_state() {
+    if !have_ssh() {
+        return;
+    }
+    let sb = Sandbox::new("default");
+    let state = sb.root.join("repo/.state");
+    // The IdentityFile names where the state was: moving it without the config fails.
+    fs::rename(sb.state(), &state).unwrap();
+    let (code, out) = sb.doctor("bin", None);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("FAIL  credentials"), "{out}");
+    assert!(out.contains("names IdentityFile"), "{out}");
+    sb.write(
+        "repo/.state/.ssh/config",
+        &format!(
+            "Host fakebox\n    HostName 10.9.8.7\n    IdentityFile {}/.ssh/id_ed25519\n",
+            state.display()
+        ),
+    );
+    // The wrapper on PATH finds the same config with AKAO_CONFIG_ROOT unset.
+    let (code, out) = sb.doctor("bin", None);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains(&format!("ok    config root    {} (default)", state.display())),
+        "{out}"
+    );
+    assert!(out.contains("resolves every host through"), "{out}");
+}
+
+#[test]
+fn credentials_must_be_in_the_config_root() {
+    let sb = Sandbox::new("creds");
+    sb.write(
+        "state/.ssh/config",
+        "Host fakebox\n    HostName 10.9.8.7\n    IdentityFile ~/.ssh/nowhere_akao_test\n",
+    );
+    let (code, out) = sb.doctor("bin", Some(&sb.state()));
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("FAIL  credentials"), "{out}");
+    assert!(out.contains("/.ssh/nowhere_akao_test that does not exist"), "{out}");
+
+    sb.write("state/.ssh/config", "Host fakebox\n    HostName 10.9.8.7\n");
+    fs::remove_file(sb.state().join(".ssh/id_ed25519")).unwrap();
+    sb.write("state/.ssh/id_ed25519.pub", "ssh-ed25519 AAAA test\n");
+    let (code, out) = sb.doctor("bin", Some(&sb.state()));
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("FAIL  credentials    no private key in"), "{out}");
+
+    fs::remove_dir_all(sb.state().join(".ssh")).unwrap();
+    let (code, out) = sb.doctor("bin", Some(&sb.state()));
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("FAIL  credentials    no "), "{out}");
+    assert!(out.contains("/.ssh/config: akao's ssh config"), "{out}");
+}
+
+#[test]
+fn an_outdated_wrapper_is_warned() {
+    let sb = Sandbox::new("stale");
+    sb.exe("state/container_home/.local/bin/ssh", OLD_SSH_WRAPPER);
+    let (code, out) = sb.doctor("bin", Some(&sb.state()));
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("warn  home template"), "{out}");
+    assert!(out.contains("differs from"), "{out}");
 }
 
 #[test]
@@ -212,7 +291,10 @@ fn missing_pieces_are_named() {
     let (code, out) = sb.doctor("bin", None);
     assert_eq!(code, 1, "{out}");
     assert!(
-        out.contains("FAIL  config root    AKAO_CONFIG_ROOT is not set"),
+        out.contains(&format!(
+            "FAIL  config root    {}/.state is not a directory",
+            sb.root.join("repo").display()
+        )),
         "{out}"
     );
 
