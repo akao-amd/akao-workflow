@@ -1,0 +1,30 @@
+# gpt-oss-120b/base1111-tp2 with expert parallelism 2: attention at TP2 across both partitions of one DPX GPU, the
+# 128 experts split 64 + 64 over the two ranks (--ep-size 2) instead of each expert's columns.  Derived 2026-11-11
+# from base1111-tp2 (user) for suite mi45x-dpx-ep's tp2ep2 layout, as base1028-tp2ep2 was from base1028-tp2.
+# Everything else is base1111-tp2's, inherited: trees (akao-amd base1111), env, args, custom all-reduce, fp8 KV.
+#
+# What EP changes on the base1111 SGLang tree (quark_w4a8_mxfp4_moe.py, aiter_mxfp4_w4a8_moe.py):
+#   - moe_ep_size > 1 builds an expert map and does NOT take the FlyDSL switch ("FlyDSL's grouped MoE has no
+#     expert-parallel form here").  SGLANG_GFX1250_W4A8_FLYDSL and _MIN_TOKENS are inert; every MoE batch runs
+#     aiter moe_gemm_a8w4 on the backend SGLANG_GFX1250_W4A8_BACKEND picks: "triton" (inherited), the backend
+#     Meta's MI450X EP=2 run also used (AITER_A8W4_BACKEND=triton; gluon's kernels are faster but its per-call
+#     CPU cost made it slower end to end there).
+#   - SGLANG_GFX1250_W4A8_FUSED_GATHER_QUANT and _KERNEL_GATHER are inert (both require expert_map is None): EP
+#     gathers rows in torch (vectorized_gather_kernel) after _ep_routing.
+#   - SGLANG_GFX1250_W4A8_BYPASS_TOPK stays active: it needs only moe-a2a-backend none (the default), which this
+#     path also needs (the gfx1250 scheme bypasses SGLang's MoeRunner and combines by the TP all-reduce).
+#   - ep-size must equal tp-size here (ep_size * moe_dp_size == tp_size, moe_dp_size 1).  No other MoE argument is
+#     needed: no a2a backend (deepep/mooncake do not reach the gfx1250 W4A8 path), no EPLB or redundant experts
+#     (2 ranks).
+# So this layout measures EP *and* the non-FlyDSL MoE at once; read its numbers against tp2 with that in mind.
+# Meta's MI450X TP2 comparison (same flags, only --ep-size 2 added; SGLang v0.5.22 era): EP=2 decode 4-40 %
+# below EP=1, prefill MoE overhead 3.1 -> 20.0 ms per 8k prompt (torch gather), expert GEMMs 70.6 -> 50.7 ms.
+#
+# Untested as of its creation: the first server's GSM8K gate qualifies it (3200_base1111_tp2ep2).
+
+description = "gpt-oss-120b base1111 at TP2 with expert parallelism 2 (both partitions of one DPX GPU); FlyDSL switch inert under EP"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/base1111-tp2"
+
+[args]
+ep-size = 2
