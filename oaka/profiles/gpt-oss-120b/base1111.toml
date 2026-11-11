@@ -1,4 +1,4 @@
-# gpt-oss-120b/draft-base1111 (TP1): the locked base after perf1101, from the 2026-11-07 h13-14 optimization round
+# gpt-oss-120b/base1111 (TP1): the locked base after perf1101, from the 2026-11-07 h13-14 optimization round
 # (/2026/ww45/1107_opt, README.md there: features Nov01-Nov13, measured A-B-A on their own GPU pairs).
 # Extends gpt-oss-120b/perf1101 (read it, and base1028.toml for why each of its lines is there).  Only the
 # differences are here:
@@ -11,16 +11,24 @@
 #       The same two defaults are in SGLang's code (acac58ac); they are written here so the recipe says what runs.
 #
 # Trees.  A profile cannot carry a [stack.<pkg>]; the plan installs these, after
-# `git -C /sgl-workspace/<tree> fetch https://github.com/akao-amd/<repo> draft-base1111` (stack.sh never fetches):
-#   Triton  [stack.triton]   commit 3c186fe6f1  (draft-perf1101-1107 tip: Triton 934659d489 + the B4 LDS-barrier fix)
-#   AITER   [stack.aiter]    commit 33b7a581f    (draft-perf1101-1107 4be9451ec, then, in order:
-#           Nov01 #7155 custom all-reduce b383e3fdd; Nov04 gluon UA2D BLOCK_M 256 for <= 8 seqs e34f86543, dd35dbfb4;
-#           Nov05 fp8 PV scale, sink descale, fp8 UA3D cfg 9349c870a, d8493f3a9, ca9e5d1dc, a0f254375;
-#           Nov06 14426941e; Nov03 gpt-oss prefill grouped-MoE tiles ab4841a1a; revert of Nov06 33b7a581f)
-#   SGLang  [stack.sglang]   commit acac58ac7c  (draft-perf1101-1107 fc3d097014, then, in order:
-#           Nov02 tiled fused RoPE + KV write de11d17e; Nov09 profiler sync before GPU tracing 4663ff28;
-#           Nov07 breakable-graph attention output in place d4d13bb9; Nov05 fp8 q modes cfe2661a, defaults acac58ac)
-#   Branch draft-base1111 on akao-amd/{triton,aiter,sglang}; not upstream PRs.
+# `git -C /sgl-workspace/<tree> fetch https://github.com/akao-amd/<repo> base1111` (stack.sh never fetches).
+# Branch base1111 of akao-amd/{triton,aiter,sglang}: draft-base1111 with each commit replaced by its upstream PR,
+# on draft-base1111's bases (AITER main 07ff5f318, SGLang main c06e39c6ca, the image's Triton).  An open PR enters
+# as one commit, its diff against its merge-base with main; a PR that merged main into its branch enters as its
+# own (non-merge) commits instead.  Commits with no PR stay as they were.
+#   Triton  [stack.triton]   commit 3c186fe6f1  the image's Triton (76940ad348 + revert of 9debefe441), then the
+#           gfx1250 LDS-barrier fix (no PR; llvm/llvm-project#220357 fixes it in newer LLVM).  AITER's gpt-oss
+#           extend register store needs it.
+#   AITER   [stack.aiter]    commit 690aba898   image edits (no PR); #6999 (merged); #7743; #7202; #7203 (its
+#           commits); #7289 (with #7288); #7746; #7155 (merged); #7745 (its commits, NS on top of #7203's G axis);
+#           #7747; #7744; the gpt-oss extend register store (no PR, ported to #7203's USE_TDM_STORE flag).
+#           Not in it: #7201 (V-tail masking; dropped on the tracker), Nov06 and its revert.
+#   SGLang  [stack.sglang]   commit 160eaee014  image edits (no PR); #47398 (merged; the W4A8 FlyDSL/gluon MoE,
+#           F6 gather+quant and TopK bypass); #49566; the profiler sync (no PR); #49567 (its commit); the 6003 fp8
+#           q modes and their defaults (no PR).
+#   Against draft-base1111 the PRs carry their review changes: #7202 buffer_store epilogue, #7203 USE_TDM_STORE
+#   config flag, #7743 tuned UA3D split by default for plain D<=64 decode, #49566 gated to gfx1250 and matching
+#   dtypes, #47398's review changes.
 #
 # Dropped 2026-11-08: Nov06 (AITER 14426941e, gluon UA2D fp8 q + fp8 KV prefill config DT_fp8_fp8.NS_LEQ_8:
 #   BLOCK_M 256, NUM_BUFFERS 3, for <= 8 seqs).  It crashes the server.  _unified_attention_2d_gfx1250 falls back
@@ -30,12 +38,14 @@
 #   fp8 prefill with <= 8 seqs uses DT_fp8_fp8 (BLOCK_M 128, NUM_BUFFERS 2) again.  Its gain (+5.4 % at 70k/300 c4
 #   on the TP1 stack) is not in this profile.  To bring it back, the wrapper must also set NUM_BUFFERS 2 when it
 #   forces loop variant 0.
-# Measured on these trees (33b7a581f): mi45x-dpx-standard, 1108_suite task 7012 (h13-16), all points complete,
-#   GSM8K 0.953-0.961.  TP1 1k/1k c64 7573, 8k/1k c64 4406, 70k/300 c4 162 output tok/s.
+# Measured on these trees: mi45x-dpx-standard, /2026/ww46/suite_base1111/3100_base1111_suite (f19-17, 2026-11-11),
+#   all 45 points complete, GSM8K 0.961-0.964.  TP1 1k/1k c64 7037, 8k/1k c64 4196, 70k/300 c4 158 output tok/s;
+#   TP2 1k/1k c64 9491, 8k/1k c64 5689, 70k/300 c4 224.  Against draft-base1111 on the same box (0001): geomean 0.999
+#   over 45 points (0.988-1.016); 70k/300 at TP1 and TP1x2 about -0.7 % (9 of 10 points below), not tracked.
 #
 # Not in this profile, on purpose: 6007 (RMSNorm-fused MoE pad, SGLANG_AITER_FUSE_RMSNORM_PAD) and 6964
 # (one-launch routing top-k).  Both were in the measured TP1 stacks (+0.9 % and +0.5 % alone) and are not locked.
-# Not measured end-to-end: draft-base1111 itself.  Its features were measured one by one, and the stacks the
+# Not measured end-to-end against perf1101: base1111 itself.  Its features were measured one by one, and the stacks the
 # numbers came from also carried 6007/6964, so run an A-B-A of this profile against perf1101 before quoting a total.
 #
 # Kept as they are from perf1101: F6 (SGLANG_GFX1250_W4A8_FUSED_GATHER_QUANT, BYPASS_TOPK), F17 UA3D config,
@@ -43,7 +53,7 @@
 # Nov02's tiled RoPE and Nov07's in-place output are on by default in the code; their off switches are
 # SGLANG_FUSED_ROPE_KV_TILED=0 (Nov02) and none (Nov07).
 
-description = "gpt-oss-120b draft-base1111 (TP1): perf1101 + fp8_e4m3 KV (prefill q static, decode q bf16); draft-base1111 trees"
+description = "gpt-oss-120b base1111 (TP1): perf1101 + fp8_e4m3 KV (prefill q static, decode q bf16); base1111 trees (upstream PRs)"
 arch = ["gfx1250"]
 extends = "gpt-oss-120b/perf1101"
 
