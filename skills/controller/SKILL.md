@@ -94,8 +94,10 @@ through the worker's login shell (its `~/.bash_profile` holds `AMD_LLM_API_KEY`;
 leaves the console), with this console's config root as `AKAO_CONFIG_ROOT` (docker's `ssh` wrapper needs it;
 without it a box needing akao's ssh config, h21-5, refuses and the window closes at once) and
 `--add-dir $AKAO_REPO_ROOT` (the worker reads its clone of the repo outside its working
-directory; without it the first read stops at a prompt). It refuses a second window of the
-same name: read that one instead.
+directory; without it the first read stops at a prompt). The clone is pre-trusted in the
+worker's `~/.claude.json` before `claude` starts (Claude Code 2.1.327 re-asks "Adding a new
+directory" for an untrusted `--add-dir` endlessly), so only the task folder's trust dialog
+remains. It refuses a second window of the same name: read that one instead.
 
 A worker on a GB300 tray (01-f3, 02-f3: NVIDIA, ARM64, an outside cloud) reaches the AMD
 gateway only through the console: init gives its launchers the route, and you keep
@@ -123,7 +125,7 @@ from before 10-31 may still have a tmux with one; leave it).
 Capture after every send, a few seconds later, to see that it took — and later that the
 agent acknowledged the task and its dir: an open window is not an accepted task.
 
-1. **The trust dialog.** A new `claude` first asks whether to trust the folder, with "No,
+1. **The trust dialog.** A new `claude` first asks whether to trust the (task) folder, with "No,
    exit" selected: you opened it, so answer it (`Down`, then `C-m`).
 2. **Handshake.** The first message is what tells the agent it is a worker
    (`$AKAO_REPO_ROOT/CLAUDE.md`, "Identify yourself"): *"You are a worker agent in container

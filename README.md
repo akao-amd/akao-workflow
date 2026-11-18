@@ -260,9 +260,12 @@ akao rm h13-16 base1021_pd                                     # stop and remove
   the worker's `claude` in a new window `<name>` of this machine's tmux (the current session, or
   `--session`): `docker -H ssh://<nick> exec -it [-w <dir>] akao_<name> bash -lc 'exec claude
   --add-dir $AKAO_REPO_ROOT'`, with this config root as `AKAO_CONFIG_ROOT` in the window
-  (docker's `ssh` wrapper reads akao's ssh config through it).  The worker must be running; a window of that
+  (docker's `ssh` wrapper reads akao's ssh config through it).  Before `claude` starts, the
+  worker's clone is marked trusted in its `~/.claude.json` (`projects[<clone>]
+  .hasTrustDialogAccepted`, other keys kept; best effort): Claude Code 2.1.327 otherwise asks
+  "Adding a new directory" for the `--add-dir` again and again.  The worker must be running; a window of that
   name refuses.  `--continue` resumes the directory's latest conversation, `--resume <id>` a
-  given one.  The agent's trust dialog and the first message are the controller's.
+  given one.  The agent's trust dialog (the task folder's) and the first message are the controller's.
 - **`akao rm <nick> <name>... [--home]`** stops and removes `akao_<name>` (by its id; `stop -t
   30`, then `rm` unless `--rm` already removed it; a paused one `rm -f`), and waits until
   docker no longer lists it.  An absent container is reported, not an error; one name failing

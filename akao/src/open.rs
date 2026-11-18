@@ -3,7 +3,8 @@
 //!
 //! The window runs `docker -H ssh://<nick> exec -it akao_<name> bash -lc 'exec claude ...'`:
 //! the worker's login shell (its ~/.bash_profile holds the gateway key; nothing secret leaves
-//! the console), with the worker's clone of the repo as an extra working directory.  The
+//! the console), with the worker's clone of the repo as an extra working directory, marked
+//! trusted in the worker's ~/.claude.json first (PRETRUST).  The
 //! window gets our AKAO_CONFIG_ROOT: docker's ssh goes through the `ssh` wrapper, which reads
 //! akao's ssh config from it, and the tmux server's environment may lack it.
 
@@ -13,6 +14,29 @@ use anyhow::{bail, Context, Result};
 
 /// The agent in a worker container (installed by init step 9, utils/agent.sh).
 const CLAUDE: &str = "/root/.local/bin/claude";
+
+/// Marks the worker's repo clone trusted in its ~/.claude.json, as the folder-trust dialog
+/// does, before the agent starts.  Claude Code 2.1.327 (ww47) asks "Adding a new directory"
+/// for an `--add-dir` it has no trust record of, says the answer "holds for this session",
+/// and asks again and again (11-18, megamoe workers on e21-4); a stored record skips it.
+/// The path comes in as argv[1] (never spliced into code); the file is rewritten only when
+/// the record is missing, through a 0600 temp file renamed over the symlink's target, other
+/// keys kept.  Best effort: if it fails, the agent starts anyway and asks.
+const PRETRUST: &str = r#"import json, os, sys
+d = sys.argv[1]
+if not d: sys.exit(1)
+p = os.path.realpath(os.path.expanduser("~/.claude.json"))
+c = {}
+if os.path.exists(p):
+    with open(p) as f: c = json.load(f)
+r = c.setdefault("projects", {}).setdefault(d, {})
+if r.get("hasTrustDialogAccepted") is not True:
+    r["hasTrustDialogAccepted"] = True
+    t = p + ".akao"
+    with os.fdopen(os.open(t, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+        json.dump(c, f, indent=2)
+    os.replace(t, p)
+"#;
 
 pub struct Options {
     pub nick: String,
@@ -29,7 +53,10 @@ pub struct Options {
 
 /// The command the window runs.  `$AKAO_REPO_ROOT` is the worker's, expanded by its shell.
 pub fn window_command(nick: &str, container: &str, opts: &Options) -> String {
-    let mut claude = format!("exec {CLAUDE}");
+    let mut claude = format!(
+        "python3 -I -c {} \"$AKAO_REPO_ROOT\" || true; exec {CLAUDE}",
+        crate::exec::q(PRETRUST)
+    );
     if opts.resume_latest {
         claude += " --continue";
     }
@@ -164,10 +191,17 @@ mod tests {
 
     #[test]
     fn the_window_runs_claude_in_the_workers_login_shell() {
-        assert_eq!(
-            window_command("h13-16", "akao_exp", &opts()),
-            "docker -H ssh://h13-16 exec -it akao_exp bash -lc \
-             'exec /root/.local/bin/claude --add-dir \"$AKAO_REPO_ROOT\"'"
+        let cmd = window_command("h13-16", "akao_exp", &opts());
+        assert!(
+            cmd.starts_with("docker -H ssh://h13-16 exec -it akao_exp bash -lc "),
+            "{cmd}"
+        );
+        let words = shlex::split(&cmd).unwrap();
+        let script = words.last().unwrap();
+        assert!(script.starts_with("python3 -I -c "), "{script}");
+        assert!(
+            script.ends_with("\"$AKAO_REPO_ROOT\" || true; exec /root/.local/bin/claude --add-dir \"$AKAO_REPO_ROOT\""),
+            "{script}"
         );
         let o = Options {
             cwd: Some("/2026/ww43/exp/0002_a b".into()),
@@ -179,9 +213,9 @@ mod tests {
         assert!(cmd.contains("claude --continue --add-dir"), "{cmd}");
         // What the console's shell runs splits back into the argv, $AKAO_REPO_ROOT unexpanded.
         let words = shlex::split(&cmd).unwrap();
-        assert_eq!(
-            words.last().unwrap(),
-            "exec /root/.local/bin/claude --continue --add-dir \"$AKAO_REPO_ROOT\""
-        );
+        assert!(words
+            .last()
+            .unwrap()
+            .ends_with("exec /root/.local/bin/claude --continue --add-dir \"$AKAO_REPO_ROOT\""));
     }
 }

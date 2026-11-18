@@ -35,6 +35,7 @@ if a[:2]==['test','-d']: sys.exit(0 if Path(a[2]).is_dir() else 1)
 assert a[:2]==['bash','-lc'],a
 # Model the worker shell without reading real login profiles or invoking a real agent.
 os.environ['AKAO_REPO_ROOT']=os.environ.get('FAKE_WORKER_REPO','worker repo with spaces')
+os.environ['HOME']=str(r/'home'); (r/'home').mkdir(exist_ok=True)
 script=a[2].replace('/root/.local/bin/claude', str(r/'bin/agent'))
 sys.exit(subprocess.run(['/bin/bash','-c',script]).returncode)
 "#;
@@ -89,6 +90,10 @@ fn open_targets_the_exact_session_and_passes_environment_and_quoted_resume_argum
         vec!["--resume", &resume, "--add-dir", worker_repo]
     );
     assert!(!s.path("injected").exists());
+    // The repo clone is trusted in the worker's ~/.claude.json before the agent starts.
+    let cfg: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(s.path("home/.claude.json")).unwrap()).unwrap();
+    assert_eq!(cfg["projects"][worker_repo]["hasTrustDialogAccepted"], true);
     assert!(s
         .events("docker.jsonl")
         .iter()
@@ -98,8 +103,23 @@ fn open_targets_the_exact_session_and_passes_environment_and_quoted_resume_argum
 #[test]
 fn open_latest_uses_the_current_session_and_dry_run_creates_no_window() {
     let s = sandbox("open-latest");
+    // An existing ~/.claude.json keeps what it holds; only the repo's trust record is added.
+    fs::create_dir_all(s.path("home")).unwrap();
+    fs::write(
+        s.path("home/.claude.json"),
+        r#"{"keep": 1, "projects": {"/task": {"hasTrustDialogAccepted": true, "allowedTools": []}}}"#,
+    )
+    .unwrap();
     let (code, out) = s.run(&["open", "fakebox", "worker", "--continue"]);
     assert_eq!(code, 0, "{out}");
+    let cfg: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(s.path("home/.claude.json")).unwrap()).unwrap();
+    assert_eq!(cfg["keep"], 1);
+    assert_eq!(cfg["projects"]["/task"]["hasTrustDialogAccepted"], true);
+    assert_eq!(
+        cfg["projects"]["worker repo with spaces"]["hasTrustDialogAccepted"],
+        true
+    );
     assert_eq!(
         s.events("agent.jsonl")[0],
         vec!["--continue", "--add-dir", "worker repo with spaces"]
