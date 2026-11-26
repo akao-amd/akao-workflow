@@ -1,6 +1,9 @@
 #!/bin/bash
 #
-# agent_greenhouse.sh - claude and codex on the greenhouse GB300 trays (01-f3, 02-f3, ...)
+# agent_greenhouse.sh - claude and codex on the greenhouse GB300 trays (<NN>-f3)
+#
+# Give it only the trays the user named in this session: trays are lent and taken back, and
+# one that worked before may now refuse the key (controller skill, "Greenhouse GB300 trays").
 #
 # The trays are ARM64 boxes in an outside cloud, reached through gb300-proxy.  agent.sh
 # installs the arm64 builds there, but the AMD LLM gateway (llm-api.amd.com) does not

@@ -124,8 +124,14 @@ worker's `~/.claude.json` before `claude` starts (Claude Code 2.1.327 re-asks "A
 directory" for an untrusted `--add-dir` endlessly), so only the task folder's trust dialog
 remains. It refuses a second window of the same name: read that one instead.
 
-A worker on a GB300 tray (01-f3, 02-f3: NVIDIA, ARM64, an outside cloud) reaches the AMD
-gateway only through the console: init gives its launchers the route, and you keep
+**Greenhouse GB300 trays** (`<NN>-f3`: NVIDIA, ARM64, an outside cloud, behind `gb300-proxy`) are
+lent and taken back: a tray that worked last week may now refuse our key or be someone else's
+(11-26: 01-f3 and 02-f3 refused it, 03-05-f3 took it). So reach, probe, tunnel to or init only
+the trays the user names in this session, never one because hosts.tsv, the ssh config or an
+old record lists it; do not "check against a known-good tray" either. Tell the user when one of
+theirs refuses, and leave the others alone.
+
+A worker on a GB300 tray reaches the AMD gateway only through the console: init gives its launchers the route, and you keep
 `$AKAO_REPO_ROOT/utils/agent_greenhouse.sh tunnel <nick>...` running in a window of your own
 (`-e AKAO_CONFIG_ROOT=...` as above); without it the worker's `claude` cannot answer.
 `agent_greenhouse.sh check <nick> akao_<name>` says whether the route answers.
