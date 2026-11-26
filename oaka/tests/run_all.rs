@@ -1815,6 +1815,37 @@ fn doctor_reports_engines() {
 }
 
 #[test]
+fn doctor_finds_an_editable_engine_from_any_working_directory() {
+    // The image installs SGLang editable through a meta-path finder (setuptools'
+    // `__editable___*_finder`), which Python asks only after sys.path.  `python3 -c` puts the
+    // working directory first there, and a checkout dir named like the package (the worker's
+    // `repos/sglang/`) is found as a namespace package with no origin: doctor read the engine
+    // as missing ("no engines", 11-26, d21-02).  Here ATOM stands in for it.
+    let sb = Sandbox::new("doctor-editable");
+    let editable = sb.root.join("editable");
+    fs::create_dir_all(&editable).unwrap();
+    fs::rename(sb.root.join("py/atom"), editable.join("atom")).unwrap();
+    fs::write(
+        sb.root.join("py/sitecustomize.py"),
+        format!(
+            "import sys, importlib.machinery as m\n\
+             class F:\n    \
+                 @classmethod\n    \
+                 def find_spec(cls, name, path=None, target=None):\n        \
+                     if name == 'atom':\n            \
+                         return m.PathFinder.find_spec(name, [{:?}])\n\
+             sys.meta_path.append(F)\n",
+            editable.display().to_string()
+        ),
+    )
+    .unwrap();
+    fs::create_dir_all(sb.work().join("atom")).unwrap(); // a checkout's dir, no __init__.py
+    let text = String::from_utf8_lossy(&sb.oaka(&["doctor"]).output().unwrap().stdout).into_owned();
+    let want = format!("ok    atom        {}", editable.join("atom/__init__.py").display());
+    assert!(text.contains(&want), "{want:?} not in {text}");
+}
+
+#[test]
 fn artifact_root_is_reported_and_checked() {
     let sb = Sandbox::new("artifacts");
     let out = sb.oaka(&["doctor"]).output().unwrap();

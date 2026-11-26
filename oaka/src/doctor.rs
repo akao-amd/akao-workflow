@@ -54,10 +54,15 @@ fn which(name: &str) -> Option<PathBuf> {
         })
 }
 
-/// stdout of a successful command, with extra environment.
+/// stdout of a successful command, with extra environment.  Run from `/`: `python3 -c` puts
+/// the working directory first on sys.path, and a checkout's dir named like a package there
+/// (`repos/sglang/` in the artifact root) is found as a namespace package with no origin
+/// before the meta-path finder of an editable install is asked, so an installed engine read
+/// as missing ("no engines", 0002 on d21-02).
 fn output(argv: &[&str], env: &[(&str, &str)]) -> Option<String> {
     let out = Command::new(argv[0])
         .args(&argv[1..])
+        .current_dir("/")
         .envs(env.iter().copied())
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -216,6 +221,7 @@ src = open(importlib.util.find_spec('infx.bench_serving.benchmark_serving').orig
 assert '/start_profile' in src, 'benchmark_serving has no --profile hook (/start_profile)'\n";
     match Command::new("python3")
         .args(["-c", PROBE])
+        .current_dir("/") // as `output`
         .env("PYTHONPATH", infx)
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .output()
