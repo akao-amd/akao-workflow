@@ -792,20 +792,19 @@ mod tests {
 
     #[test]
     fn a_layout_may_measure_its_own_points() {
-        // meta1124-mi450 (user, 11-26): TP1 cannot hold 168/44/8 in its KV cache, so its
-        // layouts measure 97/25/3; TP2 keeps the suite's points.
+        // A layout with its own points measures those; the others keep the suite's.
         let (root, lib) = lib();
         fs::write(
             lib.suite_path("own"),
-            "description = 'own'\ngpus = 2\npoints = [[32768, 1024, 168], [131072, 1024, 44]]\n\
+            "description = 'own'\ngpus = 2\npoints = [[1000, 100, 64], [2000, 100, 32]]\n\
              [[layout]]\nname = 'tp1x2'\nservers = [[0], [1]]\nlockstep = true\n\
-             points = [[32768, 1024, 97], [131072, 1024, 25]]\n\
+             points = [[1000, 100, 16], [2000, 100, 8]]\n\
              [[layout]]\nname = 'tp2'\nservers = [[0, 1]]\n",
         )
         .unwrap();
         let s = lib.suite("own").unwrap();
         assert!(
-            s.text().contains("its own points 32768/1024 c97, 131072/1024 c25"),
+            s.text().contains("its own points 1000/100 c16, 2000/100 c8"),
             "{}",
             s.text()
         );
@@ -823,14 +822,14 @@ mod tests {
         for p in [tp1x2, tp2] {
             plan::check_plan(&root, toml::from_str(p).unwrap(), &lib, &plan::Machine::default()).unwrap();
         }
-        assert!(tp1x2.contains("isl_osl = [[32768, 1024]]\nconc = [97]"), "{tp1x2}");
-        assert!(tp1x2.contains("isl_osl = [[131072, 1024]]\nconc = [25]"), "{tp1x2}");
+        assert!(tp1x2.contains("isl_osl = [[1000, 100]]\nconc = [16]"), "{tp1x2}");
+        assert!(tp1x2.contains("isl_osl = [[2000, 100]]\nconc = [8]"), "{tp1x2}");
         assert!(
-            !tp1x2.contains("conc = [168]") && !tp1x2.contains("conc = [44]"),
+            !tp1x2.contains("conc = [64]") && !tp1x2.contains("conc = [32]"),
             "{tp1x2}"
         );
         assert_eq!(tp1x2.matches("lockstep = \"tp1x2_1\"").count(), 2);
-        assert!(tp2.contains("conc = [168]") && tp2.contains("conc = [44]"), "{tp2}");
+        assert!(tp2.contains("conc = [64]") && tp2.contains("conc = [32]"), "{tp2}");
 
         let err = |name: &str, text: &str| {
             fs::write(lib.suite_path(name), text).unwrap();
