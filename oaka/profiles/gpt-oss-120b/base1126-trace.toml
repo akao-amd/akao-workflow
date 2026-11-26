@@ -1,0 +1,10 @@
+# gpt-oss-120b/base1126 for decode traces (TP1): base1111-trace's change on base1126 (read base1111-trace.toml for
+# why): enable-mixed-chunk off, so a newly admitted prompt's prefill is its own EXTEND step and decode captures stay
+# clean.  Made 2026-11-26 for meta1124-mi450-trace on base1126, not yet run.  The profiler sync base1111 needed for
+# TP2 traces is on base1126's SGLang branch too (base1126.toml).
+
+description = "gpt-oss-120b/base1126 for traces (TP1): enable-mixed-chunk off"
+extends = "gpt-oss-120b/base1126"
+
+[args]
+enable-mixed-chunk = false

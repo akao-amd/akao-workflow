@@ -1,0 +1,11 @@
+# gpt-oss-120b/base1126-tp2 for decode traces: base1111-tp2-trace's changes on base1126-tp2 (read
+# base1111-tp2-trace.toml for why): enable-mixed-chunk off, and the prefill CUDA graph disabled (the breakable one
+# hung TP2 servers under the profiler on base1111's trees).  Made 2026-11-26 for meta1124-mi450-trace on base1126,
+# not yet run; base1126-tp2 itself is not yet measured either.
+
+description = "gpt-oss-120b/base1126-tp2 for traces: enable-mixed-chunk off, prefill CUDA graph disabled"
+extends = "gpt-oss-120b/base1126-tp2"
+
+[args]
+enable-mixed-chunk = false
+cuda-graph-backend-prefill = "disabled"

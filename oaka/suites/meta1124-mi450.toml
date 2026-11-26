@@ -1,36 +1,46 @@
-# meta1124 on MI450 (user, 2026-11-26: "apply meta1124 to the mi450 profile as well, say base1111"):
-# meta1124's points, on one physical MI45x GPU in DPX mode (plan GPUs 2k, 2k+1), as the
-# mi45x-dpx-standard suite serves it: tp1 on the first partition (the sibling idle), tp1x2 (a TP1 server
-# on each partition, measured together in lockstep: the GPU's throughput is the two servers' sum), tp2 across both.
-# TP2 serves <profile>-tp2, the recipe's TP2 variant (base1111-tp2: custom all-reduce, AITER #7155).
+# meta1124 on MI450 (user, 2026-11-26: "apply meta1124 to the mi450 profile as well, say base1111"; the recipe is now
+# base1126, base1111 rebased onto the 1125 image's stock trees): meta1124's shapes on one physical MI45x GPU in DPX
+# mode (plan GPUs 2k, 2k+1): tp1x2 (a TP1 server on each partition, measured together in lockstep: the GPU's
+# throughput is the two servers' sum) and tp2 across both.  TP2 serves <profile>-tp2, the recipe's TP2 variant
+# (base1126-tp2: custom all-reduce).
 #
-# From meta1124: the long-context override and no batch cap, on every server.
-# Concurrency (user, 11-26): TP1 (tp1, tp1x2: each server on one partition) measures 97/25/3, not 168/44/8:
-# one partition's fp8 KV cache holds about 2.30M tokens (base1111, 0002 on d21-02: 143.5 GB, weights 69 GB),
-# so 168 x 33k, 44 x 132k and 8 x 1.05M would queue.  TP2 keeps meta1124's 168/44/8.
-# base1111's fp8 KV loses accuracy at long context (its own notes: RULER2 127k, -4.4 pts vs bf16).
+# Self-contained, not `extends = "meta1124"`: a suite cannot drop a parent's layout, and meta1124's tp1 is not
+# measured here (user, 11-26: TP1 cancelled).  Kept in step with meta1124 by hand: its shapes, the long-context
+# override and no batch cap on every server, the GSM8K gate, range ratio 0.8.
 #
-# Draft:  oaka draft --suite meta1124-mi450 --profile <model>/<recipe> --gpus 4,5 --thinking [--port N]
-# (--thinking: the GSM8K gate as base1111's 0.958-0.964 were measured)
-# (base1111 is the user's example recipe).
+# Concurrency (user, 11-26):
+#   tp2    32768/1024 c168, 131072/1024 c44, 1048576/256 c8: meta1124's, unchanged.
+#   tp1x2  half of it per server: c84, c22, and c3 at 1048576/256, not c4.  Each TP1 server loads the full weights
+#          (TP2 loads half per partition), which leaves one partition about 2.30M fp8 KV tokens (base1111, 0002 on
+#          d21-02: 143.5 GB, weights 69 GB, before the long-context override): two 1.05M sequences, so c4 does not
+#          fit; c3 already queues one.
+# fp8 KV at long context: base1111 lost accuracy at 127k (RULER2 -4.4 pts vs bf16, TP1); base1126's own RULER2,
+# TP1 and TP2, is task 0005 on d21-02 (11-26).
+#
+# Draft:  oaka draft --suite meta1124-mi450 --profile gpt-oss-120b/base1126 --gpus 4,5 --thinking [--port N]
+# (--thinking: the GSM8K gate as base1111's 0.958-0.964 and base1126's 0.958 were measured)
 
-extends = "meta1124"
-description = "meta1124 on MI45x DPX: TP1 (one partition), TP1x2 (both, together): 32768/1024 c97, 131072/1024 c25, 1048576/256 c3; TP2 (both): c168, c44, c8; GSM8K gate"
+description = "meta1124 on MI45x DPX: TP1x2 (both partitions, together) 32768/1024 c84, 131072/1024 c22, 1048576/256 c3; TP2 (both) c168, c44, c8; GSM8K gate"
 arch = ["gfx1250"]
+gpus = 2
 partitions_of_one_gpu = true
+points = [[32768, 1024, 168], [131072, 1024, 44], [1048576, 256, 8]]
+range_ratio = 0.8
+gsm8k = { min_score = 0.93 }
 
-[[layout]]
-name = "tp1"
-description = "one TP1 server on the first partition; the sibling idle"
-servers = [[0]]
-points = [[32768, 1024, 97], [131072, 1024, 25], [1048576, 256, 3]]
+[env]
+SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN = "1"
+
+[args]
+context-length = 1049088
+max-running-requests = false
 
 [[layout]]
 name = "tp1x2"
-description = "TP1 on each partition, measured together"
+description = "TP1 on each partition, measured together; half of TP2's concurrency per server"
 servers = [[0], [1]]
 lockstep = true
-points = [[32768, 1024, 97], [131072, 1024, 25], [1048576, 256, 3]]
+points = [[32768, 1024, 84], [131072, 1024, 22], [1048576, 256, 3]]
 
 [[layout]]
 name = "tp2"
