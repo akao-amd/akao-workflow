@@ -20,7 +20,10 @@
 
 description = "gpt-oss-120b MXFP4 (openai), GB300: SGLang defaults, the user's launch_server_gb300.sh"
 arch = ["sm_103"]
-model = "/model/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a"
+# Model: /model/hub/... since 2026-11-26.  On trays 03-05-f3 the hub cache at /model's top level holds this
+# snapshot's links but 24 of 37 dangle (156K); /model/hub has the same snapshot and blob ids, complete (183G)
+# (meta1124_t03 0001_recipe_compare, probes/probe_hf_cache_gpt_oss.out).
+model = "/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a"
 
 [args]
 host = "0.0.0.0"
