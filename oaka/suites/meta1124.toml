@@ -1,0 +1,31 @@
+# meta1124 suite ("meta1124 gpt-oss-120b small/medium/large", user, ww48 controller, 2026-11-26):
+# gpt-oss-120b on GB300 at three shapes, as one TP1 server and one TP2 server, each first gated by
+# GSM8K.  Traces of the same points, both layouts, come after it: meta1124-trace.
+#   small   32768/1024  c168
+#   medium  131072/1024 c44
+#   large   1048575/256 c8
+# OPEN (11-26): medium and large exceed gpt-oss-120b's 131072-token context; the user checks them.
+#
+# The client policy is oaka's fixed-seq, i.e. InferenceX's own: 10 prompts per unit of concurrency,
+# its in-client warmups, run 1 is a point's number (repeats 1), range ratio 0.8.
+#
+# Draft:  oaka draft --suite meta1124 --profile gpt-oss-120b/gb300 --gpus 0,1 [--port N]
+# writes tp1/ and tp2/ plan.toml under the task dir; run them one after another.  The profile
+# pins no tp: the layout's GPU count picks it.
+
+description = "meta1124: gpt-oss-120b TP1, TP2; 32768/1024 c168, 131072/1024 c44, 1048575/256 c8; GSM8K gate"
+arch = ["sm_103"]
+gpus = 2
+points = [[32768, 1024, 168], [131072, 1024, 44], [1048575, 256, 8]]
+range_ratio = 0.8
+gsm8k = { min_score = 0.93 }
+
+[[layout]]
+name = "tp1"
+description = "one TP1 server; the second GPU idle"
+servers = [[0]]
+
+[[layout]]
+name = "tp2"
+description = "one TP2 server on both GPUs"
+servers = [[0, 1]]

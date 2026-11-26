@@ -1,0 +1,10 @@
+# meta1124's traces (user, 2026-11-26): SGLang GPU traces of the meta1124 points, both layouts, with
+# 20 DECODE steps per decode capture (prefill: 10 EXTEND steps).  Run after the meta1124 suite on
+# the same GPUs.  The traced server's numbers are each point's warm run (warm.json), not the sweep's.
+#
+# Draft:  oaka draft --suite meta1124-trace --profile gpt-oss-120b/gb300 --gpus 0,1 [--port N]
+
+extends = "meta1124"
+description = "meta1124 traces: TP1, TP2; 20 decode steps; GSM8K gate"
+client = "trace"
+decode_steps = 20

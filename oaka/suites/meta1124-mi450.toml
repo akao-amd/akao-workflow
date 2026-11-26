@@ -1,0 +1,26 @@
+# meta1124 on MI450 (user, 2026-11-26: "apply meta1124 to the mi450 profile as well, say base1111"):
+# meta1124's points, on one physical MI45x GPU in DPX mode (plan GPUs 2k, 2k+1), as the
+# mi45x-dpx-standard suite serves it: tp1 on the first partition (the sibling idle), tp2 across both.
+# TP2 serves <profile>-tp2, the recipe's TP2 variant (base1111-tp2: custom all-reduce, AITER #7155).
+#
+# Caveats carried over from meta1124 and base1111:
+# - medium and large exceed gpt-oss-120b's 131072-token context (OPEN, the user's to settle).
+# - base1111's fp8 KV loses accuracy at long context (its own notes: RULER2 127k, -4.4 pts vs bf16).
+#
+# Draft:  oaka draft --suite meta1124-mi450 --profile gpt-oss-120b/base1111 --gpus 4,5 [--port N]
+
+extends = "meta1124"
+description = "meta1124 on MI45x DPX: TP1 (one partition), TP2 (both); 32768/1024 c168, 131072/1024 c44, 1048575/256 c8; GSM8K gate"
+arch = ["gfx1250"]
+partitions_of_one_gpu = true
+
+[[layout]]
+name = "tp1"
+description = "one TP1 server on the first partition; the sibling idle"
+servers = [[0]]
+
+[[layout]]
+name = "tp2"
+description = "one TP2 server across both partitions of one GPU"
+servers = [[0, 1]]
+profile_suffix = "-tp2"
