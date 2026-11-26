@@ -96,6 +96,9 @@ pub struct Layout {
     /// Serve `<profile><suffix>` instead of the profile, e.g. "-pd1p1d" for its prefill-decode
     /// variant; the draft fails, naming it, when the library has none.
     pub profile_suffix: Option<String>,
+    /// Exact `[isl, osl, conc]` points for this layout only, replacing the suite's points or
+    /// matrix: where the layout cannot hold the suite's concurrency (a TP1 server's KV cache).
+    pub points: Option<Vec<[u32; 3]>>,
 }
 
 /// A suite with its extends chain applied.
@@ -267,14 +270,7 @@ impl Suite {
             if !self.isl_osl.is_empty() || !self.conc.is_empty() {
                 bail!("{at}: points, or isl_osl and conc, not both");
             }
-            if self.points.iter().flatten().any(|&v| v == 0) {
-                bail!("{at}: points must be positive");
-            }
-            let mut seen = self.points.clone();
-            seen.sort();
-            if seen.windows(2).any(|w| w[0] == w[1]) {
-                bail!("{at}: a point is listed twice");
-            }
+            check_points(&at, &self.points)?;
         }
         if let Some(g) = &self.gsm8k {
             if !(0.0..=1.0).contains(&g.min_score) {
@@ -321,6 +317,15 @@ impl Suite {
             if l.lockstep && self.client == SuiteClient::Trace {
                 bail!("{at}, layout {}: lockstep is for fixed-seq clients, not traces", l.name);
             }
+            if let Some(points) = &l.points {
+                if points.is_empty() {
+                    bail!(
+                        "{at}, layout {}: points is empty (drop it to measure the suite's)",
+                        l.name
+                    );
+                }
+                check_points(&format!("{at}, layout {}", l.name), points)?;
+            }
         }
         Ok(())
     }
@@ -332,14 +337,15 @@ impl Suite {
         if self.points.is_empty() {
             return vec![(self.isl_osl.clone(), self.conc.clone())];
         }
-        let mut groups: Vec<(Vec<[u32; 2]>, Vec<u32>)> = Vec::new();
-        for &[i, o, c] in &self.points {
-            match groups.iter_mut().find(|(_, conc)| conc[0] == c) {
-                Some((pairs, _)) => pairs.push([i, o]),
-                None => groups.push((vec![[i, o]], vec![c])),
-            }
+        point_groups(&self.points)
+    }
+
+    /// A layout's groups: its own points when it has them, else the suite's.
+    pub fn layout_groups(&self, l: &Layout) -> Vec<(Vec<[u32; 2]>, Vec<u32>)> {
+        match &l.points {
+            Some(points) => point_groups(points),
+            None => self.groups(),
         }
-        groups
     }
 
     /// The suite's own description, as `oaka suite show` prints it.
@@ -397,10 +403,17 @@ impl Suite {
         }
         for l in &self.layouts {
             out += &format!(
-                "  layout {:<8} servers on {}{}{}{}\n",
+                "  layout {:<8} servers on {}{}{}{}{}\n",
                 l.name,
                 l.servers.iter().map(|g| toml_list(g)).collect::<Vec<_>>().join(" "),
                 if l.lockstep { ", in lockstep" } else { "" },
+                l.points
+                    .as_ref()
+                    .map(|p| {
+                        let p: Vec<String> = p.iter().map(|[i, o, c]| format!("{i}/{o} c{c}")).collect();
+                        format!(", its own points {}", p.join(", "))
+                    })
+                    .unwrap_or_default(),
                 l.profile_suffix
                     .as_ref()
                     .map(|s| format!(", profile <profile>{s}"))
@@ -410,6 +423,30 @@ impl Suite {
         }
         out
     }
+}
+
+/// Exact points grouped by concurrency, in the order they are listed.
+fn point_groups(points: &[[u32; 3]]) -> Vec<(Vec<[u32; 2]>, Vec<u32>)> {
+    let mut groups: Vec<(Vec<[u32; 2]>, Vec<u32>)> = Vec::new();
+    for &[i, o, c] in points {
+        match groups.iter_mut().find(|(_, conc)| conc[0] == c) {
+            Some((pairs, _)) => pairs.push([i, o]),
+            None => groups.push((vec![[i, o]], vec![c])),
+        }
+    }
+    groups
+}
+
+fn check_points(at: &str, points: &[[u32; 3]]) -> Result<()> {
+    if points.iter().flatten().any(|&v| v == 0) {
+        bail!("{at}: points must be positive");
+    }
+    let mut seen = points.to_vec();
+    seen.sort();
+    if seen.windows(2).any(|w| w[0] == w[1]) {
+        bail!("{at}: a point is listed twice");
+    }
+    Ok(())
 }
 
 pub struct DraftOptions<'a> {
@@ -531,7 +568,7 @@ pub fn render(lib: &Library, suite: &Suite, o: &DraftOptions) -> Result<Vec<(Str
                 );
             }
         }
-        let groups = suite.groups();
+        let groups = suite.layout_groups(l);
         for (k, (isl_osl, conc)) in groups.iter().enumerate() {
             let pairs: Vec<String> = isl_osl.iter().map(|[i, o]| format!("[{i}, {o}]")).collect();
             for name in &names {
@@ -751,6 +788,63 @@ mod tests {
         .unwrap();
         assert!(format!("{:#}", lib.suite("bad").err().unwrap()).contains("GPU position 2"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_layout_may_measure_its_own_points() {
+        // meta1124-mi450 (user, 11-26): TP1 cannot hold 168/44/8 in its KV cache, so its
+        // layouts measure 97/25/3; TP2 keeps the suite's points.
+        let (root, lib) = lib();
+        fs::write(
+            lib.suite_path("own"),
+            "description = 'own'\ngpus = 2\npoints = [[32768, 1024, 168], [131072, 1024, 44]]\n\
+             [[layout]]\nname = 'tp1x2'\nservers = [[0], [1]]\nlockstep = true\n\
+             points = [[32768, 1024, 97], [131072, 1024, 25]]\n\
+             [[layout]]\nname = 'tp2'\nservers = [[0, 1]]\n",
+        )
+        .unwrap();
+        let s = lib.suite("own").unwrap();
+        assert!(
+            s.text().contains("its own points 32768/1024 c97, 131072/1024 c25"),
+            "{}",
+            s.text()
+        );
+        let o = DraftOptions {
+            dir: std::path::Path::new("/2026/ww48/w/0001_own"),
+            profile: "m/r",
+            gpus: &[4, 5],
+            stacks: &[],
+            thinking: false,
+            port: None,
+            machine: &plan::Machine::default(),
+        };
+        let plans = render(&lib, &s, &o).unwrap();
+        let (tp1x2, tp2) = (&plans[0].1, &plans[1].1);
+        for p in [tp1x2, tp2] {
+            plan::check_plan(&root, toml::from_str(p).unwrap(), &lib, &plan::Machine::default()).unwrap();
+        }
+        assert!(tp1x2.contains("isl_osl = [[32768, 1024]]\nconc = [97]"), "{tp1x2}");
+        assert!(tp1x2.contains("isl_osl = [[131072, 1024]]\nconc = [25]"), "{tp1x2}");
+        assert!(
+            !tp1x2.contains("conc = [168]") && !tp1x2.contains("conc = [44]"),
+            "{tp1x2}"
+        );
+        assert_eq!(tp1x2.matches("lockstep = \"tp1x2_1\"").count(), 2);
+        assert!(tp2.contains("conc = [168]") && tp2.contains("conc = [44]"), "{tp2}");
+
+        let err = |name: &str, text: &str| {
+            fs::write(lib.suite_path(name), text).unwrap();
+            format!("{:#}", lib.suite(name).err().unwrap())
+        };
+        let layout = "[[layout]]\nname = 'tp1'\nservers = [[0]]\n";
+        assert!(err("empty", &format!("extends = 'own'\n{layout}points = []\n")).contains("points is empty"));
+        assert!(err(
+            "dup",
+            &format!("extends = 'own'\n{layout}points = [[1, 1, 1], [1, 1, 1]]\n")
+        )
+        .contains("layout tp1: a point is listed twice"));
+        assert!(err("zero", &format!("extends = 'own'\n{layout}points = [[1, 1, 0]]\n"))
+            .contains("layout tp1: points must be positive"));
     }
 
     #[test]

@@ -313,6 +313,8 @@ name = "tp1x2"                   # the plan's directory; its servers are tp1x2_0
 servers = [[0], [1]]             # one entry per server: positions in --gpus
 lockstep = true                  # measure them together (their fixed-seq clients in lockstep)
 # profile_suffix = "-tp2"        # serve <profile><suffix>: the recipe's variant for this layout
+# points = [[32768, 1024, 97]]   # this layout's own exact points, replacing the suite's (a TP1
+                                 # server that cannot hold the suite's concurrency in its KV cache)
 ```
 
 A layout whose servers need another recipe than the measured one (TP2's all-reduce setting, PD's

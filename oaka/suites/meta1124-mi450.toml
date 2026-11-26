@@ -5,13 +5,17 @@
 # TP2 serves <profile>-tp2, the recipe's TP2 variant (base1111-tp2: custom all-reduce, AITER #7155).
 #
 # From meta1124: the long-context override and no batch cap, on every server.
+# Concurrency (user, 11-26): TP1 (tp1, tp1x2: each server on one partition) measures 97/25/3, not 168/44/8:
+# one partition's fp8 KV cache holds about 2.30M tokens (base1111, 0002 on d21-02: 143.5 GB, weights 69 GB),
+# so 168 x 33k, 44 x 132k and 8 x 1.05M would queue.  TP2 keeps meta1124's 168/44/8.
 # base1111's fp8 KV loses accuracy at long context (its own notes: RULER2 127k, -4.4 pts vs bf16).
 #
-# Draft:  oaka draft --suite meta1124-mi450 --profile <model>/<recipe> --gpus 4,5 [--port N]
+# Draft:  oaka draft --suite meta1124-mi450 --profile <model>/<recipe> --gpus 4,5 --thinking [--port N]
+# (--thinking: the GSM8K gate as base1111's 0.958-0.964 were measured)
 # (base1111 is the user's example recipe).
 
 extends = "meta1124"
-description = "meta1124 on MI45x DPX: TP1 (one partition), TP1x2 (both, together), TP2 (both); 32768/1024 c168, 131072/1024 c44, 1048576/256 c8; GSM8K gate"
+description = "meta1124 on MI45x DPX: TP1 (one partition), TP1x2 (both, together): 32768/1024 c97, 131072/1024 c25, 1048576/256 c3; TP2 (both): c168, c44, c8; GSM8K gate"
 arch = ["gfx1250"]
 partitions_of_one_gpu = true
 
@@ -19,12 +23,14 @@ partitions_of_one_gpu = true
 name = "tp1"
 description = "one TP1 server on the first partition; the sibling idle"
 servers = [[0]]
+points = [[32768, 1024, 97], [131072, 1024, 25], [1048576, 256, 3]]
 
 [[layout]]
 name = "tp1x2"
 description = "TP1 on each partition, measured together"
 servers = [[0], [1]]
 lockstep = true
+points = [[32768, 1024, 97], [131072, 1024, 25], [1048576, 256, 3]]
 
 [[layout]]
 name = "tp2"
