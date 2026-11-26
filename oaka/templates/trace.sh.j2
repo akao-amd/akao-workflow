@@ -41,7 +41,7 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 
 say "$(date +%H:%M:%S) probe: the profiler's rules on this server -> ${OUT#"$WORKDIR"/}/probe/"
-if ! python3 "$HERE/trace_probe.py" "http://127.0.0.1:$PORT" {{ served | q }} "$OUT/probe" {{ tp }} \
+if ! python3 "$HERE/trace_probe.py" "http://127.0.0.1:$PORT" {{ served | q }} "$OUT/probe" {{ tp }}{% if prefill_steps == 0 %} decode-only{% endif %} \
     >"$OUT/probe.log" 2>&1; then
     cat "$OUT/probe.log"
     say "FATAL: the profiler does not behave as the capture practice assumes; no traces taken"
@@ -81,7 +81,7 @@ for point in "${POINTS[@]}"; do
     for PASS in $(seq 1 $MAX_PASSES); do
         say "$(date +%H:%M:%S) $NAME: flush, profiled pass $PASS"
         mkdir -p "$P/pass$PASS"
-        python3 "$HERE/trace_point.py" "${FLAGS[@]}" --out "$P" --pass "$PASS" --tp {{ tp }} --decode-steps {{ decode_steps }} \
+        python3 "$HERE/trace_point.py" "${FLAGS[@]}" --out "$P" --pass "$PASS" --tp {{ tp }} --decode-steps {{ decode_steps }} --prefill-steps {{ prefill_steps }} \
             >"$P/pass$PASS/trace_point.log" 2>&1
         RC=$?
         # The driver's own last line: the interpreter may print after it (nanobind's leak report

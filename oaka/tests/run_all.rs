@@ -2033,6 +2033,41 @@ fn trace_client_captures_the_plans_decode_steps() {
     sb.assert_no_leftovers();
 }
 
+/// `prefill_steps = 0`: decode traces only; neither the probe nor the passes arm a prefill capture.
+#[test]
+fn trace_client_takes_decode_traces_only() {
+    let _servers = servers_shared();
+    let sb = Sandbox::new("trace_decode");
+    let (a, port) = server_of("a", "m/base", 0, "");
+    let plan = format!(
+        "{a}{}decode_steps = 20\nprefill_steps = 0\n",
+        trace_client("[[64, 40]]", "[4]")
+    );
+    let (code, out) = sb.run(&plan, &[("FAKE_STEP_S", "0.01")]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("[trace_probe] A_prefill_ends_at_decode: skipped"), "{out}");
+    assert!(out.contains("[trace_probe] B_num_steps_9_gives_10: PASS"), "{out}");
+    let point = sb.work().join("results/01_trace_a/a_isl64_osl40_c4");
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(point.join("state.json")).unwrap()).unwrap();
+    let caps = state["captures"].as_array().unwrap();
+    assert!(caps.iter().all(|c| c["stage"] == "decode"), "{state}");
+    assert!(
+        caps.iter()
+            .any(|c| c["use"] == "clean" && c["bs"] == serde_json::json!(vec![4; 20])),
+        "{state}"
+    );
+    assert_eq!(state["prefill_steps"], 0, "{state}");
+    let ev = events(&sb, port);
+    assert!(ev.iter().any(|e| e.0 == "arm" && e.1 == "probeB"), "{ev:?}");
+    assert!(
+        !ev.iter()
+            .any(|e| e.0 == "arm" && (e.1 == "probeA" || e.1.contains("prefill"))),
+        "a prefill capture was armed: {ev:?}"
+    );
+    sb.assert_no_leftovers();
+}
+
 /// A point whose traces stay incomplete gets every pass, each flushed, and the client exits 3;
 /// a profiler that breaks the practice's rules stops the client at the probe, before any run.
 #[test]

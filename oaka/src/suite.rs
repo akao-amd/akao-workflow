@@ -41,6 +41,8 @@ pub struct SuiteFile {
     pub range_ratio: Option<f64>,
     /// A trace client's DECODE steps per decode capture (the plan's `decode_steps`; default 10).
     pub decode_steps: Option<u32>,
+    /// A trace client's prefill EXTEND steps (the plan's `prefill_steps`; 0: decode traces only).
+    pub prefill_steps: Option<u32>,
     /// A gsm8k gate per server, before its throughput points.
     pub gsm8k: Option<Gsm8kGate>,
     #[serde(default)]
@@ -104,6 +106,7 @@ pub struct Suite {
     pub client: SuiteClient,
     pub range_ratio: f64,
     pub decode_steps: Option<u32>,
+    pub prefill_steps: Option<u32>,
     pub gsm8k: Option<Gsm8kGate>,
     pub layouts: Vec<Layout>,
 }
@@ -165,6 +168,7 @@ impl Library {
             client: SuiteClient::FixedSeq,
             range_ratio: 0.8,
             decode_steps: None,
+            prefill_steps: None,
             gsm8k: None,
             layouts: Vec::new(),
         };
@@ -204,6 +208,9 @@ impl Library {
             }
             if f.decode_steps.is_some() {
                 s.decode_steps = f.decode_steps;
+            }
+            if f.prefill_steps.is_some() {
+                s.prefill_steps = f.prefill_steps;
             }
             if f.gsm8k.is_some() {
                 s.gsm8k = f.gsm8k;
@@ -261,8 +268,11 @@ impl Suite {
                 bail!("{at}: gsm8k min_score must be within 0..1");
             }
         }
-        if self.decode_steps.is_some() && self.client != SuiteClient::Trace {
-            bail!("{at}: decode_steps is for trace suites (client = \"trace\")");
+        if (self.decode_steps.is_some() || self.prefill_steps.is_some()) && self.client != SuiteClient::Trace {
+            bail!("{at}: decode_steps and prefill_steps are for trace suites (client = \"trace\")");
+        }
+        if self.prefill_steps.is_some_and(|n| n > 1000) {
+            bail!("{at}: prefill_steps must be within 0..1000 (0: decode traces only)");
         }
         if self.decode_steps.is_some_and(|n| !(2..=1000).contains(&n)) {
             bail!("{at}: decode_steps must be within 2..1000");
@@ -348,9 +358,18 @@ impl Suite {
             self.client.kind(),
             what,
             self.range_ratio,
-            self.decode_steps
-                .map(|n| format!(", {n} decode steps"))
-                .unwrap_or_default(),
+            match (self.decode_steps, self.prefill_steps) {
+                (d, Some(0)) => format!(
+                    ", {} decode steps, no prefill",
+                    d.unwrap_or(crate::plan::DEFAULT_DECODE_STEPS)
+                ),
+                (Some(d), p) => format!(
+                    ", {d} decode steps{}",
+                    p.map(|p| format!(", {p} prefill steps")).unwrap_or_default()
+                ),
+                (None, Some(p)) => format!(", {p} prefill steps"),
+                (None, None) => String::new(),
+            },
             match &self.gsm8k {
                 Some(g) => format!("gsm8k gate {} per server", g.min_score),
                 None => "no gsm8k gate".into(),
@@ -497,6 +516,9 @@ pub fn render(lib: &Library, suite: &Suite, o: &DraftOptions) -> Result<Vec<(Str
                 );
                 if let Some(n) = suite.decode_steps {
                     out += &format!("decode_steps = {n}\n");
+                }
+                if let Some(n) = suite.prefill_steps {
+                    out += &format!("prefill_steps = {n}\n");
                 }
                 if l.lockstep {
                     // One lockstep per group: each takes one client per server, the same points.
@@ -770,11 +792,18 @@ mod tests {
         assert!(err("zero", "extends = 'tr'\npoints = [[1, 0, 1]]\n").contains("points must be positive"));
         assert!(err("tracelock", "extends = 'std'\nclient = 'trace'\n").contains("lockstep is for fixed-seq"));
         assert!(err("kind", "extends = 'tr'\nclient = 'gsm8k'\n").contains("unknown variant"));
-        assert!(err("steps", "extends = 'std'\ndecode_steps = 20\n").contains("decode_steps is for trace suites"));
-        // A trace suite's decode_steps reaches each trace client of its plans.
-        fs::write(lib.suite_path("tr20"), "extends = 'tr'\ndecode_steps = 20\n").unwrap();
-        let plans = render(&lib, &lib.suite("tr20").unwrap(), &o).unwrap();
-        assert_eq!(plans[0].1.matches("decode_steps = 20\n").count(), 2);
+        assert!(err("steps", "extends = 'std'\ndecode_steps = 20\n").contains("are for trace suites"));
+        assert!(err("psteps", "extends = 'std'\nprefill_steps = 0\n").contains("are for trace suites"));
+        // A trace suite's decode_steps and prefill_steps reach each trace client of its plans.
+        fs::write(
+            lib.suite_path("tr20"),
+            "extends = 'tr'\ndecode_steps = 20\nprefill_steps = 0\n",
+        )
+        .unwrap();
+        let tr20 = lib.suite("tr20").unwrap();
+        assert!(tr20.text().contains("20 decode steps, no prefill"), "{}", tr20.text());
+        let plans = render(&lib, &tr20, &o).unwrap();
+        assert_eq!(plans[0].1.matches("decode_steps = 20\nprefill_steps = 0\n").count(), 2);
         plan::check_plan(
             &root,
             toml::from_str(&plans[0].1).unwrap(),

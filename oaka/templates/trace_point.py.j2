@@ -37,7 +37,7 @@ from datetime import datetime
 from pathlib import Path
 
 START_AT, STOP_AT = 0.5, 0.85
-DECODE_STEPS, PREFILL_STEPS = 10, 10  # DECODE_STEPS: --decode-steps, the plan's decode_steps
+DECODE_STEPS, PREFILL_STEPS = 10, 10  # defaults of --decode-steps, --prefill-steps (the plan's; 0: decode only)
 # SGLang's defaults, sent explicitly so that another revision's defaults cannot change the traces.
 PROFILER_OPTS = {"with_stack": True, "record_shapes": False, "activities": ["CPU", "GPU"]}
 POLL_S = 0.05
@@ -128,7 +128,7 @@ class Controller:
         print(f"[trace_point pass {self.a.pass_no}] {json.dumps(ev)}", flush=True)
 
     def complete(self) -> bool:
-        return self.state["decode_clean"] is not None and self.state["prefill_steps"] >= PREFILL_STEPS
+        return self.state["decode_clean"] is not None and self.state["prefill_steps"] >= self.a.prefill_steps
 
     # Called from the client's event loop.
     def burst_started(self):
@@ -157,8 +157,8 @@ class Controller:
         k = sum(1 for c in self.state["captures"] if c.get("stage") == stage) + 1
         prefix = f"pass{self.a.pass_no}_{stage}{k:02d}"
         # V2 records num_steps + 1 steps.  A steady-state prefill capture ends at the next
-        # decode step anyway: ask for up to PREFILL_STEPS and let the stage change end it.
-        num_steps = (self.a.decode_steps if stage == "decode" else PREFILL_STEPS) - 1
+        # decode step anyway: ask for up to --prefill-steps and let the stage change end it.
+        num_steps = (self.a.decode_steps if stage == "decode" else self.a.prefill_steps) - 1
         body = {"profile_by_stage": True, "profile_stages": [stage], "num_steps": num_steps,
                 "output_dir": self.trace_dir, "profile_prefix": prefix, **PROFILER_OPTS}
         code, text = post(f"{self.a.base_url}/start_profile", body)
@@ -214,6 +214,7 @@ def main() -> int:
     p.add_argument("--pass", dest="pass_no", type=int, required=True)
     p.add_argument("--tp", type=int, required=True, help="the server's TP: trace files per capture")
     p.add_argument("--decode-steps", type=int, default=DECODE_STEPS, help="DECODE steps of the clean decode capture")
+    p.add_argument("--prefill-steps", type=int, default=PREFILL_STEPS, help="EXTEND steps to capture; 0: decode only")
     a = p.parse_args()
     os.makedirs(os.path.join(a.out, "traces"), exist_ok=True)
     result = Path(a.out, f"pass{a.pass_no}", "result.json")

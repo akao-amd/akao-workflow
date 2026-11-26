@@ -151,6 +151,10 @@ pub enum ClientSpec {
         /// EXTEND steps: a prefill capture ends at the next decode step anyway.
         #[serde(default = "default_decode_steps")]
         decode_steps: u32,
+        /// EXTEND steps the prefill captures must total (default 10); 0 = decode traces only:
+        /// no prefill capture is armed, by the probe either.
+        #[serde(default = "default_prefill_steps")]
+        prefill_steps: u32,
     },
 }
 
@@ -159,6 +163,10 @@ pub const DEFAULT_DECODE_STEPS: u32 = 10;
 
 fn default_decode_steps() -> u32 {
     DEFAULT_DECODE_STEPS
+}
+
+fn default_prefill_steps() -> u32 {
+    10
 }
 
 /// Deviations from the InferenceX client policy.  Results are marked OFFSPEC.
@@ -507,6 +515,7 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: &Machine) -> R
                 conc,
                 range_ratio,
                 decode_steps,
+                prefill_steps,
                 ..
             } => {
                 if isl_osl.is_empty() || isl_osl.iter().flatten().any(|n| *n == 0) {
@@ -514,6 +523,9 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: &Machine) -> R
                 }
                 if !(2..=1000).contains(decode_steps) {
                     bail!("{at}: decode_steps must be within 2..1000");
+                }
+                if *prefill_steps > 1000 {
+                    bail!("{at}: prefill_steps must be within 0..1000 (0: decode traces only)");
                 }
                 if conc.is_empty() || conc.contains(&0) {
                     bail!("{at}: conc must list positive concurrencies");
@@ -1099,7 +1111,21 @@ server = "a"
         let c = checked(&lib, &trace("decode_steps = 20"), Machine::default()).unwrap();
         assert!(matches!(
             c.plan.clients.last(),
-            Some(ClientSpec::Trace { decode_steps: 20, .. })
+            Some(ClientSpec::Trace {
+                decode_steps: 20,
+                prefill_steps: 10,
+                ..
+            })
+        ));
+        bad(
+            &trace("prefill_steps = 1001"),
+            Machine::default(),
+            "prefill_steps must be within 0..1000",
+        );
+        let c = checked(&lib, &trace("prefill_steps = 0"), Machine::default()).unwrap();
+        assert!(matches!(
+            c.plan.clients.last(),
+            Some(ClientSpec::Trace { prefill_steps: 0, .. })
         ));
         bad(
             &trace("").replace("conc = [16]", "conc = [0]"),

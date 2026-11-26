@@ -9,7 +9,9 @@ clients on the live server before their first warm run, with throwaway requests 
                                                            torch 2.12 / ROCm 10.1 needs sgl-project/sglang#44292)
 The rules and body fields change between SGLang revisions.  Exits 1 when one fails: the
 practice does not hold for this revision, and its traces would be wrong.
-  python3 trace_probe.py <base url> <served model> <out dir> <tp>
+  python3 trace_probe.py <base url> <served model> <out dir> <tp> [decode-only]
+decode-only (a client with prefill_steps = 0) skips A: it arms no prefill capture, which is what
+hung TP2 servers with a breakable prefill CUDA graph (gpt-oss-120b/perf1101-tp2-trace).
 """
 {% raw %}
 import collections
@@ -23,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from trace_point import PROFILER_OPTS, post, trace_steps, wait_trace  # noqa: E402
 
 base, model, out, tp = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+decode_only = sys.argv[5:] == ["decode-only"]
 os.makedirs(out, exist_ok=True)
 PROMPT = "Write a long story about a lighthouse keeper and the sea. " * 20
 
@@ -46,12 +49,15 @@ def steps(prefix, stage, sent):
 
 results = {}
 
-body, resp = arm("probeA", "prefill", 9)
-complete(8)
-path, st = steps("probeA", "prefill", resp)
-results["A_prefill_ends_at_decode"] = r = {"body": body, "response": resp, "file": path,
-                                           "steps": [s["name"] for s in st], "expect": "1 EXTEND step"}
-r["pass"] = len(st) == 1 and st[0]["mode"] == "EXTEND"
+if decode_only:
+    print("[trace_probe] A_prefill_ends_at_decode: skipped (decode traces only)", flush=True)
+else:
+    body, resp = arm("probeA", "prefill", 9)
+    complete(8)
+    path, st = steps("probeA", "prefill", resp)
+    results["A_prefill_ends_at_decode"] = r = {"body": body, "response": resp, "file": path,
+                                               "steps": [s["name"] for s in st], "expect": "1 EXTEND step"}
+    r["pass"] = len(st) == 1 and st[0]["mode"] == "EXTEND"
 
 body, resp = arm("probeB", "decode", 9)
 complete(64)
