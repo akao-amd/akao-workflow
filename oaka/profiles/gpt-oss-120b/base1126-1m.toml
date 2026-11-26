@@ -8,8 +8,13 @@
 #   --context-length 1052672 (1048576 + 4096) and KK's YaRN override: max_position_embeddings 1052672, rope factor
 #       257 over the original 4096 (the model ships 131072 = factor 32), so 1M positions are scaled, not only allowed;
 #       with SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1.
+#   enable-mixed-chunk off (user, 11-26): with it on, each running 1M request decodes inside the next requests'
+#       64-chunk prefills and finishes ~4 prefills later, so TP2 never had more than 4 decoding (clean max c 3 of
+#       GBS 8).  Off, decode waits until every prefill is done and the whole batch decodes together (GB300 runs this
+#       way): TP2 1M c 8, 286.1 tok/s, 28.0 ms (d21-02 meta1124_mi450/0003); TP1x2 1M unchanged at c 3 (307 vs 309
+#       tok/s), its KV pool (3.39M tokens) holds 3 x 1.05M, not 4.  The cost: no token is generated until all prefills end.
 
-description = "gpt-oss-120b/base1126 at meta1124 1M (1048576/256): KK's per-shape settings"
+description = "gpt-oss-120b/base1126 at meta1124 1M (1048576/256): KK's per-shape settings, mixed chunk off"
 arch = ["gfx1250"]
 extends = "gpt-oss-120b/base1126"
 
@@ -18,5 +23,6 @@ SGLANG_AITER_HONOR_EXPLICIT_MEM_FRACTION = "1"
 SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN = "1"
 
 [args]
+enable-mixed-chunk = false
 context-length = 1052672
 json-model-override-args = '{"max_position_embeddings":1052672,"rope_scaling":{"rope_type":"yarn","factor":257.0,"original_max_position_embeddings":4096,"beta_fast":32.0,"beta_slow":1.0,"truncate":false}}'
