@@ -9,8 +9,8 @@
 #   defaults in stock SGLang).
 #
 # Trees, the [stack.<pkg>] commits and what each carries: base1126.toml (identical at TP2).  Plan: install Triton
-# d436c49e2f, AITER 9aa89fc63, SGLang b26b5d0fec, branch base1126 of each (local to the d21-02 worker,
-# /2026/ww48/mi450_gpt_oss/repos/{triton,aiter,sglang}/base1126; not pushed).
+# d436c49e2f, AITER 9aa89fc63, SGLang b26b5d0fec, from branch base1126 of akao-amd/{triton,aiter,sglang} (pushed
+# 2026-11-26; AITER's head 3297934bf adds a test-only commit on 9aa89fc63).
 #
 # Differs from base1111-tp2 beyond the env: AITER #7155 (custom all-reduce, gfx1250 IPC inputs in place) is merged
 # upstream as db59c6cfe, the same diff as base1111's 9d3deba75, but stock AITER has grown its gfx1250 custom

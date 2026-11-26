@@ -14,10 +14,11 @@
 # Triton 2D kernel: 0.894x base1111 at TP1 8k/1k c16 (0002), 0.902x with only the q-mode env changed on base1111's
 # trees (0003).
 #
-# Trees.  A profile cannot carry a [stack.<pkg>]; the plan installs these.  Branch base1126 of each, local to the
-# d21-02 worker so far (repos/{triton,aiter,sglang}/base1126 under /2026/ww48/mi450_gpt_oss; not pushed: if they are
-# pushed to akao-amd/<repo> base1126, `git -C /sgl-workspace/<tree> fetch https://github.com/akao-amd/<repo>
-# base1126`, as for base1111; stack.sh never fetches).  Each kept item is one commit, base1111's subject.
+# Trees.  A profile cannot carry a [stack.<pkg>]; the plan installs these, after
+# `git -C /sgl-workspace/<tree> fetch https://github.com/akao-amd/<repo> base1126` (stack.sh never fetches).
+# Branch base1126 of akao-amd/{triton,aiter,sglang} (pushed 2026-11-26).  Each kept item is one commit, base1111's
+# subject.  AITER's branch head 3297934bf is 9aa89fc63 plus a test-only commit (the register-store gate's extend
+# case expects USE_TDM_STORE false for gpt-oss); either installs the same runtime, 9aa89fc63 is what was measured.
 #   Triton  [stack.triton]   commit d436c49e2f  the image's Triton 3359b358e0 (76940ad348 + revert of 9debefe441: the
 #           same tree as base1111's first two commits), then the gfx1250 LDS-barrier fix (base1111 3c186fe6f1, no PR;
 #           clean cherry-pick).  Stock lacks it and still builds with LLVM b010a18d, whose waitcnt pass drops the wait
