@@ -4,7 +4,7 @@ description: The worker role's manual — an agent in a worker container (akao_<
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.10.2"
+  version: "2.10.3"
   category: development
   tags: ["worker", "sglang", "oaka", "bisect", "benchmark", "profiling", "git"]
 compatibility:
@@ -104,6 +104,10 @@ read an A-B-A, the bisect journey). The rules that are yours to keep:
   extensions with `cargo`, which a fresh container lacks (`oaka doctor` does not check it).
   Install it before the first `stack.sh`, as the recipe says (`curl --proto '=https'
   --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y`), and name its version in your report.
+  If a permission check refuses the pipe into `sh`: download
+  `https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init` (and its
+  `.sha256`; `aarch64-unknown-linux-gnu` on the GB300 trays) into `<root>/misc/<task>/rustup/`,
+  check it with `sha256sum -c`, and run it with `-y` (0002 on d21-02, 11-26).
 - GPUs are yours to pick but must be free (`amd-smi metric --usage`). Plans number GPUs as
   HIP does; amd-smi may number the same cards differently (n10-17, m15-21: plan GPU 7 is
   amd-smi GPU 5). `oaka doctor`'s `gpu index` line gives the map: check a GPU by its amd-smi
