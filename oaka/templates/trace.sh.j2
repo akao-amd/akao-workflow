@@ -81,7 +81,7 @@ for point in "${POINTS[@]}"; do
     for PASS in $(seq 1 $MAX_PASSES); do
         say "$(date +%H:%M:%S) $NAME: flush, profiled pass $PASS"
         mkdir -p "$P/pass$PASS"
-        python3 "$HERE/trace_point.py" "${FLAGS[@]}" --out "$P" --pass "$PASS" --tp {{ tp }} \
+        python3 "$HERE/trace_point.py" "${FLAGS[@]}" --out "$P" --pass "$PASS" --tp {{ tp }} --decode-steps {{ decode_steps }} \
             >"$P/pass$PASS/trace_point.log" 2>&1
         RC=$?
         # The driver's own last line: the interpreter may print after it (nanobind's leak report

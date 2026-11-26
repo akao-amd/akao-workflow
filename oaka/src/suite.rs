@@ -39,6 +39,8 @@ pub struct SuiteFile {
     /// What measures the points (default fixed-seq).
     pub client: Option<SuiteClient>,
     pub range_ratio: Option<f64>,
+    /// A trace client's DECODE steps per decode capture (the plan's `decode_steps`; default 10).
+    pub decode_steps: Option<u32>,
     /// A gsm8k gate per server, before its throughput points.
     pub gsm8k: Option<Gsm8kGate>,
     #[serde(default)]
@@ -101,6 +103,7 @@ pub struct Suite {
     pub points: Vec<[u32; 3]>,
     pub client: SuiteClient,
     pub range_ratio: f64,
+    pub decode_steps: Option<u32>,
     pub gsm8k: Option<Gsm8kGate>,
     pub layouts: Vec<Layout>,
 }
@@ -161,6 +164,7 @@ impl Library {
             points: Vec::new(),
             client: SuiteClient::FixedSeq,
             range_ratio: 0.8,
+            decode_steps: None,
             gsm8k: None,
             layouts: Vec::new(),
         };
@@ -197,6 +201,9 @@ impl Library {
             }
             if let Some(v) = f.range_ratio {
                 s.range_ratio = v;
+            }
+            if f.decode_steps.is_some() {
+                s.decode_steps = f.decode_steps;
             }
             if f.gsm8k.is_some() {
                 s.gsm8k = f.gsm8k;
@@ -253,6 +260,12 @@ impl Suite {
             if !(0.0..=1.0).contains(&g.min_score) {
                 bail!("{at}: gsm8k min_score must be within 0..1");
             }
+        }
+        if self.decode_steps.is_some() && self.client != SuiteClient::Trace {
+            bail!("{at}: decode_steps is for trace suites (client = \"trace\")");
+        }
+        if self.decode_steps.is_some_and(|n| !(2..=1000).contains(&n)) {
+            bail!("{at}: decode_steps must be within 2..1000");
         }
         if !(self.range_ratio > 0.0 && self.range_ratio <= 1.0) {
             bail!("{at}: range_ratio must be within (0, 1]");
@@ -331,10 +344,13 @@ impl Suite {
             }
         );
         out += &format!(
-            "  {} {} (range ratio {}), {}\n",
+            "  {} {} (range ratio {}{}), {}\n",
             self.client.kind(),
             what,
             self.range_ratio,
+            self.decode_steps
+                .map(|n| format!(", {n} decode steps"))
+                .unwrap_or_default(),
             match &self.gsm8k {
                 Some(g) => format!("gsm8k gate {} per server", g.min_score),
                 None => "no gsm8k gate".into(),
@@ -479,6 +495,9 @@ pub fn render(lib: &Library, suite: &Suite, o: &DraftOptions) -> Result<Vec<(Str
                     toml_list(conc),
                     suite.range_ratio
                 );
+                if let Some(n) = suite.decode_steps {
+                    out += &format!("decode_steps = {n}\n");
+                }
                 if l.lockstep {
                     // One lockstep per group: each takes one client per server, the same points.
                     match groups.len() {
@@ -751,6 +770,18 @@ mod tests {
         assert!(err("zero", "extends = 'tr'\npoints = [[1, 0, 1]]\n").contains("points must be positive"));
         assert!(err("tracelock", "extends = 'std'\nclient = 'trace'\n").contains("lockstep is for fixed-seq"));
         assert!(err("kind", "extends = 'tr'\nclient = 'gsm8k'\n").contains("unknown variant"));
+        assert!(err("steps", "extends = 'std'\ndecode_steps = 20\n").contains("decode_steps is for trace suites"));
+        // A trace suite's decode_steps reaches each trace client of its plans.
+        fs::write(lib.suite_path("tr20"), "extends = 'tr'\ndecode_steps = 20\n").unwrap();
+        let plans = render(&lib, &lib.suite("tr20").unwrap(), &o).unwrap();
+        assert_eq!(plans[0].1.matches("decode_steps = 20\n").count(), 2);
+        plan::check_plan(
+            &root,
+            toml::from_str(&plans[0].1).unwrap(),
+            &lib,
+            &plan::Machine::default(),
+        )
+        .unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 }

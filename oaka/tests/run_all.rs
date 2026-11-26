@@ -2009,6 +2009,30 @@ fn trace_client_captures_the_steady_state() {
     sb.assert_no_leftovers();
 }
 
+/// A plan's `decode_steps` sets the length of the clean decode capture (20 here, not 10).
+#[test]
+fn trace_client_captures_the_plans_decode_steps() {
+    let _servers = servers_shared();
+    let sb = Sandbox::new("trace20");
+    let (a, _) = server_of("a", "m/base", 0, "");
+    let plan = format!("{a}{}decode_steps = 20\n", trace_client("[[64, 40]]", "[4]"));
+    let (code, out) = sb.run(&plan, &[("FAKE_STEP_S", "0.01")]);
+    assert_eq!(code, 0, "{out}");
+    let point = sb.work().join("results/01_trace_a/a_isl64_osl40_c4");
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(point.join("state.json")).unwrap()).unwrap();
+    let clean: Vec<&serde_json::Value> = state["captures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["use"] == "clean")
+        .collect();
+    assert_eq!(clean.len(), 1, "{state}");
+    assert_eq!(clean[0]["bs"], serde_json::json!(vec![4; 20]), "{state}");
+    assert!(state["prefill_steps"].as_u64().unwrap() >= 10, "{state}");
+    sb.assert_no_leftovers();
+}
+
 /// A point whose traces stay incomplete gets every pass, each flushed, and the client exits 3;
 /// a profiler that breaks the practice's rules stops the client at the probe, before any run.
 #[test]

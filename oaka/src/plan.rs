@@ -147,7 +147,18 @@ pub enum ClientSpec {
         conc: Vec<u32>,
         #[serde(default = "default_range_ratio")]
         range_ratio: f64,
+        /// DECODE steps the clean decode capture holds (default 10).  Prefill stays at 10
+        /// EXTEND steps: a prefill capture ends at the next decode step anyway.
+        #[serde(default = "default_decode_steps")]
+        decode_steps: u32,
     },
+}
+
+/// The decode steps a trace captures unless its plan asks for more.
+pub const DEFAULT_DECODE_STEPS: u32 = 10;
+
+fn default_decode_steps() -> u32 {
+    DEFAULT_DECODE_STEPS
 }
 
 /// Deviations from the InferenceX client policy.  Results are marked OFFSPEC.
@@ -495,10 +506,14 @@ pub fn check_plan(dir: &Path, plan: Plan, lib: &Library, machine: &Machine) -> R
                 isl_osl,
                 conc,
                 range_ratio,
+                decode_steps,
                 ..
             } => {
                 if isl_osl.is_empty() || isl_osl.iter().flatten().any(|n| *n == 0) {
                     bail!("{at}: isl_osl must list positive [isl, osl] pairs");
+                }
+                if !(2..=1000).contains(decode_steps) {
+                    bail!("{at}: decode_steps must be within 2..1000");
                 }
                 if conc.is_empty() || conc.contains(&0) {
                     bail!("{at}: conc must list positive concurrencies");
@@ -1076,6 +1091,16 @@ server = "a"
             c.warnings
         );
         bad(&trace("repeats = 2"), Machine::default(), "unknown field");
+        bad(
+            &trace("decode_steps = 1"),
+            Machine::default(),
+            "decode_steps must be within 2..1000",
+        );
+        let c = checked(&lib, &trace("decode_steps = 20"), Machine::default()).unwrap();
+        assert!(matches!(
+            c.plan.clients.last(),
+            Some(ClientSpec::Trace { decode_steps: 20, .. })
+        ));
         bad(
             &trace("").replace("conc = [16]", "conc = [0]"),
             Machine::default(),

@@ -143,7 +143,7 @@ probe = the profiler's rules changed on this SGLang revision (below), so no trac
   (differs per point, drifts with each trace's stall), not "after the first wave" (with
   `range_ratio = 0.8` wave 2 still starts nearly in step).
 - **Separate prefill and decode traces, 10 steps each.** Decode: re-arm until one capture holds
-  a clean 10 `DECODE` steps at `bs = conc` (short ones stay on disk, marked unused). Prefill:
+  a clean 10 `DECODE` steps at `bs = conc` (more when the plan's `decode_steps` asks; short ones stay on disk, marked unused). Prefill:
   re-arm until the captures total >= 10 `EXTEND` steps — a steady-state capture holds 1-3 steps
   (newly admitted requests, `bs=1`, about ISL tokens). Never patch the profiler.
 - **Arm only until 85% done.** At `N − conc` done (90% with InferenceX's `10 × conc` prompts) no

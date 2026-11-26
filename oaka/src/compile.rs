@@ -354,6 +354,7 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
                 isl_osl,
                 conc,
                 range_ratio,
+                decode_steps,
                 ..
             } => {
                 let points: Vec<String> = isl_osl
@@ -362,7 +363,7 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
                     .collect();
                 env.get_template("trace.sh")?.render(context! {
                     points, range_ratio, prompts_per_conc => PROMPTS_PER_CONC, tokenizer => s.model,
-                    infx => infx_root(), tp => s.tp, ..common
+                    infx => infx_root(), tp => s.tp, decode_steps, ..common
                 })?
             }
         };
@@ -743,7 +744,9 @@ off_spec = { prompts_per_conc = 4 }
         );
         let client = read("client_02_trace_a.sh");
         assert!(client.contains("    \"8192 1024 4\"\n"), "{client}");
-        assert!(client.contains("--tp 2 "), "{client}");
+        assert!(client.contains("--tp 2 --decode-steps 10 "), "{client}");
+        compile_plan(&format!("{base}{trace}decode_steps = 20\n"));
+        assert!(read("client_02_trace_a.sh").contains("--decode-steps 20 "));
         assert!(client.contains("--num-prompts $(( 10 * CONC ))"), "{client}");
         assert!(read("step.sh").contains("run_client client_02_trace_a.sh\n"));
         for f in &out.written {

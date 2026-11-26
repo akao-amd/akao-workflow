@@ -37,7 +37,7 @@ from datetime import datetime
 from pathlib import Path
 
 START_AT, STOP_AT = 0.5, 0.85
-DECODE_STEPS, PREFILL_STEPS = 10, 10
+DECODE_STEPS, PREFILL_STEPS = 10, 10  # DECODE_STEPS: --decode-steps, the plan's decode_steps
 # SGLang's defaults, sent explicitly so that another revision's defaults cannot change the traces.
 PROFILER_OPTS = {"with_stack": True, "record_shapes": False, "activities": ["CPU", "GPU"]}
 POLL_S = 0.05
@@ -158,7 +158,7 @@ class Controller:
         prefix = f"pass{self.a.pass_no}_{stage}{k:02d}"
         # V2 records num_steps + 1 steps.  A steady-state prefill capture ends at the next
         # decode step anyway: ask for up to PREFILL_STEPS and let the stage change end it.
-        num_steps = (DECODE_STEPS if stage == "decode" else PREFILL_STEPS) - 1
+        num_steps = (self.a.decode_steps if stage == "decode" else PREFILL_STEPS) - 1
         body = {"profile_by_stage": True, "profile_stages": [stage], "num_steps": num_steps,
                 "output_dir": self.trace_dir, "profile_prefix": prefix, **PROFILER_OPTS}
         code, text = post(f"{self.a.base_url}/start_profile", body)
@@ -177,7 +177,7 @@ class Controller:
                "files": [os.path.basename(f) for f in files], "steps": len(st), "modes": modes,
                "bs": [s["bs"] for s in st], "toks": [s["toks"] for s in st if s["toks"] is not None]}
         if stage == "decode":
-            clean = len(st) == DECODE_STEPS and modes == ["DECODE"] and all(b == self.a.conc for b in cap["bs"])
+            clean = len(st) == self.a.decode_steps and modes == ["DECODE"] and all(b == self.a.conc for b in cap["bs"])
             cap["use"] = "clean" if clean else "short or unclean: not used"
             if clean:
                 self.state["decode_clean"] = cap["files"][0]
@@ -213,6 +213,7 @@ def main() -> int:
     p.add_argument("--out", required=True, help="the point's dir: traces/, pass<N>/, state.json, record.json")
     p.add_argument("--pass", dest="pass_no", type=int, required=True)
     p.add_argument("--tp", type=int, required=True, help="the server's TP: trace files per capture")
+    p.add_argument("--decode-steps", type=int, default=DECODE_STEPS, help="DECODE steps of the clean decode capture")
     a = p.parse_args()
     os.makedirs(os.path.join(a.out, "traces"), exist_ok=True)
     result = Path(a.out, f"pass{a.pass_no}", "result.json")

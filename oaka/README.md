@@ -106,6 +106,7 @@ server = "quant"
 isl_osl = [[1024, 1024]]
 conc = [16]
 range_ratio = 0.8
+# decode_steps = 20        # DECODE steps of the clean decode capture (default 10, 2..1000)
 
 [stack.sglang]             # optional: install a package of stacks.toml first (see Stack)
 tree = "/2026/ww44/me/repos/sglang/kv_sweep"
@@ -153,7 +154,7 @@ of its points' steady state; the capture practice is fixed policy, like fixed-se
   concurrency), then up to 3 profiled passes (`scripts/trace_point.py`), each after
   `POST /flush_cache`.  A pass runs InferenceX's own client with `--profile`; its hook marks
   the end of the warm-ups, and from 50% to 85% of the measured requests done, captures are
-  armed one at a time: decode until one holds 10 `DECODE` steps at `bs = conc`, then
+  armed one at a time: decode until one holds 10 `DECODE` steps (the plan's `decode_steps`) at `bs = conc`, then
   prefill until the captures hold 10 `EXTEND` steps.  A capture still armed at the end is
   fired on a throwaway request and not used.
 - Results: `<client>/<point>/warm.json` (the number to quote: profiled passes stall the
@@ -294,6 +295,7 @@ conc = [4, 8, 16, 32, 64]
 # points = [[1024, 1024, 64], [70000, 300, 4]]   # or exact [isl, osl, conc] points instead of the
                                  # matrix: one client per concurrency, in the order listed
 # client = "trace"               # default "fixed-seq"; trace layouts take no lockstep
+# decode_steps = 20              # trace suites only: each trace client's decode_steps (default 10)
 range_ratio = 0.8                # default 0.8
 gsm8k = { min_score = 0.93 }     # optional: a gate per server
 
