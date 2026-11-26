@@ -302,6 +302,12 @@ conc = [4, 8, 16, 32, 64]
 range_ratio = 0.8                # default 0.8
 gsm8k = { min_score = 0.93 }     # optional: a gate per server
 
+[env]                            # optional: every server's [server.env] in the plans (false drops)
+SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN = "1"
+[args]                           # optional: every server's [server.args]: what the points need of any
+context-length = 1049087         # recipe; a child suite's entries override its parent's by name
+max-running-requests = false
+
 [[layout]]
 name = "tp1x2"                   # the plan's directory; its servers are tp1x2_0, tp1x2_1 (one: tp1x2)
 servers = [[0], [1]]             # one entry per server: positions in --gpus

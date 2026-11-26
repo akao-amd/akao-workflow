@@ -4,13 +4,11 @@
 # on each partition, measured together in lockstep: the GPU's throughput is the two servers' sum), tp2 across both.
 # TP2 serves <profile>-tp2, the recipe's TP2 variant (base1111-tp2: custom all-reduce, AITER #7155).
 #
-# Caveats carried over from meta1124 and base1111:
-# - medium and large exceed gpt-oss-120b's 131072-token context (OPEN, the user's to settle).
-# - base1111's fp8 KV loses accuracy at long context (its own notes: RULER2 127k, -4.4 pts vs bf16).
+# From meta1124: the long-context override and no batch cap, on every server.
+# base1111's fp8 KV loses accuracy at long context (its own notes: RULER2 127k, -4.4 pts vs bf16).
 #
 # Draft:  oaka draft --suite meta1124-mi450 --profile <model>/<recipe> --gpus 4,5 [--port N]
-# (base1111 is the user's example recipe).  The recipe must admit conc 168 (max-running-requests):
-# base1111's 128 caps the small point's batch.
+# (base1111 is the user's example recipe).
 
 extends = "meta1124"
 description = "meta1124 on MI45x DPX: TP1 (one partition), TP1x2 (both, together), TP2 (both); 32768/1024 c168, 131072/1024 c44, 1048575/256 c8; GSM8K gate"

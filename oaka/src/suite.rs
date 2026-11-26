@@ -45,6 +45,13 @@ pub struct SuiteFile {
     pub prefill_steps: Option<u32>,
     /// A gsm8k gate per server, before its throughput points.
     pub gsm8k: Option<Gsm8kGate>,
+    /// Overlays every server of every layout gets (`[server.env]`/`[server.args]` in the plans):
+    /// what the suite's points need of any recipe (a context length, no batch cap).  A child's
+    /// entries override its parent's by name; `false` drops the profile's.
+    #[serde(default)]
+    pub env: toml::Table,
+    #[serde(default)]
+    pub args: toml::Table,
     #[serde(default)]
     pub layout: Vec<Layout>,
 }
@@ -108,6 +115,8 @@ pub struct Suite {
     pub decode_steps: Option<u32>,
     pub prefill_steps: Option<u32>,
     pub gsm8k: Option<Gsm8kGate>,
+    pub env: toml::Table,
+    pub args: toml::Table,
     pub layouts: Vec<Layout>,
 }
 
@@ -170,6 +179,8 @@ impl Library {
             decode_steps: None,
             prefill_steps: None,
             gsm8k: None,
+            env: toml::Table::new(),
+            args: toml::Table::new(),
             layouts: Vec::new(),
         };
         // Root first, so each child overrides its parent.
@@ -215,6 +226,8 @@ impl Library {
             if f.gsm8k.is_some() {
                 s.gsm8k = f.gsm8k;
             }
+            s.env.extend(f.env);
+            s.args.extend(f.args);
             for l in f.layout {
                 match s.layouts.iter_mut().find(|x| x.name == l.name) {
                     Some(x) => *x = l,
@@ -375,6 +388,13 @@ impl Suite {
                 None => "no gsm8k gate".into(),
             }
         );
+        if !(self.env.is_empty() && self.args.is_empty()) {
+            let kv = |t: &toml::Table| t.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>();
+            out += &format!(
+                "  every server: {}\n",
+                [kv(&self.env), kv(&self.args)].concat().join(", ")
+            );
+        }
         for l in &self.layouts {
             out += &format!(
                 "  layout {:<8} servers on {}{}{}{}\n",
@@ -493,6 +513,14 @@ pub fn render(lib: &Library, suite: &Suite, o: &DraftOptions) -> Result<Vec<(Str
             match o.port {
                 Some(base) => out += &format!("port = {}\n", base as usize + i),
                 None => out += "# port = 29911            # pin it when other workers share the box's network\n",
+            }
+            for (table, entries) in [("env", &suite.env), ("args", &suite.args)] {
+                if !entries.is_empty() {
+                    out += &format!("[server.{table}]                # the suite's, for its points\n");
+                    for (k, v) in entries {
+                        out += &format!("{} = {v}\n", toml::Value::String(k.clone()));
+                    }
+                }
             }
         }
         for name in &names {
@@ -804,6 +832,45 @@ mod tests {
         assert!(tr20.text().contains("20 decode steps, no prefill"), "{}", tr20.text());
         let plans = render(&lib, &tr20, &o).unwrap();
         assert_eq!(plans[0].1.matches("decode_steps = 20\nprefill_steps = 0\n").count(), 2);
+
+        // A suite's env/args reach every server; a child's override its parent's by name.
+        fs::write(
+            lib.suite_path("ctx"),
+            "extends = 'tr'\n[env]\nLONG = '1'\n[args]\ncontext-length = 2048\nmax-running-requests = 64\n",
+        )
+        .unwrap();
+        fs::write(
+            lib.suite_path("ctx2"),
+            "extends = 'ctx'\n[args]\nmax-running-requests = false\n",
+        )
+        .unwrap();
+        let ctx2 = lib.suite("ctx2").unwrap();
+        assert!(
+            ctx2.text()
+                .contains("every server: LONG=\"1\", context-length=2048, max-running-requests=false"),
+            "{}",
+            ctx2.text()
+        );
+        let plans = render(&lib, &ctx2, &o).unwrap();
+        assert!(
+            plans[0].1.contains(
+                "[server.env]                # the suite's, for its points\n\"LONG\" = \"1\"\n\
+                 [server.args]                # the suite's, for its points\n\"context-length\" = 2048\n\
+                 \"max-running-requests\" = false\n"
+            ),
+            "{}",
+            plans[0].1
+        );
+        let c = plan::check_plan(
+            &root,
+            toml::from_str(&plans[0].1).unwrap(),
+            &lib,
+            &plan::Machine::default(),
+        )
+        .unwrap();
+        let args = &c.servers[0].effective.args;
+        assert!(args.iter().any(|(k, _)| k == "context-length"), "{args:?}");
+        assert!(!args.iter().any(|(k, _)| k == "max-running-requests"), "{args:?}");
         plan::check_plan(
             &root,
             toml::from_str(&plans[0].1).unwrap(),

@@ -4,7 +4,13 @@
 #   small   32768/1024  c168
 #   medium  131072/1024 c44
 #   large   1048575/256 c8
-# OPEN (11-26): medium and large exceed gpt-oss-120b's 131072-token context; the user checks them.
+# Context: medium and large exceed gpt-oss-120b's 131072 tokens (max_position_embeddings).  As the user's
+# GB300 recipe does (11-26: SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 and --context-length ISL+OSL+256),
+# every server gets both; one server serves all three points, so its context length is the largest
+# point's: 1048575 + 256 + 256 = 1049087 (the recipe sets it for the 1M point only; a longer limit only
+# admits longer requests).
+# Batch cap: none (user, 11-26), so the small point's batch can reach 168 whatever cap a recipe sets
+# (base1111: max-running-requests 128).  `false` drops the recipe's; recipes without one are unchanged.
 #
 # The client policy is oaka's fixed-seq, i.e. InferenceX's own: 10 prompts per unit of concurrency,
 # its in-client warmups, run 1 is a point's number (repeats 1), range ratio 0.8.
@@ -19,6 +25,13 @@ gpus = 2
 points = [[32768, 1024, 168], [131072, 1024, 44], [1048575, 256, 8]]
 range_ratio = 0.8
 gsm8k = { min_score = 0.93 }
+
+[env]
+SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN = "1"
+
+[args]
+context-length = 1049087
+max-running-requests = false
 
 [[layout]]
 name = "tp1"
