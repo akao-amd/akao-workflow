@@ -1,0 +1,30 @@
+# gpt-oss-120b/base1126 at TP2: both partitions of one DPX GPU.  The TP2 layout of base1126 (TP1 recipe: read
+# base1126.toml first, then base1111-tp2.toml).  Extends gpt-oss-120b/base1111-tp2 with base1126's deltas, which are
+# the same as at TP1:
+#
+#   AITER_GFX1250_UA3D_NHD_CFG dropped: the TP2 chain sets it too (from perf1101); no reader in stock AITER or in
+#       #7743, which ships the same values as its default for D<=64 decode.
+#   Everything else as base1111-tp2: custom all-reduce on (disable-custom-all-reduce = false), fp8_e4m3 KV with the
+#   6003 q modes (static prefill / bf16 decode, on base1126's SGLang branch), the W4A8 MoE env (same readers and
+#   defaults in stock SGLang).
+#
+# Trees, the [stack.<pkg>] commits and what each carries: base1126.toml (identical at TP2).  Plan: install Triton
+# d436c49e2f, AITER 9aa89fc63, SGLang b26b5d0fec, branch base1126 of each (local to the d21-02 worker,
+# /2026/ww48/mi450_gpt_oss/repos/{triton,aiter,sglang}/base1126; not pushed).
+#
+# Differs from base1111-tp2 beyond the env: AITER #7155 (custom all-reduce, gfx1250 IPC inputs in place) is merged
+# upstream as db59c6cfe, the same diff as base1111's 9d3deba75, but stock AITER has grown its gfx1250 custom
+# all-reduce since (custom_all_reduce_gfx1250.cuh +2327/-168 lines, the Python communicator +1244/-106 between
+# db59c6cfe and 58b435276).  So TP2 runs other all-reduce code than base1111-tp2 did; base1111-tp2's Nov01 numbers
+# (decode collectives 3.04 -> 0.52 ms/step) are not evidence for it.
+#
+# NOT MEASURED (2026-11-26): written in task 0004_base1126_c (d21-02), which measured TP1 only on GPU 0.  TP2 needs
+# both partitions of a GPU; the coming RULER and meta1124-mi450 tasks measure it.  Until then: no GSM8K, no throughput,
+# no TP2 RULER (base1111-tp2's accuracy caveats stand: fp8 KV checked at TP1 only).
+
+description = "gpt-oss-120b base1126 at TP2 (both partitions of one DPX GPU): base1111-tp2's recipe on base1126 trees; not measured"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/base1111-tp2"
+
+[env]
+AITER_GFX1250_UA3D_NHD_CFG = false

@@ -1,0 +1,60 @@
+# gpt-oss-120b/base1126 (TP1): base1111's recipe on base1111's content rebased onto the 1125 image's stock trees
+# (rocm/sgl-dev v0.5.23-rocm101-mi45x-20261125), minus what has merged upstream.  Built and measured 2026-11-26 on
+# d21-02 (/2026/ww48/mi450_gpt_oss/0004_base1126_c, REPORT.md there; brief v2, controller record 059).
+# Extends gpt-oss-120b/base1111 (read it, and perf1101/base1028, for why each of its lines is there).  Only the
+# differences are here:
+#
+#   AITER_GFX1250_UA3D_NHD_CFG dropped: no reader in stock AITER or in #7743, which ships the same values
+#       ({"waves_per_eu":2,"SEGMENTS_PER_CU":16,"num_stages":3,"MIN_SEGMENTS":4}) as its default for D<=64 decode.
+#   Everything else is read as base1111 reads it: the W4A8 MoE env (same names and defaults in stock SGLang), the
+#   6003 q modes (static prefill / bf16 decode, kept on the SGLang branch, also its defaults), every arg.
+#
+# Why base1126 and not stock: stock SGLang has no 6003 q modes and runs prefill q bf16 / decode q static fp8 over the
+# fp8 KV cache.  stock AITER's gfx1250 Gluon 2D gate needs q dtype == KV dtype, so that prefill falls back to the
+# Triton 2D kernel: 0.894x base1111 at TP1 8k/1k c16 (0002), 0.902x with only the q-mode env changed on base1111's
+# trees (0003).
+#
+# Trees.  A profile cannot carry a [stack.<pkg>]; the plan installs these.  Branch base1126 of each, local to the
+# d21-02 worker so far (repos/{triton,aiter,sglang}/base1126 under /2026/ww48/mi450_gpt_oss; not pushed: if they are
+# pushed to akao-amd/<repo> base1126, `git -C /sgl-workspace/<tree> fetch https://github.com/akao-amd/<repo>
+# base1126`, as for base1111; stack.sh never fetches).  Each kept item is one commit, base1111's subject.
+#   Triton  [stack.triton]   commit d436c49e2f  the image's Triton 3359b358e0 (76940ad348 + revert of 9debefe441: the
+#           same tree as base1111's first two commits), then the gfx1250 LDS-barrier fix (base1111 3c186fe6f1, no PR;
+#           clean cherry-pick).  Stock lacks it and still builds with LLVM b010a18d, whose waitcnt pass drops the wait
+#           (llvm/llvm-project#220357); the AITER extend register store needs it.  SGLang #52641's "masked loads into
+#           LDS" fix is another one (triton-lang/triton#11256, ROCm 10.0 wheels only).
+#   AITER   [stack.aiter]    commit 9aa89fc63   stock 58b435276; the image's edits (78b91e998); #7743, #7744, #7745,
+#           #7746 (each its current PR diff vs. its merge-base, one commit); the gpt-oss extend register store (no PR;
+#           base1111 690aba898 ported onto stock's merged #7203 USE_TDM_STORE rows: the same 10 gpt-oss copies, except
+#           #7745's BLOCK_M 256 row is now DT_bf16_bf16.NS_LEQ_8, and so is its copy; checked over 5376 lookups).
+#           Dropped, merged upstream (in stock): #6999 537ac7f6dd; #7202 6d899010d7; #7203 61b4e7babe (it covers
+#           base1111's 12df99014, 6c83e0207, 474ff6649, 7a2911531, fca881abe: the same register-store code, config
+#           rows and op tests; its G axis is in stock's config schema); #7289 a97f50d267 (with #7288); #7155
+#           db59c6cfe (the same diff as base1111's 9d3deba75; stock's gfx1250 custom all-reduce has grown since, which
+#           matters at TP2 only: base1126-tp2.toml).
+#           Dropped, closed upstream: #7747 (fp8 P scaling; user, 11-26; base1111 = A still carries it).
+#   SGLang  [stack.sglang]   commit b26b5d0fec  stock 173f27ff8f; the image's edits (d11ac89628); the profiler v2
+#           device sync (no PR, clean); the 6003 q modes (no PR, ported: stock's unified extend re-initialized
+#           q_descale after 6003 quantized q, which would drop the prefill q scale; that line is gone); the Nov05
+#           defaults (static prefill / bf16 decode, clean).
+#           Dropped, merged upstream (in stock): #47398 4e864477f8; #49566 a8101b6a9f; base1111's 49a7fb479 (in-place
+#           breakable-graph output) = #49567 34dfaccc57, the same diff line for line.
+#
+# Validated: the ported extend register store, on GPU (probes/test_ua2d_extend_register_store.py in 0004: gpt-oss
+#   extend shapes, bf16/fp8, full and window 128, 16/16 pass: Gluon 2D with TDM store off, reference match, 32 graph
+#   replays bitwise); the tree's decode register-store test 8/8.  The tree's register-store gate test fails at its
+#   "extend" case, which asserts TDM stores for gpt-oss extend: the register store turns exactly that off (base1111's
+#   table does the same; its own gate test fails earlier, on the NS axis).
+# Measured: A1-C-A2 against base1111 on d21-02 GPU 0 (2026-11-26, InferenceX 90afb027), TP1 8192/1024 c16 fixed-seq
+#   run 1: A1 2517.1, C 2512.6, A2 2516.4 output tok/s; C/A1 0.998, A2/A1 1.000.  TTFT median 124.3 ms (A 124.8 /
+#   121.9), TPOT median 6.13 ms (A 6.07 / 6.07).  GSM8K (thinking, strict 1319) C 0.958, A 0.957 / 0.955.  The q modes
+#   read from C's compiled kernels are A's: prefill fp8 q on Gluon 2D, decode bf16 q.  Stock trees with stock q modes
+#   ran 0.894x A (0002), A's trees with stock q modes 0.902x (0003).  Other points (1k/1k, 70k/300, other conc) and
+#   RULER are not measured on these trees yet.
+
+description = "gpt-oss-120b base1126 (TP1): base1111's recipe on base1126 trees (base1111 minus merged, on the 1125 image's stock)"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/base1111"
+
+[env]
+AITER_GFX1250_UA3D_NHD_CFG = false
