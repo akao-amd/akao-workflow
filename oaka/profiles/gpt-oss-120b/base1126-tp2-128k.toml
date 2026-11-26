@@ -1,0 +1,19 @@
+# gpt-oss-120b/base1126-tp2-128k: base1126-tp2 at the meta1124 128k shape (131072/1024).  The minimal per-shape changes of KK's d21-01 SLA recipe
+# (sync-gpt-oss ref/gptoss_sla_d21_repro_results.tar.gz, REPRO.md / remote/b1111/v2/start_server.sh, 2026-11-25),
+# made 2026-11-26 after the first meta1124-mi450 run on d21-02 was KV-pool-limited (0001_meta1124_bench there):
+#   SGLANG_AITER_HONOR_EXPLICIT_MEM_FRACTION=1  stock SGLang scales --mem-fraction-static by 0.85 for aiter above
+#       8k context (0.9 -> 0.765); KK keeps 0.9: a TP1 partition's full pool 2.30M -> ~3.4M fp8 tokens.
+#   --max-running-requests stays capped (base1126's 128 unless said here): the sliding-window pool is sized from it,
+#       and the uncapped default (2048) took ~1.05M tokens of KV from the full pool.
+#   --context-length 132096 (ISL 131072 + 1024), with SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 as KK.
+
+description = "gpt-oss-120b/base1126-tp2 at meta1124 128k (131072/1024): KK's per-shape settings"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/base1126-tp2"
+
+[env]
+SGLANG_AITER_HONOR_EXPLICIT_MEM_FRACTION = "1"
+SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN = "1"
+
+[args]
+context-length = 132096

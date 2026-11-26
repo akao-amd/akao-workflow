@@ -1,26 +1,34 @@
 # meta1124 on MI450 (user, 2026-11-26: "apply meta1124 to the mi450 profile as well, say base1111"; the recipe is now
 # base1126, base1111 rebased onto the 1125 image's stock trees): meta1124's shapes on one physical MI45x GPU in DPX
 # mode (plan GPUs 2k, 2k+1): tp1x2 (a TP1 server on each partition, measured together in lockstep: the GPU's
-# throughput is the two servers' sum) and tp2 across both.  TP2 serves <profile>-tp2, the recipe's TP2 variant
-# (base1126-tp2: custom all-reduce).
+# throughput is the two servers' sum) and tp2 across both.  TP2 serves <profile>-tp2-<shape>, built on the recipe's
+# TP2 variant (base1126-tp2: custom all-reduce).
 #
 # Self-contained, not `extends = "meta1124"`: a suite cannot drop a parent's layout, and meta1124's tp1 is not
-# measured here (user, 11-26: TP1 cancelled).  Kept in step with meta1124 by hand: its shapes, the long-context
-# override and no batch cap on every server, the GSM8K gate, range ratio 0.8.
+# measured here (user, 11-26: TP1 cancelled).  Kept in step with meta1124 by hand: its shapes, the GSM8K gate,
+# range ratio 0.8.
+#
+# One layout per layout x shape, each serving the recipe's per-shape variant (profile_suffix -32k/-128k/-1m,
+# -tp2-32k/...: base1126-1m etc.), which carries the server settings that shape needs (KK's d21-01 recipe:
+# honored mem fraction, a request cap that keeps the sliding-window pool small, context length and, for 1M, the
+# YaRN override).  Until 11-26 the suite instead set --context-length 1049088 and no request cap on every server:
+# the uncapped default (2048) sized the sliding-window pool at ~1.05M tokens and, with stock SGLang's 0.85 scaling,
+# left a TP1 partition 1.315M full tokens: every point KV-limited (d21-02 0001_meta1124_bench).
+# The bench_one_batch numbers for the sync-gpt-oss tracker are taken against these servers; the fixed-seq
+# clients the draft writes are oaka's own.
 #
 # Concurrency (user, 11-26):
 #   tp2    32768/1024 c168, 131072/1024 c44, 1048576/256 c8: meta1124's, unchanged.
 #   tp1x2  half of it per server: c84, c22, and c3 at 1048576/256, not c4.  Each TP1 server loads the full weights
-#          (TP2 loads half per partition), which leaves one partition about 2.30M fp8 KV tokens (base1111, 0002 on
-#          d21-02: 143.5 GB, weights 69 GB, before the long-context override): two 1.05M sequences, so c4 does not
-#          fit; c3 already queues one.
+#          (TP2 loads half per partition), which leaves one partition about 3.4M fp8 KV tokens with the per-shape
+#          variants (KK's d21-01 pools: 3.43M at 32k/128k, 3.39M at 1M): three 1.05M sequences fit, four do not.
 # fp8 KV at long context: base1111 lost accuracy at 127k (RULER2 -4.4 pts vs bf16, TP1); base1126's own RULER2,
 # TP1 and TP2, is task 0005 on d21-02 (11-26).
 #
 # Draft:  oaka draft --suite meta1124-mi450 --profile gpt-oss-120b/base1126 --gpus 4,5 --thinking [--port N]
 # (--thinking: the GSM8K gate as base1111's 0.958-0.964 and base1126's 0.958 were measured)
 
-description = "meta1124 on MI45x DPX: TP1x2 (both partitions, together) 32768/1024 c84, 131072/1024 c22, 1048576/256 c3; TP2 (both) c168, c44, c8; GSM8K gate"
+description = "meta1124 on MI45x DPX, one layout per shape: TP1x2 (both partitions, together) 32768/1024 c84, 131072/1024 c22, 1048576/256 c3; TP2 c168, c44, c8; per-shape recipe variants; GSM8K gate"
 arch = ["gfx1250"]
 gpus = 2
 partitions_of_one_gpu = true
@@ -28,22 +36,47 @@ points = [[32768, 1024, 168], [131072, 1024, 44], [1048576, 256, 8]]
 range_ratio = 0.8
 gsm8k = { min_score = 0.93 }
 
-[env]
-SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN = "1"
-
-[args]
-context-length = 1049088
-max-running-requests = false
-
 [[layout]]
-name = "tp1x2"
-description = "TP1 on each partition, measured together; half of TP2's concurrency per server"
+name = "tp1x2-32k"
+description = "TP1 on each partition, together, 32768/1024 at 84 per server (half of TP2's)"
 servers = [[0], [1]]
 lockstep = true
-points = [[32768, 1024, 84], [131072, 1024, 22], [1048576, 256, 3]]
+profile_suffix = "-32k"
+points = [[32768, 1024, 84]]
 
 [[layout]]
-name = "tp2"
-description = "one TP2 server across both partitions of one GPU"
+name = "tp1x2-128k"
+description = "TP1 on each partition, together, 131072/1024 at 22 per server (half of TP2's)"
+servers = [[0], [1]]
+lockstep = true
+profile_suffix = "-128k"
+points = [[131072, 1024, 22]]
+
+[[layout]]
+name = "tp1x2-1m"
+description = "TP1 on each partition, together, 1048576/256 at 3 per server (half of TP2's)"
+servers = [[0], [1]]
+lockstep = true
+profile_suffix = "-1m"
+points = [[1048576, 256, 3]]
+
+[[layout]]
+name = "tp2-32k"
+description = "one TP2 server across both partitions, 32768/1024 at 168"
 servers = [[0, 1]]
-profile_suffix = "-tp2"
+profile_suffix = "-tp2-32k"
+points = [[32768, 1024, 168]]
+
+[[layout]]
+name = "tp2-128k"
+description = "one TP2 server across both partitions, 131072/1024 at 44"
+servers = [[0, 1]]
+profile_suffix = "-tp2-128k"
+points = [[131072, 1024, 44]]
+
+[[layout]]
+name = "tp2-1m"
+description = "one TP2 server across both partitions, 1048576/256 at 8"
+servers = [[0, 1]]
+profile_suffix = "-tp2-1m"
+points = [[1048576, 256, 8]]
