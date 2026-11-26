@@ -11,7 +11,7 @@
 # (base1111 is the user's example recipe).
 
 extends = "meta1124"
-description = "meta1124 on MI45x DPX: TP1 (one partition), TP1x2 (both, together), TP2 (both); 32768/1024 c168, 131072/1024 c44, 1048575/256 c8; GSM8K gate"
+description = "meta1124 on MI45x DPX: TP1 (one partition), TP1x2 (both, together), TP2 (both); 32768/1024 c168, 131072/1024 c44, 1048576/256 c8; GSM8K gate"
 arch = ["gfx1250"]
 partitions_of_one_gpu = true
 
