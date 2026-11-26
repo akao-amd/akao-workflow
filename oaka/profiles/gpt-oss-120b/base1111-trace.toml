@@ -1,0 +1,11 @@
+# gpt-oss-120b/base1111 for decode traces (TP1), as perf1101-trace is for perf1101: enable-mixed-chunk off, so a
+# newly admitted prompt's prefill is its own EXTEND step instead of a MIXED step inside the decode batch (a MIXED
+# step makes a decode capture unclean; read base1028-trace.toml).  Made 2026-11-26 for meta1124-mi450-trace
+# (user: "only decode traces; remove flags that keep the torch profiler from capturing"), not yet run.
+# The breakable prefill CUDA graph stays: at TP1 it traced fine (perf1101-trace, trace_e21/0001).
+
+description = "gpt-oss-120b/base1111 for traces (TP1): enable-mixed-chunk off"
+extends = "gpt-oss-120b/base1111"
+
+[args]
+enable-mixed-chunk = false

@@ -1,0 +1,12 @@
+# gpt-oss-120b/base1111-tp2 for decode traces, as perf1101-tp2-trace is for perf1101-tp2: enable-mixed-chunk off
+# (as base1111-trace), and the prefill CUDA graph disabled, because the breakable one hung TP2 servers under the
+# profiler on the first prefill after a prefill capture was armed (perf1101-tp2-trace.toml, trace_e21/0001: 10/10).
+# Decode-only traces (prefill_steps = 0) arm no prefill capture, but prefill is not measured here, so the graph is
+# dropped rather than risked.  Made 2026-11-26 for meta1124-mi450-trace, not yet run.
+
+description = "gpt-oss-120b/base1111-tp2 for traces: enable-mixed-chunk off, prefill CUDA graph disabled"
+extends = "gpt-oss-120b/base1111-tp2"
+
+[args]
+enable-mixed-chunk = false
+cuda-graph-backend-prefill = "disabled"
