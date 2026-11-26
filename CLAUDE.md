@@ -168,6 +168,8 @@ utils/                agent.sh (claude + codex via the AMD gateway), install_gh.
                       GB300 trays, which cannot resolve the gateway: tunnelled from the console),
                       controller/Dockerfile (console image),
                       ssh (the PATH wrapper docker's ssh transport goes through; see Design notes)
+                      deploy.sh (a new box: unused NVMe -> RAID0 at /mnt/raid, docker/containerd
+                      roots and models there; controller skill)
 TEST.md               test layers: cargo test, real GPU smoke, environment doctors
 .state/               the console's akao state, git-ignored (Runtime state)
 .githooks/post-commit builds akao (release) and a static oaka into oaka/bin

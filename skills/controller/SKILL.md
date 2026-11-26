@@ -4,7 +4,7 @@ description: The controller role's manual — the agent on the console (where `a
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.6.2"
+  version: "2.7.0"
   category: development
   tags: ["controller", "akao", "worker", "tmux"]
 compatibility:
@@ -85,6 +85,31 @@ and do not scope a worker to GPUs with `-e HIP_VISIBLE_DEVICES` in hosts.tsv's `
 oaka sets the visible devices of every server it starts, over it. GPUs are assigned in the
 brief; a box that needs other settings is the user's to change (`akao host add --force`, which
 moves no existing container or file).
+
+### Setup docker and model on new host with RAID
+
+A new box often has spare NVMe disks next to a small system disk, and docker and the models
+belong on the spare ones. Do this only when the user asks for it on that box, and before the
+`akao host add` that names its model dir. `$AKAO_REPO_ROOT/utils/deploy.sh` runs on the box
+as root. It puts every **unused** whole NVMe disk into one RAID0 array: no partitions, no
+`wipefs` signature, no md superblock, not mounted, not the root disk. It formats the array
+XFS, mounts it at `/mnt/raid` (fstab by UUID, `nofail`; the array goes in mdadm.conf), and
+makes `/mnt/raid/models`, owned by the login. Then it moves docker's `data-root` to
+`/mnt/raid/docker` **and** containerd's `root` to `/mnt/raid/containerd`. Docker 29's
+containerd image store keeps its images in containerd's root, so moving only docker's leaves
+them on the system disk. It is idempotent. It refuses to restart docker while any container
+exists, and it neither copies nor deletes the old `/var/lib/{docker,containerd}`.
+
+1. Record and run the dry run, which prints the disks it found and every step:
+   `ssh <nick> 'sudo bash -s --' < "$AKAO_REPO_ROOT/utils/deploy.sh"`
+2. Read it. The disks it picks get wiped. A disk the user did not mean, or an existing
+   container on the box, goes to the user first.
+3. In the next record, `ssh <nick> 'sudo bash -s -- --yes' < ...` with `tee` to a log. It
+   ends by checking docker's root and containerd's content dir on the array.
+4. `akao host add <nick> --home <dir> --model /mnt/raid/models`, then init as usual. Models
+   go into `/mnt/raid/models` (never download weights without asking the user).
+
+First box: d21-02, ww48 039-040: 4 × 6.8 TB into 27.4 TB.
 
 ## The worker's agent
 
