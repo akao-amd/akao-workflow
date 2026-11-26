@@ -1,0 +1,12 @@
+# gpt-oss-120b/gb300-trtllm for the large shape (1048576/256): the user's SWAR 0.1 (11-26), and GBS = the batch.
+# The user's GBS is the point's batch: TP2 8, TP1 3.  The profile carries TP2's 8 (it also covers TP1's
+# smaller batch); for TP1 exactly as measured, overlay it in the plan:
+#   [server.args]
+#   cuda-graph-max-bs-decode = 3
+
+description = "gpt-oss-120b, GB300, recipe A for 1048576/256: swa-full-tokens-ratio 0.1, cuda-graph-max-bs-decode 8"
+extends = "gpt-oss-120b/gb300-trtllm"
+
+[args]
+swa-full-tokens-ratio = 0.1
+cuda-graph-max-bs-decode = 8
