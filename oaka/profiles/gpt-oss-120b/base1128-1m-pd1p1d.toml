@@ -1,0 +1,26 @@
+# gpt-oss-120b/base1128-1m as prefill-decode disaggregation on one physical MI45x GPU in DPX mode: one TP1
+# prefill server on the first partition, one TP1 decode server on the second, sglang_router in front (the
+# pd1p1d layout of the mi45x-dpx-extra suite), user 2026-11-28 ("let one partition be P node and one partition be
+# D node ... based on the current best recipe").  KV moves by Mooncake over TCP, as best_known_1026-pd1p1d and
+# base1021-tp2-pdd (no RDMA between a GPU's partitions in these images).  sglang-router is not in the 1125 image:
+# built from the SGLang tree's sgl-router with cargo (controller brief, 11-28).  The decode partition holds every
+# sequence's KV (~3.4M fp8 tokens), so meta1124's TP2 batches do not fit: run at the TP1 per-partition batch.
+# Everything else is base1128-1m's (trees, env, per-shape server settings).
+
+description = "gpt-oss-120b base1128-1m, PD: 1 TP1 prefill + 1 TP1 decode on one MI45x (Mooncake over TCP), sglang_router in front"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/base1128-1m"
+tp = 1
+
+[env]
+MOONCAKE_PROTOCOL = "tcp"
+MC_FORCE_TCP = "1"
+
+[args]
+disaggregation-transfer-backend = "mooncake"
+
+[pd.prefill]
+count = 1
+
+[pd.decode]
+count = 1
