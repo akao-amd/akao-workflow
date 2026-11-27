@@ -1,0 +1,21 @@
+# Stack base1128 (11-28): base1127 + the 11-27/28 night work on d21-02 (controller record 090_gptoss_2x;
+# work/opusA/MANIFEST_base1128.md there). Branch base1128 of akao-amd/{triton,aiter,sglang}: Triton d436c49e2f
+# (= base1126), AITER 889f3da24d (= base1127 470b54fc + REQ_35 two-heads producer + REQ_42 decode_2h launch table),
+# SGLang 460758f94e (= base1127 2a08f3076d + REQ_32 fp8 decode Q from the fused RoPE/KV-write kernel).
+# Install after `git -C /sgl-workspace/<tree> fetch https://github.com/akao-amd/<repo> base1128`.
+# On top of base1127 this profile turns on:
+#   SGLANG_2X_DECODE_Q_FP8_ROPE   decode Q written in fp8 by the RoPE/KV-write kernel (static scale 1.0; no Q copy or
+#                                 quant kernels; REQ_32: TP2 32k -0.50 ms vs bf16-q bar, 128k -1.61 ms)
+#   AITER_UA_DECODE_TWO_HEADS     decode attention: one program for two KV heads (no padding rows; bit-exact;
+#                                 REQ_35: TP2 32k -2.42 ms, 128k -1.37 ms; with its own launch table, REQ_42:
+#                                 32k -1.02 ms, 128k -2.37 ms)
+# SGLANG_6003_DECODE_Q stays "dynamic" from base1127: with FP8_ROPE the decode Q arrives fp8 and the mode is not read.
+# REQ_40 (TP2, same pair): base1128 candidate 32k 15.06 ms vs base1127 17.69; 128k 14.38 vs 16.03 (before REQ_42).
+
+description = "gpt-oss-120b base1128 (TP1 (two-heads/fp8-rope not measured at TP1 before the suite)): base1127 + fp8 decode Q from RoPE + two-KV-heads decode attention"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/base1127"
+
+[env]
+SGLANG_2X_DECODE_Q_FP8_ROPE = "1"
+AITER_UA_DECODE_TWO_HEADS = "1"
