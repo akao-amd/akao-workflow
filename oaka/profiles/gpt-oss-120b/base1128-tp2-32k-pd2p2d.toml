@@ -1,0 +1,26 @@
+# gpt-oss-120b/base1128-tp2-32k as prefill-decode disaggregation over two physical MI45x GPUs in DPX mode: one TP2
+# prefill server and one TP2 decode server, sglang_router in front.  User 2026-11-28: "a 2-P-2-D setup, for
+# example GPU=0,2 be a P node and GPU=1,3 be a D node.  This can be a fair comparison to a 1-P-1-D GB300 setup";
+# both placements are measured (user: "Both, grouped first"), set by the plan's gpus order (oaka gives the prefill
+# server the first tp GPUs, the decode server the next):
+#   grouped      gpus = [0, 1, 2, 3]  P = one GPU's two partitions, D = the other's (TP2 inside a GPU, as measured)
+#   interleaved  gpus = [0, 2, 1, 3]  P and D each span both GPUs (TP2 all-reduce crosses the GPU link)
+# The decode node is TP2, so it holds meta1124's TP2 batch (c 168/44/8), as the base1128 TP2 snapshot does.  KV moves
+# by Mooncake over TCP (as the pd1p1d profiles).  Everything else is base1128-tp2-32k's.
+
+description = "gpt-oss-120b base1128-tp2-32k, PD: 1 TP2 prefill + 1 TP2 decode over two MI45x (Mooncake over TCP), sglang_router in front"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/base1128-tp2-32k"
+
+[env]
+MOONCAKE_PROTOCOL = "tcp"
+MC_FORCE_TCP = "1"
+
+[args]
+disaggregation-transfer-backend = "mooncake"
+
+[pd.prefill]
+count = 1
+
+[pd.decode]
+count = 1
