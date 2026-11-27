@@ -394,7 +394,10 @@ it started from, with `arch` copied unless `--arch` (`gfx950`, or `gfx950:10.1` 
 version), and a dated history comment naming the task; add the evidence to it by hand.
 
 **Prefill-decode disaggregation** (`[pd]`).  A profile with a `[pd]` table makes its plan
-server SGLang prefill and decode servers behind `sglang_router` (SGLang only):
+server SGLang prefill and decode servers behind a router (SGLang only): SGLang's `sgl-router`
+binary when it is on PATH (built from the tree's `sgl-router` crate, e.g. `maturin build
+--release` there and `pip install --no-deps` the wheel), else the Python `sglang_router` of
+older images:
 
 ```toml
 extends = "gpt-oss-120b/base1021-tp2"
@@ -407,7 +410,7 @@ count = 1                  # default 1; a bare [pd] is one prefill + one decode 
 count = 1
 [pd.decode.args]
 mem-fraction-static = 0.8
-[pd.router.args]           # python3 -m sglang_router.launch_router flags; also [pd.router.env]
+[pd.router.args]           # router flags (either router: keep to ones both take); also [pd.router.env]
 policy = "round_robin"
 ```
 
@@ -417,16 +420,28 @@ policy = "round_robin"
   (no `trace` clients: they profile one SGLang server).  Each prefill and decode server gets a
   port of its own and each prefill server a bootstrap port, picked and kept in
   `plan.lock.toml` as `<name>.prefill0`, `<name>.prefill0.bootstrap`, `<name>.decode0`, ...
-- oaka sets `--disaggregation-mode` and `--disaggregation-bootstrap-port` on the servers and
-  `--pd-disaggregation --prefill <url> <bootstrap> --decode <url> --host 127.0.0.1 --port <port>`
-  on the router; profiles and plans may not.
+- oaka sets `--disaggregation-mode` and `--disaggregation-bootstrap-port` on the servers, and
+  the router's servers and address; profiles and plans may not.  The router script runs the
+  first router it finds:
+  - `sgl-router --model-id <model> [--tokenizer-path <model>/tokenizer.json] --worker-urls
+    <prefill url> ... <decode url> ... --host 127.0.0.1 --port <port>`: it reads each server's
+    PD role and bootstrap port from its `/server_info` (and rejects the Python router's
+    `--pd-disaggregation`/`--prefill`/`--decode`); the tokenizer path is passed when the model
+    directory has the file (without it the router fails with `load tokenizers`), and
+    `SGLANG_ROUTER_MAX_BODY_BYTES` defaults to 1 GiB (sgl-router answers 413 past 32 MiB, and
+    bench_one_batch posts a whole batch of input ids in one request);
+  - else `python3 -m sglang_router.launch_router --pd-disaggregation --prefill <url> <bootstrap>
+    --decode <url> --host 127.0.0.1 --port <port>`.
+
+  `OAKA_SGL_ROUTER` names the binary to try (default `sgl-router`, a path works too); set it
+  empty to use the Python router.  The router log's `cmd` line says which one ran.
 - Overlays: every `[env]`/`[args]`, a profile's or the plan's `[server.env]`/`[server.args]`,
   reaches every prefill and decode server; a role's own go on top of its profile's (`false`
   drops), so a later child's `[args]` and the plan's still win over a parent's role.  `[pd]`
   is inherited through `extends`; a child's role tables overlay the parent's, its `count`
   replaces.
-- `oaka doctor` shows `pd router` (`sglang_router`) and `pd mooncake`, and warns when a PD
-  profile for this machine needs one that is missing.
+- `oaka doctor` shows `pd router` (the `sgl-router` binary, else `sglang_router`) and `pd
+  mooncake`, and warns when a PD profile for this machine needs one that is missing.
 
 **What a profile is for** (`arch`): a list of targets, each a GPU arch (any ROCm) or an
 `[arch, ROCm version]` pair, `*` for any in either place; one of them must fit the

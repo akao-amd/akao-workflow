@@ -2,7 +2,7 @@
 //! is `ok`, `warn` or `FAIL` with the fix; any FAIL makes the command fail.
 
 use crate::compile::infx_root;
-use crate::profile::{Arg, Engine, Library, Profile, ROUTER_MODULE};
+use crate::profile::{Arg, Engine, Library, Profile, ROUTER_BINARY, ROUTER_MODULE};
 use crate::stack;
 use crate::sys;
 use anyhow::{bail, Result};
@@ -291,6 +291,28 @@ fn check_gpu_index(r: &mut Report) {
     );
 }
 
+/// Where `program` is on PATH (an executable file), or None; None for an empty name.
+fn path_origin(program: &str) -> Option<String> {
+    if program.is_empty() {
+        return None;
+    }
+    if program.contains('/') {
+        let p = Path::new(program);
+        return (p.is_file() && p.metadata().ok()?.permissions().mode() & 0o111 != 0).then(|| program.to_string());
+    }
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|d| d.join(program))
+            .find(|p| {
+                p.is_file()
+                    && p.metadata()
+                        .map(|m| m.permissions().mode() & 0o111 != 0)
+                        .unwrap_or(false)
+            })
+            .map(|p| p.display().to_string())
+    })
+}
+
 /// Where python3 finds a package (without importing it), or None.
 fn module_origin(module: &str) -> Option<String> {
     let find =
@@ -375,21 +397,36 @@ fn check_pd(r: &mut Report, lib: &Library) {
         Some(Arg::Value(v)) => v == "mooncake",
         Some(_) => false,
     };
-    for (check, module, users) in [
-        ("pd router", ROUTER_MODULE, pd.iter().collect::<Vec<_>>()),
-        ("pd mooncake", "mooncake", pd.iter().filter(mooncake).collect()),
-    ] {
-        match module_origin(module) {
-            Some(origin) => r.ok(check, origin),
-            None if !users.is_empty() => r.warn(
-                check,
-                format!(
-                    "python3 cannot find {module}; PD profiles {} use it",
-                    users.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(" ")
-                ),
+    let names = |users: &[&Profile]| users.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(" ");
+    // The router: either one will do (router.sh runs the sgl-router binary when it finds it, as
+    // OAKA_SGL_ROUTER names it, else the Python sglang_router).
+    let binary = std::env::var("OAKA_SGL_ROUTER").unwrap_or_else(|_| ROUTER_BINARY.to_string());
+    let users: Vec<&Profile> = pd.iter().collect();
+    match (path_origin(&binary), module_origin(ROUTER_MODULE)) {
+        (Some(bin), _) => r.ok("pd router", bin),
+        (None, Some(origin)) => r.ok("pd router", origin),
+        (None, None) if !users.is_empty() => r.warn(
+            "pd router",
+            format!(
+                "neither {} on PATH nor python3's {ROUTER_MODULE}; PD profiles {} use one",
+                if binary.is_empty() {
+                    ROUTER_BINARY
+                } else {
+                    binary.as_str()
+                },
+                names(&users)
             ),
-            None => {}
-        }
+        ),
+        (None, None) => {}
+    }
+    let users: Vec<&Profile> = pd.iter().filter(mooncake).collect();
+    match module_origin("mooncake") {
+        Some(origin) => r.ok("pd mooncake", origin),
+        None if !users.is_empty() => r.warn(
+            "pd mooncake",
+            format!("python3 cannot find mooncake; PD profiles {} use it", names(&users)),
+        ),
+        None => {}
     }
 }
 

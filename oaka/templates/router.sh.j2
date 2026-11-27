@@ -18,18 +18,52 @@ fi
 export {{ kv[0] }}={{ kv[1] | q }}
 {% endfor %}
 
-ARGS=(
-{% for line in fixed %}
-    {{ line }}
+# Two routers take these servers; the first found runs:
+#   {{ command_bin }}  SGLang's router binary (the tree's sgl-router crate): workers by URL, each one's
+#               PD role and bootstrap port read from its /server_info
+#   {{ command }}  the Python router of older images: roles and bootstrap ports given here
+# OAKA_SGL_ROUTER names the binary to try (default {{ command_bin }}); empty uses the Python router.
+SGL_ROUTER=${OAKA_SGL_ROUTER-{{ command_bin }}}
+if [ -n "$SGL_ROUTER" ] && command -v "$SGL_ROUTER" >/dev/null 2>&1; then
+    KIND=binary
+    ROUTER=("$SGL_ROUTER")
+    # sgl-router loads a tokenizer from --tokenizer-path (a tokenizer.json file or an HF repo id),
+    # default --model-id: a model directory needs its file named.
+    TOKENIZER=()
+    if [ -f {{ model }}/tokenizer.json ]; then
+        TOKENIZER=(--tokenizer-path {{ model }}/tokenizer.json)
+    fi
+    # sgl-router answers 413 past a 32 MiB request body; bench_one_batch posts a whole batch as
+    # one /generate (32k c168 is ~40 MB of input ids, 1M c8 ~60 MB): 1 GiB unless set.
+    export SGLANG_ROUTER_MAX_BODY_BYTES=${SGLANG_ROUTER_MAX_BODY_BYTES:-1073741824}
+    ARGS=(
+{% for line in fixed_bin %}
+        {{ line }}
 {% endfor %}
 {% for line in args %}
-    {{ line }}
+        {{ line }}
 {% endfor %}
-)
+    )
+else
+    KIND=python
+    ROUTER=({{ command }})
+    ARGS=(
+{% for line in fixed %}
+        {{ line }}
+{% endfor %}
+{% for line in args %}
+        {{ line }}
+{% endfor %}
+    )
+fi
 
 say "$(date -Is) $(realpath "$0")"
-python3 -m pip show sglang-router 2>/dev/null \
-    | grep -E '^(Name|Version|Location):' | sed 's/^/[server {{ name }}] pip /' || true
-say "cmd {{ command }} ${ARGS[*]}"
+if [ "$KIND" = binary ]; then
+    say "router $(command -v "$SGL_ROUTER") ($("$SGL_ROUTER" --version 2>/dev/null || echo 'version unknown'))"
+else
+    python3 -m pip show sglang-router 2>/dev/null \
+        | grep -E '^(Name|Version|Location):' | sed 's/^/[server {{ name }}] pip /' || true
+fi
+say "cmd ${ROUTER[*]} ${ARGS[*]}"
 
-exec {{ command }} "${ARGS[@]}"
+exec "${ROUTER[@]}" "${ARGS[@]}"

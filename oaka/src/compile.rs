@@ -3,7 +3,7 @@
 //! The scripts never call oaka.  `oaka run` executes exactly these files.
 
 use crate::plan::{self, Checked, ClientSpec, OffSpec, Server, Vary, PROMPTS_PER_CONC};
-use crate::profile::{flag_words, role_only_changes, Arg, Role, ROUTER_COMMAND};
+use crate::profile::{flag_words, role_only_changes, Arg, Role, ROUTER_BINARY, ROUTER_COMMAND};
 use crate::stack;
 use crate::sys::{self, q};
 use anyhow::{Context, Result};
@@ -277,6 +277,9 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
         }
         // The router: the plan server's port, in front of the prefill and decode servers.
         let url = |name: &str| format!("http://127.0.0.1:{}", port_of(name));
+        // Two routers take these servers, chosen by router.sh at run time: SGLang's sgl-router binary
+        // (built from the tree's sgl-router crate; it reads each worker's PD role and bootstrap port
+        // from its /server_info) when it is on PATH, else the Python sglang_router of older images.
         let mut fixed = vec!["--pd-disaggregation".to_string()];
         for (name, role, _) in &members {
             fixed.push(match role {
@@ -285,11 +288,24 @@ pub fn compile(c: &Checked) -> Result<Compiled> {
             });
         }
         fixed.extend(["--host 127.0.0.1".to_string(), "--port \"$PORT\"".to_string()]);
+        let worker_urls = members
+            .iter()
+            .map(|(name, _, _)| url(name))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let fixed_bin = vec![
+            format!("--model-id {}", q(&s.model)),
+            "\"${TOKENIZER[@]}\"".to_string(),
+            format!("--worker-urls {worker_urls}"),
+            "--host 127.0.0.1".to_string(),
+            "--port \"$PORT\"".to_string(),
+        ];
         let args = quoted_flags(&pd.router_args);
         let file = format!("server_{router}.sh");
         let text = env.get_template("router.sh")?.render(context! {
             marker, name => router, profile => s.base.name, self_path => format!("{SCRIPTS}/{file}"),
-            port => port_of(&s.name), env => pd.router_env, fixed, args, command => ROUTER_COMMAND,
+            port => port_of(&s.name), env => pd.router_env, fixed, fixed_bin, args, command => ROUTER_COMMAND,
+            command_bin => ROUTER_BINARY, model => q(&s.model),
             servers => members.iter().map(|(n, _, _)| n.as_str()).collect::<Vec<_>>().join(" "),
         })?;
         files.push((file, text));
@@ -841,18 +857,34 @@ off_spec = { prompts_per_conc = 4 }
             router.contains("PORT=29950\n"),
             "the router has the plan's port: {router}"
         );
+        // The Python router's arguments, used when no sgl-router binary is found ...
         assert!(
             router.contains(&format!(
-                "    --pd-disaggregation\n    --prefill http://127.0.0.1:{p} {b}\n    --decode http://127.0.0.1:{d}\n    \
-                 --host 127.0.0.1\n    --port \"$PORT\"\n    --policy round_robin\n"
+                "    ROUTER=(python3 -m sglang_router.launch_router)\n    ARGS=(\n        --pd-disaggregation\n        \
+                 --prefill http://127.0.0.1:{p} {b}\n        --decode http://127.0.0.1:{d}\n        \
+                 --host 127.0.0.1\n        --port \"$PORT\"\n        --policy round_robin\n"
             )),
             "{router}"
         );
-        assert!(router.contains("export RUST_LOG=info\n"), "{router}");
+        // ... and sgl-router's, preferred when it is: workers by URL, prefill first, the model.
         assert!(
-            router.contains("exec python3 -m sglang_router.launch_router \"${ARGS[@]}\""),
+            router.contains(&format!(
+                "    ARGS=(\n        --model-id /model/m\n        \"${{TOKENIZER[@]}}\"\n        \
+                 --worker-urls http://127.0.0.1:{p} http://127.0.0.1:{d}\n        --host 127.0.0.1\n        \
+                 --port \"$PORT\"\n        --policy round_robin\n"
+            )),
             "{router}"
         );
+        assert!(
+            router.contains("SGL_ROUTER=${OAKA_SGL_ROUTER-sgl-router}\n"),
+            "{router}"
+        );
+        assert!(
+            router.contains("export SGLANG_ROUTER_MAX_BODY_BYTES=${SGLANG_ROUTER_MAX_BODY_BYTES:-1073741824}\n"),
+            "{router}"
+        );
+        assert!(router.contains("export RUST_LOG=info\n"), "{router}");
+        assert!(router.contains("exec \"${ROUTER[@]}\" \"${ARGS[@]}\""), "{router}");
         assert!(
             read("client_01_fixed-seq_pd.sh").contains("PORT=29950"),
             "clients use the router"

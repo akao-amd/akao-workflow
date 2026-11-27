@@ -30,9 +30,22 @@ pub const RESERVED_ENV: &[&str] = &["HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES
 /// What oaka sets on the SGLang servers of a `[pd]` profile: each one's role and the prefill
 /// servers' bootstrap port, which the router is told.
 pub const PD_RESERVED_ARGS: &[&str] = &["disaggregation-mode", "disaggregation-bootstrap-port"];
-/// What oaka sets on a `[pd]` profile's router: its servers, and where it listens.
-pub const ROUTER_RESERVED_ARGS: &[&str] = &["pd-disaggregation", "prefill", "decode", "host", "port"];
-/// The router in front of a `[pd]` profile's servers.
+/// What oaka sets on a `[pd]` profile's router: its servers, and where it listens, in either
+/// router's spelling (`--prefill`/`--decode` for sglang_router, `--model-id`/`--worker-urls` for
+/// sgl-router).
+pub const ROUTER_RESERVED_ARGS: &[&str] = &[
+    "pd-disaggregation",
+    "prefill",
+    "decode",
+    "model-id",
+    "worker-urls",
+    "host",
+    "port",
+];
+/// The router in front of a `[pd]` profile's servers: SGLang's `sgl-router` binary (built from the
+/// tree's sgl-router crate) when it is on PATH, else the Python `sglang_router` of older images.
+/// The router script chooses at run time.
+pub const ROUTER_BINARY: &str = "sgl-router";
 pub const ROUTER_COMMAND: &str = "python3 -m sglang_router.launch_router";
 pub const ROUTER_MODULE: &str = "sglang_router";
 
@@ -140,7 +153,7 @@ pub struct ProfileFile {
 
 /// `[pd]` as written: `[pd.prefill]` and `[pd.decode]` (each a `count`, default 1, and
 /// `env`/`args` overlaid on the profile's for that role only), `[pd.router]` (`env`/`args`
-/// of `sglang_router.launch_router`).
+/// of the router: `sgl-router` or `sglang_router.launch_router`, whichever runs).
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PdFile {

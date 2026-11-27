@@ -214,7 +214,8 @@ http.server.HTTPServer(("127.0.0.1", port), Health).serve_forever()
 "#;
 
 /// `python3 -m sglang_router.launch_router --pd-disaggregation --prefill URL BOOT ... --decode URL
-/// ... --port P`: records its argv in state/router_<port>.json, and answers `POST /generate` with
+/// ... --port P`, or as `bin/sgl-router-standin` the sgl-router binary's `--model-id M --worker-urls
+/// URL ... --port P`: records its argv in state/router_<port>.json, and answers `POST /generate` with
 /// 200 once FAKE_ROUTER_DELAY has passed and every server behind it accepts connections, 503
 /// before (as a router whose servers are not registered yet); with FAKE_ROUTER_HANG it never
 /// answers.  Stops on SIGTERM.
@@ -227,6 +228,9 @@ with open(os.path.join(state, "pids"), "a") as f:
     f.write(f"{os.getpid()}\n")
 json.dump({"argv": args}, open(os.path.join(state, f"router_{port}.json"), "w"))
 urls = [args[i + 1] for i, a in enumerate(args) if a in ("--prefill", "--decode")]
+if "--worker-urls" in args:  # sgl-router's spelling: --worker-urls URL ... up to the next flag
+    rest = args[args.index("--worker-urls") + 1:]
+    urls += [u for u in rest[: next((i for i, a in enumerate(rest) if a.startswith("--")), len(rest))]]
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 ready_at = time.time() + float(os.environ.get("FAKE_ROUTER_DELAY", "0"))
 def up(url):
@@ -422,6 +426,10 @@ impl Sandbox {
         write("py/sglang/launch_server.py", FAKE_SGLANG);
         write("py/sglang_router/__init__.py", "");
         write("py/sglang_router/launch_router.py", FAKE_ROUTER);
+        write(
+            "bin/sgl-router-standin",
+            &format!("#!/usr/bin/env python3\n{FAKE_ROUTER}"),
+        );
         write("py/vllm/__init__.py", "");
         write("bin/vllm", &format!("#!/usr/bin/env python3\n{FAKE_OPENAI_SERVER}"));
         write("py/atom/__init__.py", "");
@@ -498,6 +506,9 @@ impl Sandbox {
             .env_remove("AKAO_ARTIFACT_ROOT")
             .env("AKAO_REPO_ROOT", self.root.join("repo-clone"))
             .env("OAKA_ROCM", "10.0.0")
+            // router.sh would run an sgl-router found on the host's PATH: tests that want the binary
+            // point this at bin/sgl-router-standin.
+            .env("OAKA_SGL_ROUTER", "")
             .stdin(Stdio::null());
         c
     }
@@ -1688,6 +1699,80 @@ fn pd_servers_start_behind_their_router() {
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("server pd.decode0 died during startup"), "{out}");
     assert!(!out.contains("server pd.router ready"), "{out}");
+    sb.assert_no_leftovers();
+}
+
+/// With the sgl-router binary found (here OAKA_SGL_ROUTER names the stand-in), the router script
+/// runs it instead of the Python router: workers by URL, prefill servers first, the model as
+/// --model-id, no roles or bootstrap ports (it reads them from each server's /server_info).
+#[test]
+fn pd_router_script_runs_the_sgl_router_binary_when_found() {
+    use std::os::unix::fs::PermissionsExt;
+    let _servers = servers_shared();
+    let sb = Sandbox::new("pd-bin");
+    fs::write(
+        sb.root.join("lib/profiles/m/pd.toml"),
+        "extends = 'm/base'\n[pd.router.args]\npolicy = 'round_robin'\n",
+    )
+    .unwrap();
+    let port = ephemeral_port();
+    let plan = format!(
+        "[[server]]\nname = 'pd'\nprofile = 'm/pd'\ngpus = [0, 1]\nport = {port}\n\
+         [[client]]\nkind = 'fixed-seq'\nserver = 'pd'\nisl_osl = [[128, 32]]\nconc = [4]\n"
+    );
+    fs::write(
+        sb.work().join("plan.lock.toml"),
+        format!(
+            "[port]\n\"pd.prefill0\" = {}\n\"pd.prefill0.bootstrap\" = {}\n\"pd.decode0\" = {}\n",
+            ephemeral_port(),
+            ephemeral_port(),
+            ephemeral_port()
+        ),
+    )
+    .unwrap();
+    // A model directory with a tokenizer.json: the router is told the file.
+    fs::write(sb.root.join("model/tokenizer.json"), "{}").unwrap();
+    let standin = sb.root.join("bin/sgl-router-standin");
+    fs::set_permissions(&standin, fs::Permissions::from_mode(0o755)).unwrap();
+    let standin = standin.display().to_string();
+    let (code, out) = sb.run(&plan, &[("OAKA_SGL_ROUTER", standin.as_str())]);
+    assert_eq!(code, 0, "{out}");
+    let at = |needle: &str| out.find(needle).unwrap_or_else(|| panic!("{needle:?} not in {out}"));
+    at("server pd.router ready (POST /generate)");
+
+    let v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(sb.root.join("state").join(format!("router_{port}.json"))).unwrap())
+            .unwrap();
+    let router = v["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w.as_str().unwrap())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let lock: toml::Table = toml::from_str(&sb.read("plan.lock.toml")).unwrap();
+    let slot = |k: &str| lock["port"][k].as_integer().unwrap();
+    let (p, d) = (slot("pd.prefill0"), slot("pd.decode0"));
+    let model = sb.root.join("model").display().to_string();
+    assert!(
+        router.contains(&format!(
+            "--model-id {model} --tokenizer-path {model}/tokenizer.json \
+             --worker-urls http://127.0.0.1:{p} http://127.0.0.1:{d} --host 127.0.0.1 --port {port} \
+             --policy round_robin"
+        )),
+        "{router}"
+    );
+    for gone in ["--pd-disaggregation", "--prefill", "--decode"] {
+        assert!(!router.contains(gone), "{gone} in {router}");
+    }
+    let log = sb.read("logs/server_pd.router.log");
+    assert!(
+        log.contains(&format!("[server pd.router] cmd {standin} --model-id")),
+        "{log}"
+    );
+    assert!(log.contains(&format!("[server pd.router] router {standin}")), "{log}");
+    let point = sb.read("results/01_fixed-seq_pd/pd_isl128_osl32_c4_r1.json");
+    assert!(point.contains(&format!("http://127.0.0.1:{port}")), "{point}");
     sb.assert_no_leftovers();
 }
 

@@ -9,7 +9,9 @@ mod sys;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use profile::{flag_words, targets_text, Arg, Library, Profile, ProfileFile, Role, Target, ROUTER_COMMAND};
+use profile::{
+    flag_words, targets_text, Arg, Library, Profile, ProfileFile, Role, Target, ROUTER_BINARY, ROUTER_COMMAND,
+};
 use std::path::{Path, PathBuf};
 use toml::Value;
 
@@ -526,16 +528,25 @@ fn show(lib: &Library, name: &str) -> Result<()> {
         for (k, v) in &pd.router_env {
             println!("{k}={}", sys::q(v));
         }
+        let extra: Vec<String> = flag_words(&pd.router_args)
+            .iter()
+            .map(|w| w.iter().map(|x| sys::q(x)).collect::<Vec<_>>().join(" "))
+            .collect();
+        // router.sh runs the first router it finds: the sgl-router binary, else the Python one.
+        let mut router = vec![
+            format!("{ROUTER_BINARY} --model-id <model>"),
+            "--worker-urls <prefill url> ... <decode url> ...".into(),
+            "--host 127.0.0.1 --port <plan port>".into(),
+        ];
+        router.extend(extra.iter().cloned());
+        println!("{}", router.join(" \\\n    "));
+        println!("# else (no {ROUTER_BINARY} on PATH, or OAKA_SGL_ROUTER empty):");
         let mut router = vec![
             format!("{ROUTER_COMMAND} --pd-disaggregation"),
             "--prefill <url> <bootstrap port> ... --decode <url> ...".into(),
             "--host 127.0.0.1 --port <plan port>".into(),
         ];
-        router.extend(
-            flag_words(&pd.router_args)
-                .iter()
-                .map(|w| w.iter().map(|x| sys::q(x)).collect::<Vec<_>>().join(" ")),
-        );
+        router.extend(extra);
         println!("{}", router.join(" \\\n    "));
     }
     Ok(())
