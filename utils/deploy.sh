@@ -9,23 +9,26 @@
 # (f44ab9c): mdadm --create, mkfs.xfs, fstab, mdadm.conf, daemon.json data-root.
 #
 # Runs on the box, as root.  From the console:
-#   ssh <nick> 'sudo bash -s -- [--yes]' < "$AKAO_REPO_ROOT/utils/deploy.sh"
+#   ssh <nick> 'sudo bash -s -- [--yes] [--hide-containers]' < "$AKAO_REPO_ROOT/utils/deploy.sh"
 # Without --yes it only prints what it found and what it would do.  Idempotent: an existing
 # /mnt/raid mount, array, daemon.json data-root or containerd root is kept.
 #
 # Unused disk = whole disk named nvme*n*, no partitions, no filesystem/RAID signature
 # (wipefs), not mounted, not an md member, not holding the root filesystem.
-# Refuses to restart docker while any container exists.  The old /var/lib/docker and
+# Refuses to restart docker while any container exists, unless --hide-containers (their owners
+# agreed): they then stay, hidden, under the old roots.  The old /var/lib/docker and
 # /var/lib/containerd are left in place (not copied, not deleted).
 set -euo pipefail
 
 MNT=${DEPLOY_MNT:-/mnt/raid}
 MD=${DEPLOY_MD:-/dev/md/raid}
 APPLY=0
+HIDE=0
 for a in "$@"; do
   case $a in
     --yes) APPLY=1 ;;
-    -h|--help) sed -n '2,21p' "$0" 2>/dev/null || true; exit 0 ;;
+    --hide-containers) HIDE=1 ;;
+    -h|--help) sed -n '2,20p' "$0" 2>/dev/null || true; exit 0 ;;
     *) echo "deploy.sh: unknown argument $a" >&2; exit 2 ;;
   esac
 done
@@ -108,7 +111,12 @@ say "# docker root: $cur_docker   containerd root: $cur_ctrd"
 
 if [ "$cur_docker" != "$want_docker" ] || [ "$cur_ctrd" != "$want_ctrd" ]; then
   n=$(docker ps -aq 2>/dev/null | wc -l)
-  [ "$n" = 0 ] || die "$n container(s) exist; moving docker's root would hide them: remove them first"
+  if [ "$n" != 0 ]; then
+    # --hide-containers: their owners agreed (ask the user); the containers stay intact under the old roots
+    # (nothing is deleted) and come back if daemon.json's data-root and containerd's root are reverted.
+    [ "$HIDE" = 1 ] || die "$n container(s) exist; moving docker's root would hide them: remove them first, or pass --hide-containers once their owners agree"
+    say "# $n container(s) stay under $cur_docker / $cur_ctrd, hidden from the new roots (--hide-containers)"
+  fi
   run mkdir -p "$want_docker" "$want_ctrd"
   run systemctl stop docker.socket docker
   if [ "$cur_docker" != "$want_docker" ]; then

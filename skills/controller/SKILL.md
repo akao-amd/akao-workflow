@@ -98,7 +98,8 @@ makes `/mnt/raid/models`, owned by the login. Then it moves docker's `data-root`
 `/mnt/raid/docker` **and** containerd's `root` to `/mnt/raid/containerd`. Docker 29's
 containerd image store keeps its images in containerd's root, so moving only docker's leaves
 them on the system disk. It is idempotent. It refuses to restart docker while any container
-exists, and it neither copies nor deletes the old `/var/lib/{docker,containerd}`.
+exists, unless `--hide-containers` (only when their owners agreed, via the user: d21-04, 11-27): they stay,
+intact and hidden, under the old roots. It neither copies nor deletes the old `/var/lib/{docker,containerd}`.
 
 1. Record and run the dry run, which prints the disks it found and every step:
    `ssh <nick> 'sudo bash -s --' < "$AKAO_REPO_ROOT/utils/deploy.sh"`
