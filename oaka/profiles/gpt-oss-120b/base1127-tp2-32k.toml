@@ -1,0 +1,24 @@
+# Stack base1127 (user, 2026-11-27 17:20: "the best so far ... name it base1127"): base1126 + the 11-27 gpt-oss 2x
+# work on d21-02 (controller record 090_gptoss_2x; work/opusA/MANIFEST.md there).  Branch base1127 of
+# akao-amd/{triton,aiter,sglang} (pushed 2026-11-27): Triton d436c49e2f (= base1126), AITER 13320474be, SGLang 9067f4bfba.
+# Install after `git -C /sgl-workspace/<tree> fetch https://github.com/akao-amd/<repo> base1127`.
+# The changes are env-gated on the branches; this profile turns them on:
+#   SGLANG_2X_DECODE_KV_HEAD_FIRST   decode attention KV-head-first traversal (REQ_05: TP2 32k -3.9 ms, 128k -0.8 ms)
+#   SGLANG_2X_SHARDED_GREEDY         exact sharded greedy argmax (REQ_11: -0.38 / -0.13 ms)
+#   SGLANG_2X_BF16_GATHER_SOFTCAP    BF16 logits gather+cast without the reorder copy (REQ_18: -0.17 ms, sharded off)
+#   AITER_UA_DECODE_HOIST            decode K/V offset hoist (REQ_23; not yet measured in serving with FP8 Q)
+#   SGLANG_6003_DECODE_Q = dynamic   FP8 decode q (REQ_19 on base1126: -1.57 / -1.72 ms; worst-element attention error
+#                                    ~3 % of max vs ~0.3 % bf16 q; user chose it, 11-27)
+# Config-only (no env): AITER dense gemm_a16w16 decode configs (REQ_15: -0.48 ms) and decode attention num_stages 4
+# for bf16 and fp8 q (REQ_26 pending). Not measured as a whole before the d21-04 meta1124-mi450 run (11-27).
+
+description = "gpt-oss-120b/base1126-tp2-32k (per-shape settings) on stack base1127 + the 11-27 decode changes"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/base1126-tp2-32k"
+
+[env]
+SGLANG_2X_DECODE_KV_HEAD_FIRST = "1"
+SGLANG_2X_SHARDED_GREEDY = "1"
+SGLANG_2X_BF16_GATHER_SOFTCAP = "1"
+AITER_UA_DECODE_HOIST = "1"
+SGLANG_6003_DECODE_Q = "dynamic"
