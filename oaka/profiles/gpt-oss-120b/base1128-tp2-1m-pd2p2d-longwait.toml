@@ -1,0 +1,18 @@
+# gpt-oss-120b/base1128-tp2-1m-pd2p2d with every PD wait raised to 3600 s, for a one-shot 8 x 1M burst through PD
+# (meta1124 1M c8): the prefill node prefills one 1M request at a time (~130 s each on MI45x TP2), so the last request
+# waits ~17 min for its KV and its first token.  Defaults that cut it (e21-4, 11-28, task gptoss_e21/0001):
+#   SGLANG_DISAGGREGATION_WAITING_TIMEOUT 300 s (decode side, KVPoll.WaitingForInput: requests 3-8 aborted),
+#   sgl-router --request-timeout-secs 300 (the prefill upstream, queueing included), --stream-idle-timeout-secs 180,
+#   --stale-request-timeout-secs 600.
+# A deviation approved by the controller for that point (like GB300's client timeout); nothing else changes.
+description = "gpt-oss-120b base1128-tp2-1m PD 2P2D, decode-side KV wait and sgl-router timeouts 3600 s (one-shot 1M burst)"
+arch = ["gfx1250"]
+extends = "gpt-oss-120b/base1128-tp2-1m-pd2p2d"
+
+[env]
+SGLANG_DISAGGREGATION_WAITING_TIMEOUT = "3600"
+
+[pd.router.args]
+request-timeout-secs = 3600
+stream-idle-timeout-secs = 3600
+stale-request-timeout-secs = 3600
