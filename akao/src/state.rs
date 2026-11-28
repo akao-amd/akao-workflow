@@ -220,18 +220,63 @@ pub fn shippable_repo() -> Result<String> {
 /// pins a worker's into its container; on the console it is the controller's own.
 pub const ARTIFACT_ROOT_ENV: &str = "AKAO_ARTIFACT_ROOT";
 
+/// A controller's name, given by the user when they assign it: its record is then
+/// `/<year>/<week>/controller/<name>`, its own, instead of the week's shared one.
+pub const CONTROLLER_ENV: &str = "AKAO_CONTROLLER";
+
 /// The console agent's artifact root and where it came from: `$AKAO_ARTIFACT_ROOT` when
-/// set (then the year and week play no part), else `/<year>/<week>/controller`.
+/// set (then the year and week play no part), else `/<year>/<week>/controller/<name>` for a
+/// named controller (`$AKAO_CONTROLLER`), else the shared `/<year>/<week>/controller`.
 pub fn artifact_root() -> Result<(String, &'static str)> {
-    match std::env::var(ARTIFACT_ROOT_ENV) {
-        Ok(r) if !r.is_empty() => {
-            if !r.starts_with('/') {
-                bail!("{ARTIFACT_ROOT_ENV}={r} must be an absolute path");
-            }
-            Ok((r.trim_end_matches('/').to_string(), ARTIFACT_ROOT_ENV))
+    let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    controller_root(
+        var(ARTIFACT_ROOT_ENV).as_deref(),
+        var(CONTROLLER_ENV).as_deref(),
+        &work_year(),
+        &work_week(),
+    )
+}
+
+/// `artifact_root` without the environment, for tests.
+pub fn controller_root(
+    explicit: Option<&str>,
+    name: Option<&str>,
+    year: &str,
+    week: &str,
+) -> Result<(String, &'static str)> {
+    if let Some(r) = explicit {
+        if !r.starts_with('/') {
+            bail!("{ARTIFACT_ROOT_ENV}={r} must be an absolute path");
         }
-        _ => Ok((format!("/{}/{}/controller", work_year(), work_week()), "derived")),
+        return Ok((r.trim_end_matches('/').to_string(), ARTIFACT_ROOT_ENV));
     }
+    let shared = format!("/{year}/{week}/controller");
+    match name {
+        Some(n) => {
+            check_controller_name(n)?;
+            Ok((format!("{shared}/{n}"), CONTROLLER_ENV))
+        }
+        None => Ok((shared, "derived")),
+    }
+}
+
+/// A controller name is one plain path component: letters, digits, `.`, `_`, `-`, not
+/// starting with `.` or `-`, and not all digits (a three-digit name would read as a record
+/// number in the shared root).
+pub fn check_controller_name(n: &str) -> Result<()> {
+    let plain = !n.is_empty()
+        && n.len() <= 64
+        && n.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        && !n.starts_with(['.', '-'])
+        && !n.chars().all(|c| c.is_ascii_digit());
+    if !plain {
+        bail!(
+            "{CONTROLLER_ENV}={n} is not a controller name: use letters, digits, '.', '_' or '-' (not leading '.' \
+             or '-', not all digits, at most 64)"
+        );
+    }
+    Ok(())
 }
 
 /// One row of hosts.tsv. Optional columns are written as `-`.
@@ -385,6 +430,28 @@ mod tests {
             docker_sock: Some("/data/docker.sock".into()),
             host_home: "/root/akao".into(),
             rest: Some("--shm-size=64g -e 'FOO=a b'".into()),
+        }
+    }
+
+    #[test]
+    fn controller_root_named_shared_and_explicit() {
+        let r = |e, n| controller_root(e, n, "2026", "ww49");
+        assert_eq!(r(None, None).unwrap(), ("/2026/ww49/controller".into(), "derived"));
+        assert_eq!(
+            r(None, Some("opus1")).unwrap(),
+            ("/2026/ww49/controller/opus1".into(), CONTROLLER_ENV)
+        );
+        // An explicit root wins over a name, as it wins over the derived year and week.
+        assert_eq!(
+            r(Some("/2026/ww48/gb_ctl/"), Some("opus1")).unwrap(),
+            ("/2026/ww48/gb_ctl".into(), ARTIFACT_ROOT_ENV)
+        );
+        assert!(r(Some("rel/dir"), None).is_err());
+        for bad in ["a/b", "..", ".hidden", "-x", "123", "", "a b", &"x".repeat(65)] {
+            assert!(check_controller_name(bad).is_err(), "{bad:?} accepted");
+        }
+        for good in ["opus1", "gpt-oss_2x", "r31261v", "c.2"] {
+            check_controller_name(good).unwrap();
         }
     }
 

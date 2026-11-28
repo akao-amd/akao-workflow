@@ -62,7 +62,8 @@ skills (`skills/`) are read from it in place; every worker gets its own clone un
 (init step 8), and nothing of it is copied under `/<year>`.  Only committed work travels.
 
 **Artifact roots.**  Each agent keeps its numbered dirs under one directory, its *artifact
-root*: a worker's is `/<year>/<week>/<name>`, the controllers' `/<year>/<week>/controller`.
+root*: a worker's is `/<year>/<week>/<name>`, a named controller's `/<year>/<week>/controller/<name>`
+(`$AKAO_CONTROLLER=<name>`), unnamed controllers' the shared `/<year>/<week>/controller`.
 `$AKAO_ARTIFACT_ROOT` names it explicitly, and then no year/week is derived for it: on the
 console it is the controller's own (`akao config ls` and `akao doctor` show it); for a
 worker, `akao init` pins it into the container (below).
@@ -324,18 +325,21 @@ cp utils/ssh ~/.local/bin/ssh && cp utils/ssh "${AKAO_CONFIG_ROOT:-.state}/conta
 (`git clone https://github.com/SemiAnalysisAI/InferenceX.git`; `git -C ... fetch` now and
 then: mirror never fetches).
 
-**6. Its artifact root.**  Several controllers can share a console; by default they share one
-record per week, `/<year>/<week>/controller/`.  To give one its own, start it with
-`AKAO_ARTIFACT_ROOT=/<year>/<week>/<dir>`.
+**6. Its name and artifact root.**  Several controllers can share a console.  Name each one when
+you start it, `AKAO_CONTROLLER=<name>` (letters, digits, `.`, `_`, `-`): its record is then
+`/<year>/<week>/controller/<name>/`, its own, so two controllers never take the same record number.
+Unnamed, they share one record per week, `/<year>/<week>/controller/`.  `AKAO_ARTIFACT_ROOT=<dir>`
+still overrides both.
 
 **7. Check, then start it.**
 
 ```bash
 akao doctor                          # FAIL lines name their fix; tmux/claude/InferenceX are warnings
 tmux new-session -s console -n controller
-root="${AKAO_ARTIFACT_ROOT:-/$(date +%G)/ww$(date +%V)/controller}"   # the ISO week, as akao's
+export AKAO_CONTROLLER=opus1         # this controller's name
+root="${AKAO_ARTIFACT_ROOT:-/$(date +%G)/ww$(date +%V)/controller/$AKAO_CONTROLLER}"   # = akao config ls
 mkdir -p "$root" && cd "$root"
-claude                               # first message: "You are a controller. Load the controller skill."
+claude                               # first message: "You are controller opus1. Load the controller skill."
 ```
 
 The first message decides the role (`$AKAO_REPO_ROOT/CLAUDE.md`, "Identify yourself").  Worker

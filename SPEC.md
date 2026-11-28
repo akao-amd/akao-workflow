@@ -287,6 +287,15 @@ Where the how lives: worker reference (commands, plan and profile fields)
   two candidate roots, and the derived ISO week did not even match the user's own week label
   (ww41 vs ww42 on 2026-10-09).  An existing container's root wins over a derived one; one
   from another year is refused (it mounts only its own `/<year>`).
+- **A named controller keeps its own record (ww48).**  `$AKAO_CONTROLLER=<name>` makes the
+  controller's root `/<year>/<week>/controller/<name>`; unnamed controllers keep the week's
+  shared root, and `$AKAO_ARTIFACT_ROOT` still overrides both.  Why: in ww48 two controllers
+  shared one root and took the same three-digit record numbers again and again (record
+  numbers 133, 150, 151, 160 and 161 in one night), even with "take the number right before
+  writing"; a per-controller directory under the week's root removes the race, keeps every
+  record beside the others for the user's journal, and lets a controller search all of them
+  (`controller/{,*/}`).  The name is one plain path component, not all digits (it would read
+  as a record number).
 - **An artifact root is sorted by kind (ww44).**  Task dirs hold what a person reads (`.md`,
   `.sh`, `.py`, `.patch`, `.toml`, `.log`, `.err`, `.txt`, oaka's `.csv`/`.json` results and
   `.trace.json.gz` GPU traces, which count as logs);

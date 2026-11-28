@@ -4,7 +4,7 @@ description: The controller role's manual — the agent on the console (where `a
 license: "Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved."
 metadata:
   author: akao
-  version: "2.7.0"
+  version: "2.8.0"
   category: development
   tags: ["controller", "akao", "worker", "tmux"]
 compatibility:
@@ -22,10 +22,18 @@ have not: it is every agent's orientation.
 
 ## Your record — your artifact root
 
-Your record lives in your artifact root: `$AKAO_ARTIFACT_ROOT` if it is set, else
-`/<year>/<week>/controller/` (`akao config ls` prints which). Several controllers may run on
-this console; unless one was given its own root, they share one record per week, so that
-which worker came from where survives every conversation. Before you run commands that
+Your record lives in your artifact root: `$AKAO_ARTIFACT_ROOT` if it is set, else, when the user
+named you, `/<year>/<week>/controller/<name>/`, else the week's shared `/<year>/<week>/controller/`
+(`akao config ls` prints which). Several controllers may run on this console. The user names
+each one when assigning it ("you are controller `opus1`", or `AKAO_CONTROLLER=opus1` at launch):
+a named controller keeps its own record and numbers it alone, so two controllers never collide
+(ww48: one shared root, record numbers collided again and again). A name given only in the
+conversation does not reach akao's environment: run `AKAO_CONTROLLER=<name> akao config ls` once
+to confirm the root, and write your records there. The name must be one plain path component
+(letters, digits, `.`, `_`, `-`). Unnamed, you share the week's root with every other unnamed
+controller; that keeps which worker came from where across conversations, but take numbers
+with care (below). To find a worker started by another controller, look through
+`/<year>/<week>/controller/*/` too. Before you run commands that
 change something — akao's (`init`, `mirror`, `cp`, `task`, `open`, `rm`, `host add`/`rm`,
 `config set`/`unset`) and your own `docker`/`ssh` ones on a box — write them into the next
 `<root>/NNN_<desc>.sh` (three digits, after the highest there), with a first comment line
@@ -54,7 +62,8 @@ akao init n10-17 dsv4_exp --image rocm/sgl-dev:v0.5.21-rocm10-mi35x-20261012
   tools) in `<root>/bin/controller/<NNN_desc>/...`; anything else in `<root>/misc/<NNN_desc>/`.
   The record names the paths it made there.
 
-Which workers exist this week: `grep -hE "akao (init|mirror)" <root>/*.sh`, and
+Which workers exist this week: `grep -hE "akao (init|mirror)" /<year>/<week>/controller/{,*/}*.sh`
+(every controller's record, named or shared), and
 `docker --context <nick> ps -a --filter name=akao_` on a box for what is still running.
 
 ## Boxes and workers → `akao`

@@ -137,11 +137,25 @@ fn stale_wrapper(path: &Path) -> Option<String> {
 /// What a controller agent on this console uses besides akao itself: never fatal, akao
 /// runs without them.
 fn check_controller(r: &mut Report, state: &State) {
+    // The week's shared record serves every unnamed controller on this console; a named one
+    // ($AKAO_CONTROLLER) keeps its own under it.
+    let shared = |root: &str, from: &str| match from {
+        "derived" => format!(
+            "; shared by every unnamed controller: start one with {}=<name> for {root}/<name>",
+            state::CONTROLLER_ENV
+        ),
+        _ => String::new(),
+    };
     match state::artifact_root() {
-        Ok((root, from)) if Path::new(&root).is_dir() => r.ok("artifact root", format!("{root} ({from})")),
+        Ok((root, from)) if Path::new(&root).is_dir() => {
+            r.ok("artifact root", format!("{root} ({from}){}", shared(&root, from)))
+        }
         Ok((root, from)) => r.warn(
             "artifact root",
-            format!("{root} ({from}) does not exist yet; the controller creates it for its record"),
+            format!(
+                "{root} ({from}) does not exist yet; the controller creates it for its record{}",
+                shared(&root, from)
+            ),
         ),
         Err(e) => r.fail("artifact root", format!("{e:#}")),
     }

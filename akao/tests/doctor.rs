@@ -84,6 +84,7 @@ impl Sandbox {
         c.arg("doctor")
             .env("PATH", format!("{}:/usr/bin:/bin", self.root.join(bin_dir).display()))
             .env_remove("AKAO_ARTIFACT_ROOT")
+            .env_remove("AKAO_CONTROLLER")
             .env("AKAO_REPO_ROOT", self.root.join("repo"));
         match config_root {
             Some(r) => c.env("AKAO_CONFIG_ROOT", r),
@@ -318,6 +319,10 @@ fn controller_prerequisites_are_reported() {
     // Not on the sandbox's PATH (system dirs aside): warned, never fatal.
     assert!(out.contains("artifact root  /"), "{out}");
     assert!(out.contains("(derived)"), "{out}");
+    assert!(
+        out.contains("shared by every unnamed controller: start one with AKAO_CONTROLLER=<name>"),
+        "{out}"
+    );
     assert!(out.contains(" inferencex "), "{out}");
     // What akao mirror --dashboard reads the dashboard with.
     assert!(out.contains("ok    curl           /"), "{out}");
@@ -327,6 +332,7 @@ fn controller_prerequisites_are_reported() {
         .env("PATH", format!("{}:/usr/bin:/bin", sb.root.join("bin").display()))
         .env("AKAO_CONFIG_ROOT", sb.state())
         .env("AKAO_ARTIFACT_ROOT", "relative/dir")
+        .env_remove("AKAO_CONTROLLER")
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
@@ -340,6 +346,7 @@ fn controller_prerequisites_are_reported() {
         .env("PATH", format!("{}:/usr/bin:/bin", sb.root.join("bin").display()))
         .env("AKAO_CONFIG_ROOT", sb.state())
         .env("AKAO_ARTIFACT_ROOT", &sb.root)
+        .env_remove("AKAO_CONTROLLER")
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&ok.stdout);
@@ -348,6 +355,34 @@ fn controller_prerequisites_are_reported() {
             "ok    artifact root  {} (AKAO_ARTIFACT_ROOT)",
             sb.root.display()
         )),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_named_controller_keeps_its_own_record() {
+    let sb = Sandbox::new("named_controller");
+    let run = |name: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_akao"))
+            .arg("doctor")
+            .env("PATH", format!("{}:/usr/bin:/bin", sb.root.join("bin").display()))
+            .env("AKAO_CONFIG_ROOT", sb.state())
+            .env_remove("AKAO_ARTIFACT_ROOT")
+            .env("AKAO_CONTROLLER", name)
+            .output()
+            .unwrap();
+        (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    // AKAO_CONTROLLER=<name>: the record is /<year>/<week>/controller/<name>, not the shared one.
+    let (code, text) = run("opus1");
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("/controller/opus1 (AKAO_CONTROLLER)"), "{text}");
+    assert!(!text.contains("shared by every unnamed controller"), "{text}");
+    // A name that is not one plain path component fails, naming the rule.
+    let (code, text) = run("../x");
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        text.contains("FAIL  artifact root  AKAO_CONTROLLER=../x is not a controller name"),
         "{text}"
     );
 }

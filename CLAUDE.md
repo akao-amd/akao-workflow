@@ -23,7 +23,9 @@ the tools").
 **Identify yourself from the signal you were given** — check in order, stop at the first match:
 
 1. The user told you directly — "you are a controller" / "you are a worker" (the former
-   "syncer" is the controller). An explicit declaration always wins.
+   "syncer" is the controller). An explicit declaration always wins. A controller is
+   usually given a **name** with it ("you are controller `opus1`", or `$AKAO_CONTROLLER`
+   set at launch): it names your record (below).
 2. You were asked to load the `controller` skill → **controller**.
 3. Your opening message came from a controller and names your container (`akao_<name>`) →
    **worker**.
@@ -41,13 +43,16 @@ files.
 /<year>/<work_week>/<container_name>/<NNNN>_<brief_description>/   a worker's task dirs
           ww40/        dsv4_exp/        0001_baseline/
 /<year>/<work_week>/<container_name>/{repos,bin,misc}/              its checkouts, binaries, the rest
-/<year>/<work_week>/controller/<NNN>_<desc>.sh                      the controllers' record
+/<year>/<work_week>/controller/<name>/<NNN>_<desc>.sh               a named controller's record
+/<year>/<work_week>/controller/<NNN>_<desc>.sh                      unnamed controllers' shared record
 ```
 
 The directory holding an agent's numbered dirs is its **artifact root**. When
 `$AKAO_ARTIFACT_ROOT` is set, that is it, whatever today's week is (`akao init` pins each
 worker's into its container; a controller may be given its own). Unset: a worker's is its
-container's working directory, a controller's `/<year>/<work_week>/controller/`.
+container's working directory; a named controller's `/<year>/<work_week>/controller/<name>/`
+(`$AKAO_CONTROLLER=<name>`, or the name the user gave you: then pass `AKAO_CONTROLLER=<name>`
+to akao yourself); an unnamed one's the week's shared `/<year>/<work_week>/controller/`.
 
 Everything an agent produces stays under its artifact root, sorted by what it is:
 
@@ -245,7 +250,8 @@ checks it.  oaka's doctor checks the worker's clone.
 
 **Artifact roots** (`AKAO_ARTIFACT_ROOT`): one per agent, the directory holding its numbered
 dirs.  On the console it is the controller's (`state::artifact_root()`: the variable, else
-`/<year>/<week>/controller`); it never feeds a worker's.  A worker's is chosen by init
+`/<year>/<week>/controller/<name>` for a named controller, `$AKAO_CONTROLLER`, checked by
+`state::check_controller_name`, else the shared `/<year>/<week>/controller`); it never feeds a worker's.  A worker's is chosen by init
 (`--artifact-root`, else `/<year>/<week>/<name>`) and pinned into its container (`-e`, `-w`);
 oaka reads it (`sys::artifact_root()`) and takes its work year from it (the container
 mounts only that `/<year>`; the InferenceX path and the legacy `/<year>/oaka` follow).  An existing container's root always wins over a
